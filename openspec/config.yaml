@@ -1,0 +1,66 @@
+schema: spec-driven
+
+context: |
+  LocalApp 是一个介于低代码与高度定制开发之间的 Agent 应用平台。应用保留 React / TypeScript 源码和业务模型，平台提供身份、权限、Named SQL、文件、通知、Issue、AI Shell、版本发布和数据运维。产品演进方向是本地优先、按需发布、支持社区分发；尚未实施的 Local Runtime、Studio 和 Community Hub 必须通过独立 OpenSpec change 引入，不得在规格中视为现有能力。
+
+  项目采用 pnpm monorepo，主要目录：
+  - packages/server：Fastify 平台服务入口，组合认证、上传、应用访问、设置、协作、CLI 分发等路由
+  - packages/server-core：Server 与本地 mini-server 共享的应用 API 契约、Named SQL、migration、Issue 和运行时逻辑
+  - packages/web：Next.js 静态导出的公开首页、个人工作台、应用设置和 Platform Shell
+  - packages/cli：Rust + clap CLI，负责 init、dev、check、upload、verify、db、backend、sync 和平台管理
+  - packages/sdk-core：零依赖 JavaScript SDK
+  - packages/sdk-react：React hooks SDK
+  - packages/sdk-agent：Agent、AI Shell 和应用工具注册 SDK
+  - packages/localapp-core：CLI 与 Desktop 共享的 Rust 核心
+  - packages/desktop：Windows-first Tauri Desktop 伴侣，提供通知、可信本地动作和固定 JavaScript runner
+  - init-repo：Vite + React 应用模板，包含 Dev Shell、mini-server、SDK、migration、Named SQL 示例和 Agent skills
+
+  当前技术栈：
+  - TypeScript、Node.js、Fastify、Next.js、React、Vite、SQLite/sql.js、Vitest、Playwright
+  - Rust、clap、reqwest、tokio、rusqlite
+  - Tauri 2、Windows NSIS/WebView2
+
+  当前稳定应用模型：
+  - 正式应用入口为 /{owner}/{app}/，由 Platform Shell 承载导航、Issue、在线用户、收藏和登录态
+  - /serve/{owner}/{app}/ 仅是 raw app resource/API 基址，不是正式用户入口
+  - 每个应用拥有隔离 SQLite 数据库、版本目录和文件命名空间
+  - 数据结构由 migrations/*.sql 管理
+  - 稳定后端采用 Named SQL first：query、mutation、transaction mutation 和平台原语
+  - Hosted JavaScript Backend Action 是 legacy 边界，不是普通业务逻辑的默认路径
+  - manifest.json 是应用自带配置，manifest.platform.json 是平台配置且优先
+  - 数据管理支持包含数据库与文件的备份、导入导出、恢复和恢复出厂设置
+
+  开发与发布主路径：
+  - localapp init --name <name> 创建应用和 Agent 开发上下文
+  - localapp dev 启动单应用开发态 mini-server 与 Vite Dev Shell
+  - localapp check 检查平台版本、migration、backend contract、测试、构建和 dist
+  - localapp upload --verify 原子上传并在正式路径执行隔离 smoke 验收
+  - localapp sync 更新 CLI 管理的 runtime 与 Agent skills
+
+  身份与安全：
+  - 浏览器使用服务端持久会话 Cookie
+  - CLI 和程序化 API 使用 X-API-Key
+  - 应用权限通过 page access、ACL 和 backend contract security 声明执行
+  - 任何客户端提交的任意 SQL、任意服务器代码或未声明能力均不得成为默认安全路径
+
+  测试与规格：
+  - OpenSpec capability 位于 openspec/specs，活动变更位于 openspec/changes
+  - 源码功能遵循 RED → GREEN → REFACTOR
+  - 用户可见行为必须映射到 integration/e2e 场景
+  - pnpm test:platform-regression 是确定性 Agent 首次运行回归门禁
+  - packages/server、packages/web、init-repo 和 Desktop 分别维护聚焦测试
+
+rules:
+  tasks:
+    - 仅涉及源码改动的功能模块按 RED → GREEN → REFACTOR 顺序组织任务组；纯文档、配置、CI 等非源码任务不需要 TDD 流程，直接按普通任务格式 "- [ ] X.Y 描述" 组织
+    - RED 任务格式, `- [ ] X.Y [RED] 编写 xxx 的失败测试`
+    - GREEN 任务格式, `- [ ] X.Y [GREEN] 实现 xxx`
+    - REFACTOR 任务格式, `- [ ] X.Y [REFACTOR] xxx`
+    - 每个 TDD 大阶段（RED/GREEN/REFACTOR）结束时必须 commit；非 TDD 任务组完成后也需 commit
+    - 最后一个任务组是编写e2e测试, 执行e2e测试, 集成验证, 编写e2e测试用例并执行
+    - e2e 任务组必须以 spec scenario 映射表开头，格式为表格，列：`Spec Scenario` | `E2E Test` | `Status`。Spec Scenario 列写 `spec-name > Scenario: xxx`（或引用 tasks 中的 task ID）。Status 列标 ✓（已有 e2e）或 ✗（需新增）。所有 Status 为 ✗ 的 scenario 都必须有对应的 e2e 测试用例
+    - e2e 任务必须逐 scenario 拆分，映射表中每个 ✗ 行至少对应一个独立 e2e 任务，禁止合并为一个笼统的"编写 e2e 测试"任务。格式：`- [ ] X.Y [GREEN] 为 <spec-name> > Scenario: <scenario 标题> 编写 e2e 测试`
+    - 每个 e2e 任务完成后必须在映射表中将对应行 Status 从 ✗ 更新为 ✓，实施时以此作为进度校验
+    - spec 中标注 `Scenario:` 的用户可见行为（命令输入 → CLI 输出）必须通过 e2e 覆盖，单元测试不替代 e2e。纯内部逻辑（如 registry resolve 算法）可仅用单元测试
+    - 不要在 tasks.md 中写测试用例的实现细节、断言代码或 commit message，这些属于 design.md；scenario 映射表和逐 scenario 任务是必需的规划内容
+    - 所有内容用中文撰写

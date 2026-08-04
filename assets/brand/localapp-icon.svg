@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="title desc">
+  <title id="title">LocalApp icon</title>
+  <desc id="desc">A dark LocalApp tile with a person silhouette and a connected workflow bridge.</desc>
+
+  <rect x="8" y="8" width="496" height="496" rx="88" fill="#17151C"/>
+
+  <g id="app-panel">
+    <rect x="28" y="32" width="456" height="218" rx="32" fill="#F8FAFC"/>
+
+    <rect x="56" y="60" width="164" height="164" rx="24" fill="#EEF2FF"/>
+    <g id="personal-app-symbol" fill="#4F46E5">
+      <circle cx="138" cy="108" r="28"/>
+      <path d="M82 196C82 158 105 136 138 136C171 136 194 158 194 196V200H82V196Z"/>
+    </g>
+
+    <path d="M264 91H432" fill="none" stroke="#6366F1" stroke-width="24" stroke-linecap="round"/>
+    <path d="M264 142H392" fill="none" stroke="#EC4899" stroke-width="24" stroke-linecap="round"/>
+    <path d="M264 193H352" fill="none" stroke="#F97316" stroke-width="24" stroke-linecap="round"/>
+    <circle cx="448" cy="91" r="12" fill="#6366F1"/>
+    <circle cx="408" cy="142" r="12" fill="#EC4899"/>
+    <circle cx="368" cy="193" r="12" fill="#F97316"/>
+  </g>
+
+  <g id="workflow-bridge">
+    <path
+      d="M92 304L170 430L256 326L342 430L420 304"
+      fill="none"
+      stroke="#FFFFFF"
+      stroke-width="38"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <circle cx="92" cy="304" r="24" fill="#C00000" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="170" cy="430" r="24" fill="#6366F1" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="256" cy="326" r="24" fill="#EC4899" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="342" cy="430" r="24" fill="#F97316" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="420" cy="304" r="24" fill="#C00000" stroke="#FFFFFF" stroke-width="10"/>
+  </g>
+</svg>

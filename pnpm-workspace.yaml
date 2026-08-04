@@ -1,0 +1,17 @@
+packages:
+  - "packages/server"
+  - "packages/server-core"
+  - "packages/local-runtime"
+  - "packages/backend"
+  - "packages/sdk-core"
+  - "packages/sdk-react"
+  - "packages/sdk-agent"
+  - "packages/desktop"
+  - "packages/web"
+  - "init-repo"
+  - "init-repo/runtime"
+allowBuilds:
+  '@google/genai': true
+  esbuild: true
+  protobufjs: true
+  sharp: true

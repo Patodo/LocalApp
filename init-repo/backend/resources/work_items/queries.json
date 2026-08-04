@@ -1,0 +1,48 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/queries.schema.json",
+  "queries": {
+    "$work_items.list": {
+      "kind": "query",
+      "sql": "SELECT * FROM work_items ORDER BY id DESC LIMIT :limit OFFSET :offset",
+      "params": {
+        "limit": { "type": "number", "required": true },
+        "offset": { "type": "number", "required": true }
+      },
+      "result": { "mode": "page", "maxRows": 100, "maxBytes": 65536 },
+      "access": "authenticated"
+    },
+    "$work_items.count": {
+      "kind": "query",
+      "sql": "SELECT COUNT(*) AS count FROM work_items",
+      "params": {},
+      "result": { "mode": "aggregate", "maxRows": 1, "maxBytes": 4096 },
+      "access": "authenticated"
+    },
+    "$work_items.get": {
+      "kind": "query",
+      "sql": "SELECT * FROM work_items WHERE id = :id",
+      "params": {
+        "id": { "type": "number", "required": true }
+      },
+      "result": { "mode": "single", "maxRows": 1, "maxBytes": 8192 },
+      "access": "authenticated"
+    },
+    "work_items.mine": {
+      "kind": "query",
+      "sql": "SELECT * FROM work_items WHERE created_by = :currentUserId ORDER BY id DESC LIMIT :limit OFFSET :offset",
+      "params": {
+        "limit": { "type": "number", "required": true },
+        "offset": { "type": "number", "required": true }
+      },
+      "result": { "mode": "page", "maxRows": 100, "maxBytes": 65536 },
+      "access": "authenticated"
+    },
+    "work_items.dashboard": {
+      "kind": "query",
+      "sql": "SELECT status, COUNT(*) AS count FROM work_items GROUP BY status ORDER BY status",
+      "params": {},
+      "result": { "mode": "aggregate", "maxRows": 20, "maxBytes": 8192 },
+      "access": "authenticated"
+    }
+  }
+}

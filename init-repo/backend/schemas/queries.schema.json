@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localapp.dev/schemas/backend/queries.schema.json",
+  "type": "object",
+  "required": ["$schema", "queries"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "const": "https://localapp.dev/schemas/backend/queries.schema.json"
+    },
+    "queries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind", "sql", "params"],
+        "additionalProperties": true,
+        "properties": {
+          "kind": { "const": "query" },
+          "sql": { "type": "string", "minLength": 1 },
+          "params": { "type": "object" },
+          "access": { "type": "string" },
+          "result": {
+            "type": "object",
+            "required": ["mode"],
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "enum": ["page", "single", "aggregate", "bounded"] },
+              "maxRows": { "type": "integer", "minimum": 1, "maximum": 1000 },
+              "maxBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

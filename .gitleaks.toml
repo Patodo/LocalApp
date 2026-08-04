@@ -1,0 +1,12 @@
+title = "LocalApp gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist test fixtures, documentation, and scripts that only reference placeholder API keys"
+paths = [
+  '''packages/.*/tests?/.*''',
+  '''openspec/.*''',
+  '''scripts/.*''',
+]

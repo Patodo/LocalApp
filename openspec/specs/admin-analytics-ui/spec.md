@@ -1,0 +1,24 @@
+## Purpose
+
+This spec describes the expected behavior, acceptance criteria, and integration boundaries for the admin-analytics-ui capability in LocalApp.
+
+## Requirements
+
+### Requirement: 运营大盘页面
+管理面板 SHALL 包含运营大盘页面，用图表展示系统运行趋势。图表外围容器和卡片使用 `shared.css` 定义的组件样式。
+
+#### Scenario: 访问运营大盘
+- **WHEN** admin 访问 `/admin/analytics`
+- **THEN** 展示以下图表区域，每个图表包裹在 `.card` class 的卡片中：
+  - 请求量趋势折线图（按天，可选 1d/7d/30d）
+  - 页面访问排行（Top 10 表格，使用 `.table` class）
+  - 用户创建趋势柱状图（按天）
+  - 页面浏览趋势折线图（按天）
+
+#### Scenario: 时间范围切换按钮
+- **WHEN** admin 选择不同时间范围（1天/7天/30天）
+- **THEN** 所有图表更新为对应时间范围的数据，切换按钮使用 `.btn` class 样式，激活按钮使用 `var(--primary)` 背景
+
+#### Scenario: 按需加载
+- **WHEN** admin 首次进入运营大盘
+- **THEN** recharts 组件通过 React.lazy 按需加载，不影响其他页面加载速度

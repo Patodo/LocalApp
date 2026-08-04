@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  PNPM_VERSION: "10"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            packages/cli
+            packages/localapp-core
+
+      - name: Install workspace and OpenSpec
+        run: |
+          pnpm install --frozen-lockfile
+          npm install --global @fission-ai/openspec@1.6.0
+
+      - name: Validate generated platform contract
+        run: pnpm check:capabilities
+
+      - name: Build TypeScript applications
+        run: |
+          pnpm -C packages/server-core build
+          pnpm -C packages/web build
+          pnpm -C packages/server build
+
+      - name: Test platform packages
+        run: |
+          pnpm -C packages/server-core test
+          pnpm -C packages/web test
+          pnpm -C packages/server test
+          pnpm -C init-repo test
+          pnpm test:platform-regression
+
+      - name: Test Rust crates
+        run: |
+          cargo test --manifest-path packages/localapp-core/Cargo.toml
+          cargo test --locked --manifest-path packages/cli/Cargo.toml
+
+      - name: Validate release assembly dry-run
+        run: |
+          pnpm test:release-manifest
+          pnpm test:release-workflow
+
+      - name: Validate OpenSpec
+        run: openspec validate --all --strict
+
+      - name: Export and verify public source snapshot
+        run: pnpm export:public-source --commit "${GITHUB_SHA}" --output "${RUNNER_TEMP}/localapp-public" --verify
+
+      - name: Verify builds leave tracked sources unchanged
+        run: git diff --exit-code
+
+      - name: Build public Docker image from source
+        run: docker build --tag localapp-ci:${{ github.sha }} .
+
+      - name: Smoke test release discovery in Docker
+        run: bash scripts/docker-release-smoke.sh localapp-ci:${{ github.sha }}
+
+  secrets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

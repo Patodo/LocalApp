@@ -1,0 +1,30 @@
+{
+  "name": "localapp",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -C packages/server-core build && concurrently -k \"pnpm -C packages/server-core build --watch --preserveWatchOutput\" \"pnpm -C packages/server dev\" \"pnpm -C packages/web dev\"",
+    "dev:build": "pnpm -C packages/web build && pnpm -C packages/server dev",
+    "dev:web": "pnpm -C packages/web build",
+    "dev:server": "pnpm -C packages/server-core build && concurrently -k \"pnpm -C packages/server-core build --watch --preserveWatchOutput\" \"pnpm -C packages/server dev\"",
+    "generate:capabilities": "node scripts/generate-platform-capabilities.mjs",
+    "check:capabilities": "node scripts/generate-platform-capabilities.mjs --check",
+    "test:platform-regression": "node scripts/agent-first-run-benchmark.mjs deterministic",
+    "test:windows-release-script": "node --test scripts/build-windows-release.node-test.mjs",
+    "test:release-manifest": "node --test scripts/generate-release-manifest.node-test.mjs",
+    "test:release-workflow": "node --test scripts/release-workflow.node-test.mjs",
+    "test:public-source": "node --test scripts/export-public-source.node-test.mjs",
+    "test:brand": "node --test scripts/localapp-brand.node-test.mjs",
+    "export:public-source": "node scripts/export-public-source.mjs",
+    "build": "pnpm -r build",
+    "clean": "pnpm -r clean",
+    "build:cli:debug": "cargo build --manifest-path packages/cli/Cargo.toml",
+    "build:cli": "node scripts/release-cli.mjs",
+    "build:cli:only": "node scripts/release-cli.mjs --build-only",
+    "test:e2e-ui": "npx playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "concurrently": "^10.0.3"
+  }
+}

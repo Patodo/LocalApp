@@ -1,0 +1,48 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/mutations.schema.json",
+  "mutations": {
+    "$work_items.create": {
+      "kind": "mutation",
+      "sql": "INSERT INTO work_items (title, status, created_by) VALUES (:title, :status, :currentUserId)",
+      "params": {
+        "title": { "type": "string", "required": true },
+        "status": { "type": "string", "enum": ["todo", "doing", "done"] }
+      },
+      "access": "authenticated"
+    },
+    "$work_items.update": {
+      "kind": "mutation",
+      "sql": "UPDATE work_items SET title = :title, status = :status WHERE id = :id",
+      "params": {
+        "id": { "type": "number", "required": true },
+        "title": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true, "enum": ["todo", "doing", "done"] }
+      },
+      "access": "authenticated"
+    },
+    "$work_items.delete": {
+      "kind": "mutation",
+      "sql": "DELETE FROM work_items WHERE id = :id",
+      "params": {
+        "id": { "type": "number", "required": true }
+      },
+      "access": "owner"
+    },
+    "$work_items.start": {
+      "kind": "mutation",
+      "sql": "UPDATE work_items SET status = 'doing' WHERE id = :id AND status = 'todo'",
+      "params": {
+        "id": { "type": "number", "required": true }
+      },
+      "access": "authenticated"
+    },
+    "$work_items.complete": {
+      "kind": "mutation",
+      "sql": "UPDATE work_items SET status = 'done' WHERE id = :id AND status = 'doing'",
+      "params": {
+        "id": { "type": "number", "required": true }
+      },
+      "access": "authenticated"
+    }
+  }
+}

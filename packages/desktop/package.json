@@ -1,0 +1,42 @@
+{
+  "name": "@localapp/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm runtime:bundle && tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:runner": "node --test tests/runner-protocol.node-test.mjs",
+    "test:runtime": "node --test scripts/prepare-node-runtime.node-test.mjs",
+    "test:local-runtime-bundle": "node --test scripts/build-local-runtime.node-test.mjs",
+    "test:release-config": "node --test scripts/windows-release-config.node-test.mjs",
+    "test:windows-acceptance": "node --test scripts/windows-vm-acceptance.node-test.mjs scripts/windows-vm-acceptance-report.node-test.mjs",
+    "test:bundle-e2e": "node scripts/test-bundled-runtime.mjs",
+    "runtime:prepare": "node scripts/prepare-node-runtime.mjs",
+    "runtime:bundle": "node scripts/build-local-runtime.mjs",
+    "tauri": "node scripts/run-tauri.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "lucide-react": "^0.556.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.25.12",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.4.0",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "checks": [
+    {
+      "id": "capability-contract",
+      "command": "node",
+      "args": ["scripts/generate-platform-capabilities.mjs", "--check"]
+    },
+    {
+      "id": "server-core-capability-parity",
+      "command": "pnpm",
+      "args": ["-C", "packages/server-core", "exec", "vitest", "run", "src/lib/__tests__/platform-capabilities.test.ts", "src/lib/__tests__/content-capabilities.test.ts", "src/lib/__tests__/backend-contract.test.ts"]
+    },
+    {
+      "id": "production-content-contract",
+      "command": "pnpm",
+      "args": ["-C", "packages/server", "exec", "vitest", "run", "tests/integration/content-upload.test.ts"]
+    },
+    {
+      "id": "verification-isolation",
+      "command": "pnpm",
+      "args": ["-C", "packages/server", "exec", "vitest", "run", "tests/integration/verification-sessions.test.ts"]
+    },
+    {
+      "id": "benchmark-protocol",
+      "command": "node",
+      "args": ["--test", "scripts/tests/agent-first-run-benchmark.test.mjs"]
+    }
+  ]
+}

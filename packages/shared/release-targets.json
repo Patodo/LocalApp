@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "targets": [
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "rustTarget": "x86_64-unknown-linux-gnu",
+      "cliFilename": "localapp-cli-x86_64-unknown-linux-gnu",
+      "desktop": false
+    },
+    {
+      "os": "macos",
+      "arch": "aarch64",
+      "rustTarget": "aarch64-apple-darwin",
+      "cliFilename": "localapp-cli-aarch64-apple-darwin",
+      "desktop": false
+    },
+    {
+      "os": "macos",
+      "arch": "x86_64",
+      "rustTarget": "x86_64-apple-darwin",
+      "cliFilename": "localapp-cli-x86_64-apple-darwin",
+      "desktop": false
+    },
+    {
+      "os": "windows",
+      "arch": "x86_64",
+      "rustTarget": "x86_64-pc-windows-msvc",
+      "cliFilename": "localapp-cli-x86_64-pc-windows-msvc.exe",
+      "desktop": true,
+      "desktopFilename": "localapp-desktop-windows-x86_64-setup.exe"
+    }
+  ]
+}

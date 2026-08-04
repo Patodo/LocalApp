@@ -1,0 +1,61 @@
+{
+  "$schema": "./schemas/catalog.schema.json",
+  "schemaVersion": 1,
+  "benchmarkSetVersion": "1.0.0",
+  "requirements": [
+    {
+      "id": "basic-team-crud",
+      "category": "basic-crud",
+      "title": "团队工作项 CRUD",
+      "prompt": "创建一个团队工作项应用，支持列表、筛选、新增、编辑和删除，并显示负责人和截止日期。",
+      "requiredCapabilities": ["backend:named-sql", "identity:currentUser"],
+      "verificationIdentities": ["owner"],
+      "acceptance": ["正式入口可读取工作项列表", "新增和编辑后列表立即反映变化", "删除只影响隔离验收数据库"]
+    },
+    {
+      "id": "personal-record-owner-view",
+      "category": "personal-ownership",
+      "title": "个人记录与 owner 全员视图",
+      "prompt": "创建一个个人日报应用，普通成员只能查看和修改自己的日报，应用 owner 可以查看全员日报。",
+      "requiredCapabilities": ["backend:named-sql", "backend:security-contracts", "identity:currentUser", "identity:pageOwner"],
+      "verificationIdentities": ["owner", "member"],
+      "acceptance": ["member 只能读取自己的记录", "owner 可以读取全员记录", "越权更新被 named SQL 安全契约拒绝"]
+    },
+    {
+      "id": "approval-transition",
+      "category": "approval-transition",
+      "title": "审批与状态流转",
+      "prompt": "创建一个请假审批应用，包含草稿、待审批、通过和驳回状态，并限制每个角色可执行的状态流转。",
+      "requiredCapabilities": ["backend:named-sql", "backend:transactions", "backend:security-contracts", "identity:currentUser"],
+      "verificationIdentities": ["owner", "member"],
+      "acceptance": ["非法来源状态的流转被拒绝", "提交和审批写操作保持事务一致", "owner 与 member 看到符合权限的操作入口"]
+    },
+    {
+      "id": "image-pdf-attachments",
+      "category": "image-pdf-content",
+      "title": "图片与 PDF 附件",
+      "prompt": "创建一个报销填报应用，支持上传票据图片和 PDF，并在详情中安全预览附件。",
+      "requiredCapabilities": ["content:image", "content:application/pdf", "content:range-requests", "backend:named-sql"],
+      "verificationIdentities": ["owner"],
+      "acceptance": ["图片和真实 PDF 可以上传并读取", "伪造 MIME 或文件头的附件被拒绝", "PDF 完整读取和 Range 请求均可用"]
+    },
+    {
+      "id": "aggregate-pagination-dashboard",
+      "category": "aggregate-pagination",
+      "title": "聚合分页仪表盘",
+      "prompt": "创建一个项目仪表盘，通过 JOIN 和聚合展示按团队统计的数据，并提供服务端筛选、排序和分页。",
+      "requiredCapabilities": ["backend:named-sql", "backend:pagination", "backend:result-budgets"],
+      "verificationIdentities": ["owner"],
+      "acceptance": ["聚合统计与底层数据一致", "翻页不重复或遗漏记录", "查询声明包含明确 maxRows 和 maxBytes"]
+    },
+    {
+      "id": "multi-table-team-workload",
+      "category": "multi-table-complex",
+      "title": "team-workload 级多表应用",
+      "prompt": "创建一个多团队工作量管理应用，包含分类、工作项、阶段工作量、成员、筛选、统计和级联写操作。",
+      "requiredCapabilities": ["backend:named-sql", "backend:transactions", "backend:security-contracts", "identity:groups", "verification:isolated-database"],
+      "verificationIdentities": ["owner", "member"],
+      "acceptance": ["多表列表与聚合统计可在正式入口稳定读取", "复杂写操作通过短事务 mutation 完成", "owner/member 验收不修改生产 app.db"]
+    }
+  ]
+}

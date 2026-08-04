@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LocalApp</title>
+  <desc id="desc">A dark LocalApp tile with a red geometric mark and a connected workflow bridge.</desc>
+  <rect x="8" y="8" width="496" height="496" rx="88" fill="#17151C"/>
+  <g>
+    <rect x="28" y="32" width="456" height="218" rx="32" fill="#F8FAFC"/>
+    <rect x="56" y="60" width="164" height="164" rx="24" fill="#FFF4F4"/>
+    <g transform="translate(56 60) scale(0.3203125)" fill="#C00000">
+      <path d="M0 .5L0 70.3L212.1 70.3L279.7 198.4L332.1 198.4L332.1 60.3L302.1 0L0 .5Z" transform="translate(88.368421 89.947368)"/>
+      <path d="M28.4 201.3L209.5 201.3L261.6 295.5L345 295.5L258.9 131.8L116.1 131.8L47.6 0L0 0L0 143.4L28.4 201.3Z" transform="translate(89.947368 216.526316)"/>
+    </g>
+    <path d="M264 91H432" fill="none" stroke="#6366F1" stroke-width="24" stroke-linecap="round"/>
+    <path d="M264 142H392" fill="none" stroke="#EC4899" stroke-width="24" stroke-linecap="round"/>
+    <path d="M264 193H352" fill="none" stroke="#F97316" stroke-width="24" stroke-linecap="round"/>
+    <circle cx="448" cy="91" r="12" fill="#6366F1"/>
+    <circle cx="408" cy="142" r="12" fill="#EC4899"/>
+    <circle cx="368" cy="193" r="12" fill="#F97316"/>
+  </g>
+  <g>
+    <path d="M92 304L170 430L256 326L342 430L420 304" fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="92" cy="304" r="24" fill="#C00000" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="170" cy="430" r="24" fill="#6366F1" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="256" cy="326" r="24" fill="#EC4899" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="342" cy="430" r="24" fill="#F97316" stroke="#FFFFFF" stroke-width="10"/>
+    <circle cx="420" cy="304" r="24" fill="#C00000" stroke="#FFFFFF" stroke-width="10"/>
+  </g>
+</svg>

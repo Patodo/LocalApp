@@ -1,0 +1,48 @@
+{
+  "name": "@localapp/server",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "cross-env DATA_DIR=../../data BOOTSTRAP_API_KEY=dev-api-key-change-me JWT_SECRET=dev-jwt-secret-change-me tsx watch --include ../server-core/dist src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1053.0",
+    "@fastify/cookie": "^9.4.0",
+    "@fastify/multipart": "^8.1.0",
+    "@fastify/static": "^7.0.4",
+    "@fastify/websocket": "^8.3.1",
+    "@localapp/server-core": "workspace:*",
+    "archiver": "8.0.0",
+    "bcryptjs": "^3.0.3",
+    "fastify": "^4.26.0",
+    "fastify-plugin": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "nanoid": "^5.1.11",
+    "remark-parse": "^11.0.0",
+    "smol-toml": "^1.6.1",
+    "sql.js": "^1.14.1",
+    "unified": "^11.0.5",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@types/archiver": "8.0.0",
+    "@types/bcryptjs": "^3.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.9.1",
+    "@types/sql.js": "^1.4.11",
+    "@types/ws": "^8.18.1",
+    "@types/yauzl": "3.4.0",
+    "cross-env": "^10.1.0",
+    "rimraf": "^5.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7",
+    "ws": "^8.21.0"
+  }
+}

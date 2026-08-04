@@ -1,0 +1,27 @@
+{
+  "name": "@localapp/local-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "localapp-local-runtime": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run src tests --exclude dist/**",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@localapp/server-core": "workspace:*",
+    "fastify": "^4.26.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}

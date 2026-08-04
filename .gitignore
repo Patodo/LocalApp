@@ -1,0 +1,27 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.js.map
+.DS_Store
+packages/server/static/admin/
+
+# Runtime data
+data/
+packages/server/data/
+
+# Test artifacts
+test-results/
+packages/server/test-results/
+
+# Build artifacts
+target/
+packages/server/static/cli/*/
+packages/web/.next/
+packages/web/out/
+packages/web/next-env.d.ts
+
+# Worktrees
+.wts/
+
+# Deploy configs
+.deploy/

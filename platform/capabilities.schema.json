@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localapp.dev/schemas/platform/capabilities.schema.json",
+  "title": "LocalApp Platform Capabilities",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "platformVersion",
+    "content",
+    "backend",
+    "identity",
+    "verification"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./capabilities.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "platformVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upload", "read", "types"],
+      "properties": {
+        "upload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "maxBytes", "validatesFileSignature"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxBytes": { "type": "integer", "minimum": 1 },
+            "validatesFileSignature": { "type": "boolean" }
+          }
+        },
+        "read": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "rangeRequests", "delete"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "rangeRequests": { "type": "boolean" },
+            "delete": { "type": "boolean" }
+          }
+        },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["extension", "mimeType", "inlinePreview"],
+            "properties": {
+              "extension": { "type": "string", "minLength": 1 },
+              "mimeType": { "type": "string", "minLength": 1 },
+              "inlinePreview": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stableMode", "namedSql", "hostedActions", "securityContracts"],
+      "properties": {
+        "stableMode": { "const": "named-sql" },
+        "namedSql": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "transactions", "maxRows", "maxBytes", "systemParams"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "transactions": { "type": "boolean" },
+            "maxRows": { "type": "integer", "minimum": 1 },
+            "maxBytes": { "type": "integer", "minimum": 1 },
+            "systemParams": {
+              "type": "array",
+              "items": { "enum": ["currentUserId", "ownerId", "now"] },
+              "uniqueItems": true
+            }
+          }
+        },
+        "hostedActions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "stable"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "stable": { "type": "boolean" }
+          }
+        },
+        "securityContracts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "contractVersion", "requiredFromPlatformVersion", "generatedTemplates", "customScenarios"],
+          "properties": {
+            "enabled": { "const": true },
+            "contractVersion": { "const": 1 },
+            "requiredFromPlatformVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "generatedTemplates": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            },
+            "customScenarios": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentUser", "pageOwner", "groups"],
+      "properties": {
+        "currentUser": { "type": "boolean" },
+        "pageOwner": { "type": "boolean" },
+        "groups": { "type": "boolean" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "isolatedDatabase", "identities", "defaultTtlSeconds", "maxTtlSeconds", "maxConcurrentSessions", "maxDatabaseBytes"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "isolatedDatabase": { "type": "boolean" },
+        "identities": {
+          "type": "array",
+          "items": { "enum": ["owner", "member"] },
+          "uniqueItems": true
+        },
+        "defaultTtlSeconds": { "type": "integer", "minimum": 1 },
+        "maxTtlSeconds": { "type": "integer", "minimum": 1 },
+        "maxConcurrentSessions": { "type": "integer", "minimum": 1 },
+        "maxDatabaseBytes": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

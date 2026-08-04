@@ -1,0 +1,11 @@
+{
+  "extends": "@localapp/app-kit/tsconfig.base",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["src/_localapp_runtime"]
+}

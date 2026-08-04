@@ -1,0 +1,49 @@
+{
+  "name": "@localapp/sdk-agent",
+  "version": "0.1.0",
+  "description": "LocalApp Agent SDK — AI agent integration for LocalApp apps",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./dev-bridge": "./src/dev-bridge.ts",
+    "./native-registry": "./src/native-registry.ts",
+    "./platform-runtime": "./src/platform-runtime.ts",
+    "./postmessage-types": "./src/postmessage-types.ts",
+    "./use-register-edit-session": "./src/use-register-edit-session.ts"
+  },
+  "files": ["src"],
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.5",
+    "@earendil-works/pi-ai": "^0.75.5",
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "peerDependencies": {
+    "@assistant-ui/react": "^0.14.7",
+    "@localapp/sdk": "workspace:*",
+    "@localapp/sdk-react": "workspace:*",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@assistant-ui/react": "^0.14.7",
+    "@localapp/sdk": "workspace:*",
+    "@localapp/sdk-react": "workspace:*",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "vitest": "^3.2.1",
+    "jsdom": "^26.1.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}

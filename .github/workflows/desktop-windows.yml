@@ -1,0 +1,282 @@
+name: Desktop Windows
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-windows.yml"
+      - "packages/desktop/**"
+      - "packages/local-runtime/**"
+      - "packages/localapp-core/**"
+      - "packages/server-core/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  push:
+    paths:
+      - ".github/workflows/desktop-windows.yml"
+      - "packages/desktop/**"
+      - "packages/local-runtime/**"
+      - "packages/localapp-core/**"
+      - "packages/server-core/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24.18.0
+  PNPM_VERSION: 10.33.0
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  verify:
+    name: Test and compile (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: ${{ env.WINDOWS_TARGET }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri
+          shared-key: desktop-windows-x64
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test desktop frontend
+        run: pnpm --filter @localapp/desktop test
+
+      - name: Test fixed runner protocol
+        run: pnpm --filter @localapp/desktop test:runner
+
+      - name: Test Node runtime preparation
+        run: pnpm --filter @localapp/desktop test:runtime
+
+      - name: Test Local Runtime bundle
+        run: pnpm --filter @localapp/desktop test:local-runtime-bundle
+
+      - name: Test release config generation
+        run: pnpm --filter @localapp/desktop test:release-config
+
+      - name: Validate Windows VM acceptance harness
+        shell: powershell
+        run: |
+          [scriptblock]::Create((Get-Content packages/desktop/scripts/windows-vm-acceptance.ps1 -Raw)) | Out-Null
+          pnpm --filter @localapp/desktop test:windows-acceptance
+
+      - name: Test desktop Rust crate
+        run: cargo test --locked --manifest-path packages/desktop/src-tauri/Cargo.toml --target ${{ env.WINDOWS_TARGET }}
+
+      - name: Prepare pinned Windows Node runtime
+        run: pnpm --filter @localapp/desktop runtime:prepare --target win-x64
+
+      - name: Verify prepared sidecar integrity
+        shell: pwsh
+        run: |
+          $manifest = Get-Content packages/desktop/node-runtime.json -Raw | ConvertFrom-Json
+          $runtime = $manifest.targets.'win-x64'
+          if ($manifest.version -ne '24.18.0') { throw 'Unexpected pinned Node runtime version' }
+          if ($runtime.targetTriple -ne $env:WINDOWS_TARGET) { throw 'Unexpected Windows target triple' }
+          if ($runtime.sha256 -ne '0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821') {
+            throw 'Unexpected pinned Windows Node archive SHA-256'
+          }
+
+          $binary = "packages/desktop/src-tauri/binaries/node-$env:WINDOWS_TARGET.exe"
+          $marker = Get-Content "$binary.node-runtime.json" -Raw | ConvertFrom-Json
+          $binaryHash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($marker.version -ne $manifest.version -or $marker.target -ne 'win-x64') {
+            throw 'Prepared Node marker does not match the pinned runtime'
+          }
+          if ($marker.archiveSha256 -ne $runtime.sha256 -or $marker.binarySha256 -ne $binaryHash) {
+            throw 'Prepared Node binary failed marker integrity validation'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/resources/npm/bin/npm-cli.js)) {
+            throw 'Prepared npm CLI is missing'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/runner/localapp-runner.mjs)) {
+            throw 'Fixed LocalApp runner is missing'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/resources/local-runtime/localapp-local-runtime.mjs)) {
+            throw 'Bundled Local Runtime is missing'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/resources/local-runtime/node_modules/sql.js/dist/sql-wasm.wasm)) {
+            throw 'Bundled Local Runtime SQL WASM is missing'
+          }
+
+      - name: Compile desktop without bundling
+        run: pnpm --filter @localapp/desktop tauri build --no-bundle --target ${{ env.WINDOWS_TARGET }}
+
+      - name: Execute packaged runtime end to end
+        run: pnpm --filter @localapp/desktop test:bundle-e2e --target ${{ env.WINDOWS_TARGET }}
+
+  release-bundle:
+    name: Build signed NSIS and updater artifacts
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: windows-2025
+    timeout-minutes: 75
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          targets: ${{ env.WINDOWS_TARGET }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri
+          shared-key: desktop-windows-x64-release
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare pinned Windows Node runtime
+        run: pnpm --filter @localapp/desktop runtime:prepare --target win-x64
+
+      - name: Verify release sidecar integrity before bundling
+        shell: pwsh
+        run: |
+          $manifest = Get-Content packages/desktop/node-runtime.json -Raw | ConvertFrom-Json
+          $runtime = $manifest.targets.'win-x64'
+          if ($manifest.version -ne '24.18.0') { throw 'Unexpected pinned Node runtime version' }
+          if ($runtime.targetTriple -ne $env:WINDOWS_TARGET) { throw 'Unexpected Windows target triple' }
+          if ($runtime.sha256 -ne '0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821') {
+            throw 'Unexpected pinned Windows Node archive SHA-256'
+          }
+
+          $binary = "packages/desktop/src-tauri/binaries/node-$env:WINDOWS_TARGET.exe"
+          $marker = Get-Content "$binary.node-runtime.json" -Raw | ConvertFrom-Json
+          $binaryHash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($marker.version -ne $manifest.version -or $marker.target -ne 'win-x64') {
+            throw 'Prepared Node marker does not match the pinned runtime'
+          }
+          if ($marker.archiveSha256 -ne $runtime.sha256 -or $marker.binarySha256 -ne $binaryHash) {
+            throw 'Prepared Node binary failed marker integrity validation'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/resources/npm/bin/npm-cli.js)) {
+            throw 'Prepared npm CLI is missing'
+          }
+          if (!(Test-Path packages/desktop/src-tauri/runner/localapp-runner.mjs)) {
+            throw 'Fixed LocalApp runner is missing'
+          }
+
+      - name: Import optional Authenticode certificate
+        shell: pwsh
+        env:
+          CERTIFICATE_PFX_BASE64: ${{ secrets.LOCALAPP_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          CERTIFICATE_PFX_PASSWORD: ${{ secrets.LOCALAPP_WINDOWS_CERTIFICATE_PFX_PASSWORD }}
+          CERTIFICATE_THUMBPRINT: ${{ secrets.LOCALAPP_WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: |
+          $hasPfx = ![string]::IsNullOrWhiteSpace($env:CERTIFICATE_PFX_BASE64)
+          $hasThumbprint = ![string]::IsNullOrWhiteSpace($env:CERTIFICATE_THUMBPRINT)
+          if ($hasPfx -ne $hasThumbprint) {
+            throw 'PFX and certificate thumbprint must be configured together'
+          }
+          if (!$hasPfx) { exit 0 }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'localapp-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CERTIFICATE_PFX_BASE64))
+            if ([string]::IsNullOrEmpty($env:CERTIFICATE_PFX_PASSWORD)) {
+              $password = New-Object Security.SecureString
+            } else {
+              $password = ConvertTo-SecureString $env:CERTIFICATE_PFX_PASSWORD -AsPlainText -Force
+            }
+            $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            $expected = $env:CERTIFICATE_THUMBPRINT.Replace(' ', '').ToUpperInvariant()
+            if ($certificate.Thumbprint.ToUpperInvariant() -ne $expected) {
+              throw 'Imported certificate thumbprint does not match configuration'
+            }
+          } finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Generate fail-closed release config
+        env:
+          LOCALAPP_UPDATER_ENDPOINT: ${{ secrets.LOCALAPP_UPDATER_ENDPOINT }}
+          LOCALAPP_UPDATER_PUBKEY: ${{ secrets.LOCALAPP_UPDATER_PUBKEY }}
+          LOCALAPP_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.LOCALAPP_WINDOWS_CERTIFICATE_THUMBPRINT }}
+          LOCALAPP_WINDOWS_TIMESTAMP_URL: ${{ secrets.LOCALAPP_WINDOWS_TIMESTAMP_URL }}
+        run: node packages/desktop/scripts/windows-release-config.mjs --output "$env:RUNNER_TEMP/tauri-release.json"
+
+      - name: Build NSIS installer and updater signature
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm --filter @localapp/desktop tauri build --bundles nsis --target ${{ env.WINDOWS_TARGET }} --config "$env:RUNNER_TEMP/tauri-release.json"
+
+      - name: Verify bundled sidecars and updater assets
+        shell: pwsh
+        run: |
+          $bundleDirectory = "packages/desktop/src-tauri/target/$env:WINDOWS_TARGET/release/bundle/nsis"
+          $installer = Get-ChildItem $bundleDirectory -Filter '*-setup.exe' | Select-Object -First 1
+          if (!$installer) { throw 'NSIS installer was not produced' }
+          if (!(Test-Path "$($installer.FullName).sig")) { throw 'Updater signature was not produced' }
+
+          $listing = (& 7z l -slt $installer.FullName | Out-String)
+          foreach ($requiredName in @(
+            "node-$env:WINDOWS_TARGET.exe",
+            'npm-cli.js',
+            'localapp-runner.mjs',
+            'localapp-local-runtime.mjs',
+            'sql-wasm.wasm'
+          )) {
+            if (!$listing.Contains($requiredName)) {
+              throw "NSIS installer is missing required sidecar asset: $requiredName"
+            }
+          }
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: localapp-desktop-windows-x64
+          if-no-files-found: error
+          path: |
+            packages/desktop/src-tauri/target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis/*-setup.exe
+            packages/desktop/src-tauri/target/${{ env.WINDOWS_TARGET }}/release/bundle/nsis/*-setup.exe.sig
+
+      - name: Attach artifacts to published release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $bundleDirectory = "packages/desktop/src-tauri/target/$env:WINDOWS_TARGET/release/bundle/nsis"
+          gh release upload $env:RELEASE_TAG "$bundleDirectory/*-setup.exe" "$bundleDirectory/*-setup.exe.sig" --clobber

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/resource-schema.schema.json",
+  "name": "work_items",
+  "fields": {
+    "id": { "type": "number" },
+    "title": { "type": "string", "constraints": { "required": true } },
+    "status": { "type": "string", "constraints": { "required": true } },
+    "created_by": { "type": "string" }
+  },
+  "business": {
+    "ownerField": "created_by",
+    "statusField": "status",
+    "defaultFields": {
+      "status": {
+        "defaultValue": "todo"
+      }
+    },
+    "enums": {
+      "status": ["todo", "doing", "done"]
+    },
+    "transitions": [
+      { "name": "start", "label": "开始", "from": ["todo"], "to": "doing" },
+      { "name": "complete", "label": "完成", "from": ["doing"], "to": "done" }
+    ],
+    "recordAccess": {
+      "read": "owner",
+      "update": "owner",
+      "delete": "owner"
+    }
+  }
+}

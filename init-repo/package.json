@@ -1,0 +1,63 @@
+{
+  "name": "localapp-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "localapp dev",
+    "dev:vite": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@assistant-ui/react": "^0.14.7",
+    "@base-ui/react": "^1.5.0",
+    "@earendil-works/pi-agent-core": "^0.75.5",
+    "@earendil-works/pi-ai": "^0.75.5",
+    "@localapp/server-core": "workspace:*",
+    "@localapp/sdk": "workspace:*",
+    "@localapp/sdk-react": "workspace:*",
+    "@localapp/app-kit": "workspace:*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "date-fns": "^4.4.0",
+    "embla-carousel-react": "^8.6.0",
+    "input-otp": "^1.4.2",
+    "lucide-react": "^1.18.0",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.5.0",
+    "react": "^18.3.0",
+    "react-day-picker": "^10.0.1",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-parse": "^11.0.0",
+    "react-resizable-panels": "^4.11.2",
+    "recharts": "3.8.0",
+    "remark-gfm": "^4.0.1",
+    "unified": "^11.0.5",
+    "shadcn": "^4.11.0",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0",
+    "vaul": "^1.1.2"
+  },
+  "optionalDependencies": {
+    "@localapp/sdk-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@localapp/app-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./vite": "./vite-plugin.mjs",
+    "./dev-shell": "./dev-shell.tsx",
+    "./lib/utils": "./lib/utils.ts",
+    "./hooks/use-mobile": "./hooks/use-mobile.ts",
+    "./styles/preset.css": "./styles/preset.css",
+    "./tsconfig.base": "./tsconfig.base.json"
+  }
+}

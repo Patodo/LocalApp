@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localapp.dev/schemas/agent-first-run/run.schema.json",
+  "$defs": {
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["firstAttempt", "finalResult", "durationMs", "attempts", "retryCount", "diagnosticCodes"],
+      "properties": {
+        "firstAttempt": { "enum": ["passed", "failed", "not-run"] },
+        "finalResult": { "enum": ["passed", "failed", "not-run"] },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "retryCount": { "type": "integer", "minimum": 0 },
+        "diagnosticCodes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "requirementId", "mode", "platformVersion", "cliVersion", "startedAt", "finishedAt", "firstVisibleMs", "phases", "repairCount", "outcome"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "requirementId": { "type": "string", "minLength": 1 },
+    "mode": { "const": "agent" },
+    "platformVersion": { "type": "string", "minLength": 1 },
+    "cliVersion": { "type": "string", "minLength": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "firstVisibleMs": { "type": "integer", "minimum": 0 },
+    "phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "build", "upload", "verify"],
+      "properties": {
+        "check": { "$ref": "#/$defs/phase" },
+        "build": { "$ref": "#/$defs/phase" },
+        "upload": { "$ref": "#/$defs/phase" },
+        "verify": { "$ref": "#/$defs/phase" }
+      }
+    },
+    "repairCount": { "type": "integer", "minimum": 0 },
+    "outcome": { "enum": ["passed", "failed"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "threadId": { "type": "string" },
+        "commit": { "type": "string" },
+        "appPath": { "type": "string" }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

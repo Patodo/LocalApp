@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.localapp/dev-config.json
+.localapp/runtime/

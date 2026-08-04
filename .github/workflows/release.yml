@@ -1,0 +1,289 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  PNPM_VERSION: "10"
+
+jobs:
+  source-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require release commit on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm add --global @fission-ai/openspec@1.6.0
+      - run: pnpm export:public-source --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/localapp-public" --verify
+      - run: pnpm exec openspec validate --all --strict
+
+  cli:
+    needs: source-gate
+    name: CLI ${{ matrix.os_name }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os_name: linux
+            arch: x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            source: localapp
+            filename: localapp-cli-x86_64-unknown-linux-gnu
+            signature: unsigned
+          - runner: macos-14
+            os_name: macos
+            arch: aarch64
+            rust_target: aarch64-apple-darwin
+            source: localapp
+            filename: localapp-cli-aarch64-apple-darwin
+            signature: ad-hoc
+          - runner: macos-15-intel
+            os_name: macos
+            arch: x86_64
+            rust_target: x86_64-apple-darwin
+            source: localapp
+            filename: localapp-cli-x86_64-apple-darwin
+            signature: ad-hoc
+          - runner: windows-2025
+            os_name: windows
+            arch: x86_64
+            rust_target: x86_64-pc-windows-msvc
+            source: localapp.exe
+            filename: localapp-cli-x86_64-pc-windows-msvc.exe
+            signature: unsigned
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/cli
+          shared-key: release-${{ matrix.rust_target }}
+
+      - name: Validate tag and source version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' packages/cli/Cargo.toml | head -1)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match CLI version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Build CLI
+        run: cargo build --locked --release --manifest-path packages/cli/Cargo.toml --target ${{ matrix.rust_target }}
+
+      - name: Test CLI
+        run: cargo test --locked --manifest-path packages/cli/Cargo.toml --target ${{ matrix.rust_target }}
+
+      - name: Smoke test CLI
+        shell: bash
+        run: '"packages/cli/target/${{ matrix.rust_target }}/release/${{ matrix.source }}" --version'
+
+      - name: Package CLI on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          cp "packages/cli/target/${{ matrix.rust_target }}/release/${{ matrix.source }}" "release-assets/${{ matrix.filename }}"
+          chmod 755 "release-assets/${{ matrix.filename }}"
+          if [[ "${{ matrix.signature }}" == "ad-hoc" ]]; then
+            codesign --force --sign - "release-assets/${{ matrix.filename }}"
+            codesign --verify "release-assets/${{ matrix.filename }}"
+          fi
+          printf '%s' '${{ matrix.signature }}' > "release-assets/${{ matrix.filename }}.signature-status"
+
+      - name: Package CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item "packages/cli/target/${{ matrix.rust_target }}/release/${{ matrix.source }}" "release-assets/${{ matrix.filename }}"
+          Set-Content -NoNewline "release-assets/${{ matrix.filename }}.signature-status" '${{ matrix.signature }}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.os_name }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: release-assets/*
+
+  desktop-windows:
+    needs: source-gate
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri
+          shared-key: release-desktop-windows
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @localapp/desktop runtime:prepare --target win-x64
+      - run: pnpm --filter @localapp/desktop test
+      - run: pnpm --filter @localapp/desktop tauri build --bundles nsis --target x86_64-pc-windows-msvc
+
+      - name: Package Desktop and record actual signature state
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
+          if (!$installer) { throw "NSIS installer was not produced" }
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          $filename = "localapp-desktop-windows-x86_64-setup.exe"
+          Copy-Item $installer.FullName "release-assets/$filename"
+          $status = (Get-AuthenticodeSignature "release-assets/$filename").Status
+          $manifestStatus = if ($status -eq "Valid") { "signed" } else { "unsigned" }
+          Set-Content -NoNewline "release-assets/$filename.signature-status" $manifestStatus
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x86_64
+          if-no-files-found: error
+          path: release-assets/*
+
+  assemble:
+    needs: [cli, desktop-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          path: release-assets
+          merge-multiple: true
+
+      - name: Build signature status map
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          const directory = "release-assets";
+          const statuses = {};
+          for (const filename of fs.readdirSync(directory).filter((name) => name.endsWith(".signature-status"))) {
+            statuses[filename.slice(0, -".signature-status".length)] = fs.readFileSync(path.join(directory, filename), "utf8").trim();
+            fs.rmSync(path.join(directory, filename));
+          }
+          fs.writeFileSync("signature-statuses.json", JSON.stringify(statuses, null, 2));
+          NODE
+
+      - name: Generate release manifest and checksums
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' packages/cli/Cargo.toml | head -1)"
+          tag="${GITHUB_REF_TYPE}-${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then tag="${GITHUB_REF_NAME}"; else tag="v${version}-dry-run"; fi
+          node scripts/generate-release-manifest.mjs \
+            --assets-dir release-assets \
+            --output-dir release-assets \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}" \
+            --version "${version}" \
+            --min-version "${version}" \
+            --signature-statuses signature-statuses.json
+
+      - name: Verify release fixture
+        run: node --test scripts/generate-release-manifest.node-test.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localapp-release
+          if-no-files-found: error
+          path: release-assets/*
+
+      - name: Publish GitHub Release assets
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" release-assets/* --verify-tag --generate-notes
+
+  image:
+    needs: assemble
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize GHCR image name
+        shell: bash
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Build immutable Server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+
+      - name: Scan and smoke test Server image
+        run: bash scripts/docker-release-smoke.sh "${IMAGE}:${GITHUB_REF_NAME}"
+
+      - name: Push verified Server image
+        run: |
+          docker push "${IMAGE}:${GITHUB_REF_NAME}"
+          docker push "${IMAGE}:sha-${GITHUB_SHA}"
