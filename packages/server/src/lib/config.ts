@@ -214,6 +214,27 @@ function resolveDataPath(dataDir: string, candidate: string): string {
   return path.isAbsolute(candidate) ? candidate : path.resolve(dataDir, candidate);
 }
 
+export function resolveWorkspaceDir(dataDir: string, candidate: string): string {
+  if (path.isAbsolute(candidate)) throw new Error("workspaceDir must be relative to dataDir");
+  const lexicalDataDir = path.resolve(dataDir);
+  const resolved = path.resolve(lexicalDataDir, candidate);
+  if (!isPathWithin(lexicalDataDir, resolved)) throw new Error("workspaceDir must stay within dataDir");
+
+  fs.mkdirSync(lexicalDataDir, { recursive: true });
+  const realDataDir = fs.realpathSync(lexicalDataDir);
+  let ancestor = resolved;
+  while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor);
+  if (!isPathWithin(realDataDir, fs.realpathSync(ancestor))) {
+    throw new Error("workspaceDir real path must stay within dataDir");
+  }
+  return resolved;
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+}
+
 function readOrCreateJwtSecret(jwtKeyFile: string): string {
   const directory = path.dirname(jwtKeyFile);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -345,7 +366,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     listenHost: pickEnv(env, "LISTEN_HOST", persisted.listenHost, DEFAULTS.listenHost),
     listenPort,
     publicUrl: pickEnv(env, "PUBLIC_URL", persisted.publicUrl, DEFAULTS.publicUrl),
-    workspaceDir: resolveDataPath(dataDir, pickEnv(env, "WORKSPACE_DIR", persisted.workspaceDir, DEFAULTS.workspaceDir)),
+    workspaceDir: resolveWorkspaceDir(dataDir, pickEnv(env, "WORKSPACE_DIR", persisted.workspaceDir, DEFAULTS.workspaceDir)),
     jwtKeyFile,
     masterKeyFile: resolveDataPath(dataDir, env.MASTER_KEY_FILE || DEFAULTS.masterKeyFile),
     allowInsecureLan: env.ALLOW_INSECURE_LAN === "true" || (env.ALLOW_INSECURE_LAN === undefined && (persisted.allowInsecureLan ?? DEFAULTS.allowInsecureLan)),

@@ -4,6 +4,7 @@ import type { AgentKind } from "../lib/agents/types.js";
 import type { AgentRunner } from "../lib/agent-runner.js";
 import type { TaskEvent, TaskRunner } from "../lib/task-runner.js";
 import type { TaskStore } from "../lib/task-store.js";
+import { getUserRole } from "../lib/meta-sqlite.js";
 
 export async function tasksRoutes(
   app: FastifyInstance,
@@ -15,6 +16,7 @@ export async function tasksRoutes(
   app.get("/api/tasks/capabilities", async () => ({ success: true, data: { agents: agentRunner.capabilities() } }));
 
   app.post("/api/tasks", async (request, reply) => {
+    if (!requireExecutionAdmin(request.userId, reply)) return;
     try {
       const body = request.body as Record<string, unknown> | null;
       const task = await taskRunner.start({
@@ -32,6 +34,7 @@ export async function tasksRoutes(
   });
 
   app.post("/api/tasks/agents", async (request, reply) => {
+    if (!requireExecutionAdmin(request.userId, reply)) return;
     try {
       const body = request.body as Record<string, unknown> | null;
       const task = await agentRunner.start({
@@ -88,11 +91,19 @@ export async function tasksRoutes(
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     });
-    const write = (event: TaskEvent) => reply.raw.write(`event: task\ndata: ${JSON.stringify(event.task)}\n\n`);
-    const initial: TaskEvent = { taskId: id, status: task.status, task };
-    write(initial);
-    if (task.status !== "running") {
+    let ended = false;
+    const write = (event: TaskEvent) => {
+      if (!ended) reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event.type === "log" ? event : event.task)}\n\n`);
+    };
+    const finish = () => {
+      if (ended) return;
+      ended = true;
       reply.raw.end();
+    };
+    const initial: TaskEvent = { type: "status", taskId: id, status: task.status, task };
+    if (task.status !== "running") {
+      write(initial);
+      finish();
       return;
     }
     const emitter: EventEmitter = taskRunner.events(id);
@@ -100,11 +111,26 @@ export async function tasksRoutes(
       write(event);
       if (event.status !== "running") {
         emitter.off("event", listener);
-        reply.raw.end();
+        finish();
       }
     };
     emitter.on("event", listener);
-    request.raw.once("close", () => emitter.off("event", listener));
+    const current = taskStore.getOwned(id, request.userId);
+    if (!current) {
+      emitter.off("event", listener);
+      finish();
+      return;
+    }
+    write({ type: "status", taskId: id, status: current.status, task: current });
+    if (current.status !== "running") {
+      emitter.off("event", listener);
+      finish();
+      return;
+    }
+    request.raw.once("close", () => {
+      emitter.off("event", listener);
+      finish();
+    });
   });
 
   app.post("/api/tasks/:id/messages", async (request, reply) => {
@@ -157,5 +183,12 @@ function taskError(reply: FastifyReply, error: unknown) {
   if (message === "WORKSPACE_NOT_FOUND" || message === "TASK_NOT_FOUND") {
     return reply.status(404).send({ success: false, error: "Task not found" });
   }
+  if (message === "ADMIN_EXECUTION_REQUIRED") return reply.status(403).send({ success: false, error: "Administrator execution required" });
   return reply.status(400).send({ success: false, error: message });
+}
+
+function requireExecutionAdmin(userId: string, reply: FastifyReply): boolean {
+  if (getUserRole(userId) === "admin") return true;
+  reply.status(403).send({ success: false, error: "Administrator execution required" });
+  return false;
 }

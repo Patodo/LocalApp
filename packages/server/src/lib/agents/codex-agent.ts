@@ -18,9 +18,10 @@ export class CodexAgent implements AgentAdapter {
       workspaceId: input.workspaceId,
       kind: "agent",
       executable: this.kind,
-      args: ["exec", input.prompt],
+      args: ["exec", "--json", input.prompt],
       timeoutMs: input.timeoutMs,
       requestedBy: input.requestedBy,
+      logParser: parseCodexLog,
     });
   }
 
@@ -33,5 +34,18 @@ export class CodexAgent implements AgentAdapter {
 }
 
 export function parseCodexLog(message: string): { type: "text"; text: string } {
+  try {
+    const value = JSON.parse(message) as {
+      type?: string;
+      text?: string;
+      item?: { type?: string; text?: string };
+    };
+    if (typeof value.text === "string") return { type: "text", text: value.text };
+    if (value.type === "item.completed" && value.item?.type === "agent_message" && typeof value.item.text === "string") {
+      return { type: "text", text: value.item.text };
+    }
+  } catch {
+    // Codex may emit plain text when JSON output is unavailable.
+  }
   return { type: "text", text: message };
 }

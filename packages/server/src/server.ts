@@ -98,13 +98,13 @@ async function registerServerPluginsAndRoutes(
     },
   });
   const taskStore = new TaskStore();
-  taskStore.reconcileRunning();
   const taskRunner = new TaskRunner({
     workspaceStore,
     taskStore,
     taskDir: path.join(app.config.dataDir, "tasks"),
   });
   const agentRunner = new AgentRunner({ taskRunner });
+  await taskRunner.reconcileRunning();
   workspaceStore.setTaskRunner(taskRunner);
   app.addHook("onClose", async () => {
     await Promise.all([taskRunner.shutdown(), workspaceStore.shutdown()]);

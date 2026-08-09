@@ -355,6 +355,7 @@ export async function initMetaDb(dataDir: string): Promise<void> {
       output_path TEXT NOT NULL,
       status TEXT NOT NULL,
       pid INTEGER,
+      process_identity TEXT,
       exit_code INTEGER,
       error TEXT,
       created_at TEXT NOT NULL,
@@ -366,6 +367,8 @@ export async function initMetaDb(dataDir: string): Promise<void> {
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_requester ON tasks(requested_by, created_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id, created_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
+  const taskColumns = db.exec("PRAGMA table_info(tasks)")[0]?.values.map((row) => String(row[1])) ?? [];
+  if (!taskColumns.includes("process_identity")) db.run("ALTER TABLE tasks ADD COLUMN process_identity TEXT");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS users (

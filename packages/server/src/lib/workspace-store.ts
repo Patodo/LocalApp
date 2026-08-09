@@ -8,6 +8,8 @@ import yauzl, { type Entry, type ZipFile } from "yauzl";
 import { flushMetaDb, getDb } from "./meta-sqlite.js";
 import { resolveWorkspacePath } from "./workspace-path.js";
 import type { TaskRecord, TaskRunner } from "./task-runner.js";
+import { getUserRole } from "./meta-sqlite.js";
+import { ProcessTreeController } from "./process-tree.js";
 
 export interface WorkspaceRecord {
   id: string;
@@ -26,6 +28,16 @@ export interface WorkspaceArchiveLimits {
 export interface WorkspaceStoreOptions {
   workspaceDir: string;
   archiveLimits?: Partial<WorkspaceArchiveLimits>;
+  authorizeExecution?: (userId: string) => boolean;
+  fileOperations?: Partial<WorkspaceFileOperations>;
+  gitExecutable?: string;
+  cloneTimeoutMs?: number;
+  processController?: ProcessTreeController;
+}
+
+export interface WorkspaceFileOperations {
+  openSync: typeof fs.openSync;
+  renameSync: typeof fs.renameSync;
 }
 
 const DEFAULT_ARCHIVE_LIMITS: WorkspaceArchiveLimits = {
@@ -38,11 +50,18 @@ export class WorkspaceStore {
   readonly workspaceDir: string;
   readonly archiveLimits: WorkspaceArchiveLimits;
   private taskRunner: TaskRunner | null = null;
-  private readonly cloneProcesses = new Set<ChildProcess>();
+  private readonly cloneProcesses = new Set<ActiveClone>();
+  private readonly fileOperations: WorkspaceFileOperations;
+  private readonly processController: ProcessTreeController;
 
-  constructor(options: WorkspaceStoreOptions) {
+  constructor(private readonly options: WorkspaceStoreOptions) {
     const workspaceDir = path.resolve(options.workspaceDir);
     this.archiveLimits = { ...DEFAULT_ARCHIVE_LIMITS, ...options.archiveLimits };
+    this.fileOperations = {
+      openSync: options.fileOperations?.openSync ?? fs.openSync,
+      renameSync: options.fileOperations?.renameSync ?? fs.renameSync,
+    };
+    this.processController = options.processController ?? new ProcessTreeController();
     fs.mkdirSync(workspaceDir, { recursive: true });
     this.workspaceDir = fs.realpathSync(workspaceDir);
   }
@@ -67,7 +86,7 @@ export class WorkspaceStore {
     }
   }
 
-  async clone(input: { name: string; ownerId: string; repositoryUrl: string }): Promise<WorkspaceRecord> {
+  async clone(input: { name: string; ownerId: string; repositoryUrl: string; signal?: AbortSignal; timeoutMs?: number }): Promise<WorkspaceRecord> {
     const name = requireName(input.name);
     const repositoryUrl = input.repositoryUrl.trim();
     if (!repositoryUrl) throw new Error("Repository URL is required");
@@ -76,12 +95,14 @@ export class WorkspaceStore {
     }
     if (repositoryUrl.startsWith("-")) throw new Error("Repository URL is invalid");
     if (!isRemoteRepositoryUrl(repositoryUrl)) throw new Error("Repository URL must not reference a local path");
+    const authorized = this.options.authorizeExecution?.(input.ownerId) ?? getUserRole(input.ownerId) === "admin";
+    if (!authorized) throw new Error("ADMIN_EXECUTION_REQUIRED");
 
     const id = randomUUID();
     const temporary = this.temporaryPath(id);
     const destination = this.pathFor(id);
     try {
-      await this.runGitClone(repositoryUrl, temporary);
+      await this.runGitClone(repositoryUrl, temporary, input.signal, input.timeoutMs);
       fs.renameSync(temporary, destination);
       return this.insert({ id, ownerId: input.ownerId, name });
     } catch (error) {
@@ -149,15 +170,54 @@ export class WorkspaceStore {
   }
 
   async readFile(id: string, ownerId: string, relativePath: string): Promise<string> {
-    const filePath = resolveWorkspacePath(this.requireOwnedPath(id, ownerId), relativePath);
-    if (!fs.statSync(filePath, { throwIfNoEntry: false })?.isFile()) throw new Error("WORKSPACE_FILE_NOT_FOUND");
-    return fs.readFileSync(filePath, "utf8");
+    const workspacePath = this.requireOwnedPath(id, ownerId);
+    const filePath = resolveWorkspacePath(workspacePath, relativePath);
+    let descriptor: number;
+    try {
+      descriptor = this.fileOperations.openSync(filePath, fs.constants.O_RDONLY | noFollowFlag());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ELOOP") throw workspaceBoundaryChanged();
+      if (code === "ENOENT" || code === "ENOTDIR") throw new Error("WORKSPACE_FILE_NOT_FOUND");
+      throw error;
+    }
+    try {
+      const identity = fs.fstatSync(descriptor);
+      if (!identity.isFile()) throw new Error("WORKSPACE_FILE_NOT_FOUND");
+      assertStableWorkspaceFile(workspacePath, relativePath, filePath, identity);
+      return fs.readFileSync(descriptor, "utf8");
+    } finally {
+      fs.closeSync(descriptor);
+    }
   }
 
   async writeFile(id: string, ownerId: string, relativePath: string, content: string | Buffer): Promise<void> {
-    const filePath = resolveWorkspacePath(this.requireOwnedPath(id, ownerId), relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, { mode: 0o600 });
+    const workspacePath = this.requireOwnedPath(id, ownerId);
+    const filePath = resolveWorkspacePath(workspacePath, relativePath);
+    const parentPath = path.dirname(filePath);
+    fs.mkdirSync(parentPath, { recursive: true });
+    assertStableWorkspaceDirectory(workspacePath, path.relative(workspacePath, parentPath), parentPath);
+    const temporaryPath = path.join(parentPath, `.localapp-write-${randomUUID()}.tmp`);
+    const descriptor = this.fileOperations.openSync(
+      temporaryPath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollowFlag(),
+      0o600,
+    );
+    let published = false;
+    try {
+      fs.writeFileSync(descriptor, content);
+      fs.fsyncSync(descriptor);
+      const identity = fs.fstatSync(descriptor);
+      assertStableWorkspaceFile(workspacePath, path.relative(workspacePath, temporaryPath), temporaryPath, identity);
+      const target = fs.lstatSync(filePath, { throwIfNoEntry: false });
+      if (target?.isSymbolicLink()) throw workspaceBoundaryChanged();
+      this.fileOperations.renameSync(temporaryPath, filePath);
+      published = true;
+      assertStableWorkspaceFile(workspacePath, relativePath, filePath, identity);
+    } finally {
+      fs.closeSync(descriptor);
+      if (!published) fs.rmSync(temporaryPath, { force: true });
+    }
     const now = new Date().toISOString();
     getDb().run("UPDATE workspaces SET updated_at = ? WHERE id = ? AND owner_id = ?", [now, id, ownerId]);
     flushMetaDb();
@@ -166,7 +226,17 @@ export class WorkspaceStore {
   async remove(id: string, ownerId: string): Promise<boolean> {
     const record = this.getOwned(id, ownerId);
     if (!record) return false;
-    fs.rmSync(this.pathFor(id), { recursive: true, force: true });
+    const workspacePath = this.requireOwnedPath(id, ownerId);
+    const identity = fs.lstatSync(workspacePath);
+    const tombstone = path.join(this.workspaceDir, `.delete-${id}-${randomUUID()}`);
+    this.fileOperations.renameSync(workspacePath, tombstone);
+    const moved = fs.lstatSync(tombstone, { throwIfNoEntry: false });
+    if (!moved || moved.isSymbolicLink() || moved.dev !== identity.dev || moved.ino !== identity.ino) {
+      if (moved?.isSymbolicLink()) fs.unlinkSync(tombstone);
+      throw workspaceBoundaryChanged();
+    }
+    if (path.dirname(fs.realpathSync(tombstone)) !== this.workspaceDir) throw workspaceBoundaryChanged();
+    fs.rmSync(tombstone, { recursive: true, force: true });
     getDb().run("DELETE FROM workspaces WHERE id = ? AND owner_id = ?", [id, ownerId]);
     flushMetaDb();
     return true;
@@ -195,12 +265,9 @@ export class WorkspaceStore {
   }
 
   async shutdown(): Promise<void> {
-    const children = [...this.cloneProcesses];
-    for (const child of children) signalProcessTree(child, "SIGTERM");
-    await Promise.all(children.map((child) => waitForChildClose(child, 1_000)));
-    const remaining = [...this.cloneProcesses];
-    for (const child of remaining) signalProcessTree(child, "SIGKILL");
-    await Promise.all(remaining.map((child) => waitForChildClose(child, 1_000)));
+    const active = [...this.cloneProcesses];
+    await Promise.all(active.map((clone) => clone.cancel(new Error("Git clone terminated during Server shutdown"))));
+    await Promise.all(active.map((clone) => clone.closed));
   }
 
   private insert(input: { id: string; ownerId: string; name: string }): WorkspaceRecord {
@@ -222,36 +289,103 @@ export class WorkspaceStore {
     return this.taskRunner;
   }
 
-  private runGitClone(repositoryUrl: string, destination: string): Promise<void> {
+  private runGitClone(repositoryUrl: string, destination: string, signal?: AbortSignal, requestedTimeoutMs?: number): Promise<void> {
+    const timeoutMs = requestedTimeoutMs ?? this.options.cloneTimeoutMs ?? 5 * 60_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15 * 60_000) throw new Error("Invalid Git clone timeout");
+    if (signal?.aborted) throw new Error("Git clone aborted");
+    const environmentDirectory = path.join(this.workspaceDir, `.git-env-${randomUUID()}`);
+    fs.mkdirSync(environmentDirectory, { mode: 0o700 });
     return new Promise((resolve, reject) => {
-      const child = spawn("git", ["clone", "--", repositoryUrl, destination], {
+      const child = spawn(this.options.gitExecutable ?? "git", ["clone", "--", repositoryUrl, destination], {
         shell: false,
         detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "pipe"],
-        env: boundedEnvironment(),
+        env: gitEnvironment(environmentDirectory),
         windowsHide: true,
       });
-      this.cloneProcesses.add(child);
       let stderr = "";
       let settled = false;
+      let requestedError: Error | null = null;
+      let closeActive!: () => void;
+      const closed = new Promise<void>((close) => { closeActive = close; });
+      const cancel = async (error: Error) => {
+        if (!requestedError) requestedError = error;
+        if (!child.pid) return;
+        await this.processController.signalTree(child.pid, false);
+        if (!await waitPromise(closed, 1_000)) {
+          await this.processController.signalTree(child.pid, true);
+          await waitPromise(closed, 1_000);
+        }
+      };
+      const active: ActiveClone = { child, closed, cancel };
+      this.cloneProcesses.add(active);
+      const timer = setTimeout(() => void cancel(new Error("Git clone timed out")), timeoutMs);
+      timer.unref();
+      const onAbort = () => void cancel(new Error("Git clone aborted"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        this.cloneProcesses.delete(active);
+        fs.rmSync(environmentDirectory, { recursive: true, force: true });
+        closeActive();
+      };
       child.stderr!.on("data", (chunk) => {
         if (stderr.length < 64 * 1024) stderr += String(chunk);
       });
       child.once("error", (error) => {
-        this.cloneProcesses.delete(child);
+        fs.rmSync(destination, { recursive: true, force: true });
+        cleanup();
         if (!settled) {
           settled = true;
           reject(error);
         }
       });
       child.once("close", (code, signal) => {
-        this.cloneProcesses.delete(child);
+        if (requestedError || code !== 0) fs.rmSync(destination, { recursive: true, force: true });
+        cleanup();
         if (settled) return;
         settled = true;
-        if (code === 0) resolve();
+        if (requestedError) reject(requestedError);
+        else if (code === 0) resolve();
         else reject(new Error(`Git clone failed (${code ?? signal ?? "signal"}): ${stderr.trim()}`));
       });
     });
+  }
+}
+
+function noFollowFlag(): number {
+  return typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+}
+
+function workspaceBoundaryChanged(): Error {
+  return new Error("Workspace boundary changed during filesystem operation");
+}
+
+function assertStableWorkspaceDirectory(workspacePath: string, relativePath: string, expectedPath: string): void {
+  try {
+    const resolved = resolveWorkspacePath(workspacePath, relativePath || ".");
+    const stat = fs.lstatSync(resolved);
+    if (resolved !== expectedPath || stat.isSymbolicLink() || !stat.isDirectory()) throw workspaceBoundaryChanged();
+  } catch {
+    throw workspaceBoundaryChanged();
+  }
+}
+
+function assertStableWorkspaceFile(
+  workspacePath: string,
+  relativePath: string,
+  expectedPath: string,
+  identity: fs.Stats,
+): void {
+  try {
+    const resolved = resolveWorkspacePath(workspacePath, relativePath);
+    const stat = fs.lstatSync(resolved);
+    if (resolved !== expectedPath || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino) {
+      throw workspaceBoundaryChanged();
+    }
+  } catch {
+    throw workspaceBoundaryChanged();
   }
 }
 
@@ -287,10 +421,10 @@ function archiveLimitError(limit: string): Error {
 
 function openArchive(archivePath: string): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
-    yauzl.open(archivePath, { lazyEntries: true, decodeStrings: true, validateEntrySizes: true }, (error, zipFile) => {
+    yauzl.open(archivePath, { lazyEntries: true, decodeStrings: true, validateEntrySizes: true, strictFileNames: true }, (error, zipFile) => {
       if (error || !zipFile) {
         const message = error instanceof Error ? error.message : String(error ?? "Unable to open workspace archive");
-        reject(/invalid relative path/i.test(message) ? new Error(`Path crosses workspace boundary: ${message}`) : (error ?? new Error(message)));
+        reject(/invalid relative path|invalid characters in filename/i.test(message) ? new Error(`Path crosses workspace boundary: ${message}`) : (error ?? new Error(message)));
       }
       else resolve(zipFile);
     });
@@ -319,7 +453,7 @@ async function extractArchive(archivePath: string, destination: string, limits: 
       settled = true;
       zipFile.close();
       const message = error instanceof Error ? error.message : String(error);
-      reject(/invalid relative path/i.test(message) ? new Error(`Path crosses workspace boundary: ${message}`) : error);
+      reject(/invalid relative path|invalid characters in filename/i.test(message) ? new Error(`Path crosses workspace boundary: ${message}`) : error);
     };
     zipFile.once("error", fail);
     zipFile.once("end", () => {
@@ -371,31 +505,33 @@ async function extractArchive(archivePath: string, destination: string, limits: 
   });
 }
 
-function boundedEnvironment(): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "SSH_AUTH_SOCK", "GIT_SSH", "GIT_SSH_COMMAND"];
-  return Object.fromEntries(allowed.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+interface ActiveClone {
+  child: ChildProcess;
+  closed: Promise<void>;
+  cancel(error: Error): Promise<void>;
 }
 
-function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (!child.pid) return;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+function gitEnvironment(home: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+  };
+  for (const key of ["LANG", "LC_ALL", "LC_CTYPE", "SSH_AUTH_SOCK"]) {
+    if (process.env[key] !== undefined) environment[key] = process.env[key];
   }
+  return environment;
 }
 
-function waitForChildClose(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
-    const finish = () => {
-      clearTimeout(timer);
-      child.off("close", finish);
-      resolve();
-    };
-    const timer = setTimeout(finish, timeoutMs);
-    timer.unref();
-    child.once("close", finish);
-  });
+async function waitPromise(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref();
+    }),
+  ]);
 }

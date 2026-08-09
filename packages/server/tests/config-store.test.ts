@@ -29,6 +29,40 @@ describe("ServerConfigStore", () => {
       .rejects.toThrow("allowInsecureLan");
   });
 
+  it("defaults workspaceDir exactly under dataDir and accepts a confined relative override", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    directories.push(dataDir);
+
+    await expect(loadConfig({ DATA_DIR: dataDir, JWT_SECRET: "secret" })).resolves.toMatchObject({
+      workspaceDir: path.join(dataDir, "workspaces"),
+    });
+    await expect(loadConfig({ DATA_DIR: dataDir, WORKSPACE_DIR: "studio/projects", JWT_SECRET: "secret" })).resolves.toMatchObject({
+      workspaceDir: path.join(dataDir, "studio", "projects"),
+    });
+  });
+
+  it("rejects absolute, traversal, and symlink workspaceDir escapes", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-outside-"));
+    directories.push(dataDir, outside);
+    fs.symlinkSync(outside, path.join(dataDir, "linked-outside"));
+
+    for (const workspaceDir of [outside, "../outside", "linked-outside/projects"]) {
+      await expect(loadConfig({ DATA_DIR: dataDir, WORKSPACE_DIR: workspaceDir, JWT_SECRET: "secret" }))
+        .rejects.toThrow("workspaceDir");
+    }
+  });
+
+  it("rejects an outside workspaceDir supplied through persisted settings validation", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-outside-"));
+    directories.push(dataDir, outside);
+    const store = createServerConfigStore({ env: { DATA_DIR: dataDir, JWT_SECRET: "secret" } });
+    const config = await store.read();
+
+    await expect(store.validate({ ...config, workspaceDir: outside })).rejects.toThrow("workspaceDir");
+  });
+
   it("writes only public settings and keeps environment overrides authoritative", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
     directories.push(dataDir);
@@ -48,7 +82,7 @@ describe("ServerConfigStore", () => {
       listenHost: "127.0.0.1",
       listenPort: 43127,
       publicUrl: "https://localapp.example",
-      workspaceDir: path.join(dataDir, "workspaces"),
+      workspaceDir: "workspaces",
       allowInsecureLan: false,
     });
     await expect(store.read()).resolves.toMatchObject({

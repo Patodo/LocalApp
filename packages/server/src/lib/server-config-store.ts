@@ -7,6 +7,7 @@ import {
   loadConfig,
   readPendingNetworkSettings,
   readPersistedServerSettings,
+  resolveWorkspaceDir,
   type PendingNetworkSettings,
   type PersistedServerSettings,
   type ServerConfig,
@@ -53,13 +54,21 @@ export function createServerConfigStore(options: CreateServerConfigStoreOptions 
       }
       assertListenerHost(candidate.listenHost);
       const current = await loadConfig(env);
+      const workspaceDir = path.isAbsolute(candidate.workspaceDir)
+        ? (() => {
+            if (path.resolve(candidate.workspaceDir) !== path.resolve(current.workspaceDir)) {
+              throw new Error("workspaceDir must be a relative path within dataDir");
+            }
+            return current.workspaceDir;
+          })()
+        : resolveWorkspaceDir(candidate.dataDir, candidate.workspaceDir);
       const samePortHostOnlyChange = candidate.listenPort !== 0
         && candidate.listenPort === current.listenPort
         && candidate.listenHost !== current.listenHost;
       if (!samePortHostOnlyChange) await assertListenerAvailable(candidate.listenHost, candidate.listenPort);
       return {
         ...candidate,
-        workspaceDir: path.resolve(candidate.dataDir, candidate.workspaceDir),
+        workspaceDir,
       };
     },
     async write(candidate) {
@@ -102,7 +111,7 @@ function settingsFromConfig(candidate: ServerConfig): PersistedServerSettings {
     listenHost: candidate.listenHost,
     listenPort: candidate.listenPort,
     publicUrl: candidate.publicUrl,
-    workspaceDir: candidate.workspaceDir,
+    workspaceDir: path.relative(candidate.dataDir, candidate.workspaceDir) || ".",
     allowInsecureLan: candidate.allowInsecureLan,
   };
 }

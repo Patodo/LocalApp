@@ -23,7 +23,7 @@ describe("system settings", () => {
       listenHost: "127.0.0.1",
       listenPort: 3000,
       publicUrl: "",
-      workspaceDir: path.join(dataDir, "workspaces"),
+      workspaceDir: "workspaces",
       allowInsecureLan: false,
     }));
     const requestRestart = vi.fn();

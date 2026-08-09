@@ -5,6 +5,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { WorkspaceStore } from "../lib/workspace-store.js";
+import { getUserRole } from "../lib/meta-sqlite.js";
 
 export async function workspacesRoutes(app: FastifyInstance, workspaceStore: WorkspaceStore): Promise<void> {
   app.get("/api/workspaces", async (request) => ({ success: true, data: workspaceStore.list(request.userId) }));
@@ -20,16 +21,27 @@ export async function workspacesRoutes(app: FastifyInstance, workspaceStore: Wor
   });
 
   app.post("/api/workspaces/clone", async (request, reply) => {
+    if (!requireExecutionAdmin(request.userId, reply)) return;
+    const abort = new AbortController();
+    let complete = false;
+    const cancel = () => { if (!complete) abort.abort(); };
+    request.raw.once("aborted", cancel);
+    reply.raw.once("close", cancel);
     try {
       const body = request.body as { name?: unknown; repositoryUrl?: unknown } | null;
       const workspace = await workspaceStore.clone({
         name: requireString(body?.name, "name"),
         repositoryUrl: requireString(body?.repositoryUrl, "repositoryUrl"),
         ownerId: request.userId,
+        signal: abort.signal,
       });
+      complete = true;
       return reply.status(201).send({ success: true, data: workspace });
     } catch (error) {
       return workspaceError(reply, error);
+    } finally {
+      request.raw.off("aborted", cancel);
+      reply.raw.off("close", cancel);
     }
   });
 
@@ -112,6 +124,7 @@ export async function workspacesRoutes(app: FastifyInstance, workspaceStore: Wor
   });
 
   app.post("/api/workspaces/:id/build", async (request, reply) => {
+    if (!requireExecutionAdmin(request.userId, reply)) return;
     try {
       const task = await workspaceStore.build((request.params as { id: string }).id, request.userId);
       return reply.status(201).send({ success: true, data: task });
@@ -121,6 +134,7 @@ export async function workspacesRoutes(app: FastifyInstance, workspaceStore: Wor
   });
 
   app.post("/api/workspaces/:id/install", async (request, reply) => {
+    if (!requireExecutionAdmin(request.userId, reply)) return;
     try {
       const task = await workspaceStore.install((request.params as { id: string }).id, request.userId);
       return reply.status(201).send({ success: true, data: task });
@@ -140,6 +154,13 @@ function workspaceError(reply: FastifyReply, error: unknown) {
   if (message === "WORKSPACE_NOT_FOUND" || message === "WORKSPACE_FILE_NOT_FOUND") {
     return reply.status(404).send({ success: false, error: "Workspace not found" });
   }
+  if (message === "ADMIN_EXECUTION_REQUIRED") return reply.status(403).send({ success: false, error: "Administrator execution required" });
   const status = /already exists/i.test(message) ? 409 : 400;
   return reply.status(status).send({ success: false, error: message });
+}
+
+function requireExecutionAdmin(userId: string, reply: FastifyReply): boolean {
+  if (getUserRole(userId) === "admin") return true;
+  reply.status(403).send({ success: false, error: "Administrator execution required" });
+  return false;
 }

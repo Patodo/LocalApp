@@ -3,8 +3,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { TaskStore, type TaskKind, type TaskRecord, type TaskStatus } from "./task-store.js";
 import type { WorkspaceStore } from "./workspace-store.js";
+import { getUserRole } from "./meta-sqlite.js";
+import { ProcessTreeController } from "./process-tree.js";
 
 export type { TaskRecord } from "./task-store.js";
 
@@ -15,6 +18,7 @@ export interface StartTaskInput {
   args: string[];
   timeoutMs: number;
   requestedBy: string;
+  logParser?: (line: string) => { type: "text"; text: string };
 }
 
 export interface TaskLogChunk {
@@ -25,9 +29,12 @@ export interface TaskLogChunk {
 }
 
 export interface TaskEvent {
+  type: "status" | "log";
   taskId: string;
   status: TaskStatus;
   task: TaskRecord;
+  content?: string;
+  cursor?: number;
 }
 
 export interface TaskRunnerOptions {
@@ -35,25 +42,31 @@ export interface TaskRunnerOptions {
   taskStore: TaskStore;
   taskDir: string;
   allowedExecutables?: Record<string, string>;
+  authorizeExecution?: (userId: string) => boolean;
+  processController?: ProcessTreeController;
 }
 
 interface ActiveTask {
   child: ChildProcess;
+  identityAcknowledgementPath: string;
   desiredStatus: Exclude<TaskStatus, "running" | "succeeded" | "failed"> | null;
-  timer: NodeJS.Timeout;
+  timer: NodeJS.Timeout | null;
   closed: Promise<void>;
 }
 
 const MAX_TIMEOUT_MS = 60 * 60_000;
 const MAX_LOG_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_EXECUTABLES = ["node", "npm", "pnpm", "git", "localapp", "codex", "opencode"] as const;
+const TASK_SUPERVISOR_PATH = path.resolve(__dirname, "../../runner/task-supervisor.mjs");
 
 export class TaskRunner {
   private readonly active = new Map<string, ActiveTask>();
   private readonly emitters = new Map<string, EventEmitter>();
   private readonly allowedExecutables = new Map<string, string>();
+  private readonly processController: ProcessTreeController;
 
   constructor(private readonly options: TaskRunnerOptions) {
+    this.processController = options.processController ?? new ProcessTreeController();
     fs.mkdirSync(options.taskDir, { recursive: true });
     for (const executable of DEFAULT_EXECUTABLES) {
       const resolved = executable === "node" ? process.execPath : findExecutable(executable);
@@ -68,6 +81,13 @@ export class TaskRunner {
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error("Invalid executable allowlist name");
     const resolved = fs.realpathSync(executablePath);
     if (!fs.statSync(resolved).isFile()) throw new Error("Allowlisted executable is not a file");
+    if (process.platform !== "win32") {
+      try {
+        fs.accessSync(resolved, fs.constants.X_OK);
+      } catch {
+        throw new Error("Allowlisted executable is not executable");
+      }
+    }
     this.allowedExecutables.set(name, resolved);
   }
 
@@ -77,6 +97,8 @@ export class TaskRunner {
 
   async start(input: StartTaskInput): Promise<TaskRecord> {
     validateStartInput(input);
+    const authorized = this.options.authorizeExecution?.(input.requestedBy) ?? getUserRole(input.requestedBy) === "admin";
+    if (!authorized) throw new Error("ADMIN_EXECUTION_REQUIRED");
     const workspacePath = this.options.workspaceStore.requireOwnedPath(input.workspaceId, input.requestedBy);
     const executablePath = this.allowedExecutables.get(input.executable);
     if (!executablePath) throw new Error(`Executable is not an allowlisted executable: ${input.executable}`);
@@ -92,34 +114,47 @@ export class TaskRunner {
       throw error;
     }
 
-    const output = fs.openSync(outputPath, "a");
+    const emitter = new EventEmitter();
+    this.emitters.set(record.id, emitter);
+    const output = input.logParser ? null : fs.openSync(outputPath, "a");
+    const identityToken = randomUUID();
+    const identityAcknowledgementPath = path.join(this.options.taskDir, `${id}.identity-ready`);
+    const supervisorArgs = [
+      TASK_SUPERVISOR_PATH,
+      identityToken,
+      identityAcknowledgementPath,
+      executablePath,
+      Buffer.from(JSON.stringify(input.args), "utf8").toString("base64url"),
+    ];
     let child: ChildProcess;
     try {
-      child = spawn(executablePath, input.args, {
+      child = spawn(process.execPath, supervisorArgs, {
         cwd: workspacePath,
         env: boundedEnvironment(),
         shell: false,
         detached: process.platform !== "win32",
-        stdio: ["ignore", output, output],
+        stdio: input.logParser ? ["ignore", "pipe", "pipe"] : ["ignore", output!, output!],
         windowsHide: true,
       });
     } catch (error) {
-      fs.closeSync(output);
-      return Promise.reject(this.finishSpawnFailure(record.id, error));
+      if (output !== null) fs.closeSync(output);
+      const failure = this.finishSpawnFailure(record.id, error);
+      setImmediate(() => this.emitters.delete(record.id));
+      return Promise.reject(failure);
     }
-    fs.closeSync(output);
-
-    const emitter = new EventEmitter();
-    this.emitters.set(record.id, emitter);
+    if (output !== null) fs.closeSync(output);
+    if (input.logParser) {
+      this.attachParsedOutput(record.id, child.stdout!, input.logParser, outputPath);
+      this.attachParsedOutput(record.id, child.stderr!, input.logParser, outputPath);
+    }
     let closeActive!: () => void;
     const closed = new Promise<void>((resolve) => { closeActive = resolve; });
-    const timer = setTimeout(() => void this.terminate(record.id, "timed_out"), input.timeoutMs);
-    timer.unref();
-    const active: ActiveTask = { child, desiredStatus: null, timer, closed };
+    const active: ActiveTask = { child, identityAcknowledgementPath, desiredStatus: null, timer: null, closed };
     this.active.set(record.id, active);
 
     child.once("close", (code, signal) => {
-      clearTimeout(timer);
+      if (active.timer) clearTimeout(active.timer);
+      fs.rmSync(active.identityAcknowledgementPath, { force: true });
       this.active.delete(record.id);
       const current = this.options.taskStore.get(record.id);
       if (current?.status === "running") {
@@ -135,7 +170,8 @@ export class TaskRunner {
       setImmediate(() => this.emitters.delete(record.id));
     });
     child.once("error", (error) => {
-      clearTimeout(timer);
+      if (active.timer) clearTimeout(active.timer);
+      fs.rmSync(active.identityAcknowledgementPath, { force: true });
       this.active.delete(record.id);
       const current = this.options.taskStore.get(record.id);
       if (current?.status === "running") {
@@ -159,7 +195,17 @@ export class TaskRunner {
       this.finishSpawnFailure(record.id, error);
       throw error;
     }
-    const started = this.options.taskStore.setPid(record.id, child.pid);
+    const processIdentity = await this.processController.processIdentity(child.pid);
+    if (!processIdentity || !processIdentity.includes(identityToken) || !processIdentity.includes("task-supervisor.mjs")) {
+      await this.processController.terminateAndWait(child.pid);
+      const error = new Error("Unable to establish task process identity");
+      this.finishSpawnFailure(record.id, error);
+      throw error;
+    }
+    fs.writeFileSync(identityAcknowledgementPath, "ready", { flag: "wx", mode: 0o600 });
+    const started = this.options.taskStore.setPid(record.id, child.pid, processIdentity);
+    active.timer = setTimeout(() => void this.terminate(record.id, "timed_out"), input.timeoutMs);
+    active.timer.unref();
 
     this.emit(record.id, started);
     return started;
@@ -177,18 +223,21 @@ export class TaskRunner {
     const outputPath = this.options.taskStore.outputPath(id);
     if (!outputPath) throw new Error("TASK_NOT_FOUND");
     const size = fs.statSync(outputPath, { throwIfNoEntry: false })?.size ?? 0;
-    const safeCursor = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, size) : 0;
-    const length = Math.min(MAX_LOG_CHUNK_BYTES, size - safeCursor);
-    const buffer = Buffer.alloc(length);
-    if (length > 0) {
-      const descriptor = fs.openSync(outputPath, "r");
-      try {
-        fs.readSync(descriptor, buffer, 0, length, safeCursor);
-      } finally {
-        fs.closeSync(descriptor);
+    let safeCursor = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, size) : 0;
+    const descriptor = fs.openSync(outputPath, "r");
+    try {
+      while (safeCursor < size && isUtf8Continuation(readByte(descriptor, safeCursor))) safeCursor += 1;
+      let end = Math.min(safeCursor + MAX_LOG_CHUNK_BYTES, size);
+      if (end < size && isUtf8Continuation(readByte(descriptor, end))) {
+        do { end -= 1; } while (end > safeCursor && isUtf8Continuation(readByte(descriptor, end)));
       }
+      const length = end - safeCursor;
+      const buffer = Buffer.alloc(length);
+      if (length > 0) fs.readSync(descriptor, buffer, 0, length, safeCursor);
+      return { cursor: safeCursor, nextCursor: end, content: buffer.toString("utf8"), eof: end >= size };
+    } finally {
+      fs.closeSync(descriptor);
     }
-    return { cursor: safeCursor, nextCursor: safeCursor + length, content: buffer.toString("utf8"), eof: safeCursor + length >= size };
   }
 
   events(id: string): EventEmitter {
@@ -204,6 +253,18 @@ export class TaskRunner {
     await Promise.all([...this.active.keys()].map((id) => this.terminate(id, "interrupted")));
   }
 
+  async reconcileRunning(): Promise<number> {
+    const running = this.options.taskStore.listRunning();
+    for (const task of running) {
+      if (task.pid && task.processIdentity) {
+        const liveIdentity = await this.processController.processIdentity(task.pid);
+        if (liveIdentity === task.processIdentity) await this.processController.terminateAndWait(task.pid);
+      }
+      this.options.taskStore.finish(task.id, "interrupted", { error: "Server restarted while task was running" });
+    }
+    return running.length;
+  }
+
   private async terminate(id: string, status: "cancelled" | "timed_out" | "interrupted"): Promise<void> {
     const active = this.active.get(id);
     if (!active) {
@@ -212,10 +273,10 @@ export class TaskRunner {
       return;
     }
     if (!active.desiredStatus) active.desiredStatus = status;
-    signalProcessTree(active.child, "SIGTERM");
+    if (active.child.pid) await this.processController.signalTree(active.child.pid, false);
     const closedAfterTerm = await waitBounded(active.closed, 1_000);
     if (!closedAfterTerm) {
-      signalProcessTree(active.child, "SIGKILL");
+      if (active.child.pid) await this.processController.signalTree(active.child.pid, true);
       await waitBounded(active.closed, 1_000);
     }
     const current = this.options.taskStore.get(id);
@@ -229,8 +290,62 @@ export class TaskRunner {
   }
 
   private emit(id: string, task: TaskRecord): void {
-    this.emitters.get(id)?.emit("event", { taskId: id, status: task.status, task } satisfies TaskEvent);
+    this.emitters.get(id)?.emit("event", { type: "status", taskId: id, status: task.status, task } satisfies TaskEvent);
   }
+
+  private attachParsedOutput(
+    id: string,
+    stream: NodeJS.ReadableStream,
+    parser: (line: string) => { type: "text"; text: string },
+    outputPath: string,
+  ): void {
+    const decoder = new StringDecoder("utf8");
+    let pending = "";
+    const publish = (line: string) => {
+      if (!line) return;
+      let text: string;
+      try {
+        text = parser(line).text;
+      } catch {
+        text = line;
+      }
+      if (!text) return;
+      const content = `${text}\n`;
+      const cursor = fs.statSync(outputPath).size;
+      fs.appendFileSync(outputPath, content);
+      const task = this.options.taskStore.get(id);
+      if (task) {
+        this.emitters.get(id)?.emit("event", {
+          type: "log",
+          taskId: id,
+          status: task.status,
+          task,
+          content,
+          cursor,
+        } satisfies TaskEvent);
+      }
+    };
+    stream.on("data", (chunk: Buffer) => {
+      pending += decoder.write(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) publish(line);
+    });
+    stream.once("end", () => {
+      pending += decoder.end();
+      if (pending) publish(pending);
+      pending = "";
+    });
+  }
+}
+
+function readByte(descriptor: number, position: number): number {
+  const byte = Buffer.allocUnsafe(1);
+  return fs.readSync(descriptor, byte, 0, 1, position) === 1 ? byte[0] : 0;
+}
+
+function isUtf8Continuation(byte: number): boolean {
+  return (byte & 0b1100_0000) === 0b1000_0000;
 }
 
 function validateStartInput(input: StartTaskInput): void {
@@ -257,33 +372,29 @@ function boundedEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
-function findExecutable(name: string): string | null {
-  const pathValue = process.env.PATH ?? "";
-  const extensions = process.platform === "win32"
-    ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
+export function findExecutable(
+  name: string,
+  options: { platform?: NodeJS.Platform; pathValue?: string; pathExt?: string } = {},
+): string | null {
+  const platform = options.platform ?? process.platform;
+  const pathValue = options.pathValue ?? process.env.PATH ?? "";
+  const extensions = platform === "win32"
+    ? (options.pathExt ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
     : [""];
   for (const directory of pathValue.split(path.delimiter)) {
     if (!directory) continue;
     for (const extension of extensions) {
       const candidate = path.join(directory, `${name}${extension}`);
       try {
-        if (fs.statSync(candidate).isFile()) return fs.realpathSync(candidate);
+        if (!fs.statSync(candidate).isFile()) continue;
+        if (platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
+        return fs.realpathSync(candidate);
       } catch {
         // Continue searching PATH.
       }
     }
   }
   return null;
-}
-
-function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (!child.pid) return;
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
 }
 
 async function waitBounded(promise: Promise<void>, milliseconds: number): Promise<boolean> {

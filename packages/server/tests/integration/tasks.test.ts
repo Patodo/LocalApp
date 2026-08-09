@@ -9,7 +9,7 @@ import { TaskStore } from "../../src/lib/task-store.js";
 import { WorkspaceStore } from "../../src/lib/workspace-store.js";
 import { SetupTokenStore } from "../../src/lib/setup-token-store.js";
 import { buildServer } from "../../src/server.js";
-import { registerAndLogin } from "../helpers/createUser.js";
+import { createTestUser, registerAndLogin } from "../helpers/createUser.js";
 import { createTestServer, getTestApiKey } from "./helpers.js";
 
 const temporaryDirectories: string[] = [];
@@ -26,6 +26,54 @@ afterEach(async () => {
 });
 
 describe("workspace task API", () => {
+  it("keeps workspace files available to users but reserves every process-start entry point for admins", async () => {
+    const server = await createTestServer();
+    activeServerStops.push(server.stop);
+    temporaryDirectories.push(server.dataDir);
+    const ordinary = await createTestUser(server.baseUrl, "task-ordinary", "password123");
+    const ordinaryWorkspace = await createWorkspaceWithHeaders(server.baseUrl, "User Files", {
+      "X-API-Key": ordinary.apiKey,
+      "Content-Type": "application/json",
+    });
+    const fileWrite = await fetch(`${server.baseUrl}/api/workspaces/${ordinaryWorkspace}/file`, {
+      method: "PUT",
+      headers: { "X-API-Key": ordinary.apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "notes.txt", content: "still allowed" }),
+    });
+    expect(fileWrite.status).toBe(204);
+
+    const attempts = [
+      { path: "/api/tasks", body: { workspaceId: ordinaryWorkspace, kind: "test", executable: "node", args: ["-e", "0"], timeoutMs: 1_000 } },
+      { path: "/api/tasks/agents", body: { workspaceId: ordinaryWorkspace, agent: "codex", prompt: "no", timeoutMs: 1_000 } },
+      { path: `/api/workspaces/${ordinaryWorkspace}/build`, body: {} },
+      { path: `/api/workspaces/${ordinaryWorkspace}/install`, body: {} },
+      { path: "/api/workspaces/clone", body: { name: "No clone", repositoryUrl: "https://example.invalid/repo.git" } },
+    ];
+    for (const authHeaders of [{ "X-API-Key": ordinary.apiKey }, { Cookie: ordinary.cookie }]) {
+      for (const attempt of attempts) {
+        const response = await fetch(`${server.baseUrl}${attempt.path}`, {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify(attempt.body),
+        });
+        expect(response.status, `${attempt.path} with ${Object.keys(authHeaders)[0]}`).toBe(403);
+      }
+    }
+
+    const adminCookie = await loginCookie(server.baseUrl, "localadmin", "localadmin");
+    const adminWorkspace = await createWorkspace(server.baseUrl, "Admin Execution");
+    for (const authHeaders of [{ "X-API-Key": getTestApiKey() }, { Cookie: adminCookie }]) {
+      const response = await fetch(`${server.baseUrl}/api/tasks`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: adminWorkspace, kind: "test", executable: "node", args: ["-e", "process.exit(0)"], timeoutMs: 2_000 }),
+      });
+      expect(response.status, `admin ${Object.keys(authHeaders)[0]}`).toBe(201);
+      const task = (await response.json()).data as TaskRecord;
+      await waitForTask(server.baseUrl, task.id, (record) => record.status === "succeeded");
+    }
+  });
+
   it("persists, streams logs and events, authorizes, and cancels a process group", async () => {
     const server = await createTestServer();
     activeServerStops.push(server.stop);
@@ -218,7 +266,7 @@ describe("workspace task API", () => {
       requestedBy: "owner",
     });
     await waitForStoredTask(fixture.store, codex.id, (record) => record.status === "succeeded");
-    expect(fixture.runner.logs(codex.id, 0).content).toContain('["exec","Codex prompt"]');
+    expect(fixture.runner.logs(codex.id, 0).content).toContain('["exec","--json","Codex prompt"]');
 
     const opencode = await agents.start({
       workspaceId: fixture.workspace.id,
@@ -230,6 +278,64 @@ describe("workspace task API", () => {
     await waitForStoredTask(fixture.store, opencode.id, (record) => record.status === "succeeded");
     expect(fixture.runner.logs(opencode.id, 0).content).toContain('["run","--format","json","OpenCode prompt"]');
   });
+
+  it("normalizes real adapter protocol output in persisted logs and emitted log events", async () => {
+    const fixture = await directRunnerFixture();
+    const executable = path.join(fixture.root, "agent-protocol.mjs");
+    fs.writeFileSync(executable, `#!/usr/bin/env node
+      const codex = process.argv[2] === "exec";
+      setTimeout(() => {
+        console.log(JSON.stringify(codex
+          ? { type: "item.completed", item: { type: "agent_message", text: "codex normalized" } }
+          : { type: "text", text: "opencode normalized" }));
+      }, 100);
+    `, { mode: 0o700 });
+    const agents = new AgentRunner({ taskRunner: fixture.runner, executableResolver: () => executable });
+
+    for (const [agent, expected] of [["codex", "codex normalized"], ["opencode", "opencode normalized"]] as const) {
+      const task = await agents.start({
+        workspaceId: fixture.workspace.id,
+        agent,
+        prompt: "Normalize",
+        timeoutMs: 2_000,
+        requestedBy: "owner",
+      });
+      const observed: string[] = [];
+      fixture.runner.events(task.id).on("event", (event) => {
+        if (event.type === "log" && event.content) observed.push(event.content);
+      });
+      await waitForStoredTask(fixture.store, task.id, (record) => record.status === "succeeded");
+      const log = fixture.runner.logs(task.id, 0).content;
+      expect(log).toContain(expected);
+      expect(log).not.toContain("item.completed");
+      expect(observed.join("")).toContain(expected);
+    }
+  });
+
+  it("paginates logs on UTF-8 boundaries without permanently corrupting multibyte output", async () => {
+    const fixture = await directRunnerFixture();
+    const outputPath = path.join(fixture.root, "utf8.log");
+    const expected = `${"a".repeat(65_535)}😀z`;
+    fs.writeFileSync(outputPath, expected);
+    const task = fixture.store.create({
+      workspaceId: fixture.workspace.id,
+      kind: "test",
+      executable: "node",
+      args: [],
+      timeoutMs: 1_000,
+      requestedBy: "owner",
+      outputPath,
+      status: "succeeded",
+    });
+
+    const first = fixture.runner.logs(task.id, 0);
+    const second = fixture.runner.logs(task.id, first.nextCursor);
+
+    expect(first.content).not.toContain("�");
+    expect(second.content).not.toContain("�");
+    expect(first.content + second.content).toBe(expected);
+    expect(second.eof).toBe(true);
+  });
 });
 
 async function directRunnerFixture() {
@@ -240,19 +346,33 @@ async function directRunnerFixture() {
   const workspaces = new WorkspaceStore({ workspaceDir: path.join(root, "workspaces") });
   const workspace = await workspaces.create({ name: "Direct", ownerId: "owner" });
   const store = new TaskStore();
-  const runner = new TaskRunner({ workspaceStore: workspaces, taskStore: store, taskDir: path.join(root, "tasks") });
+  const runner = new TaskRunner({ workspaceStore: workspaces, taskStore: store, taskDir: path.join(root, "tasks"), authorizeExecution: () => true });
   activeRunners.push(runner);
   return { root, workspace, store, runner };
 }
 
 async function createWorkspace(baseUrl: string, name: string): Promise<string> {
+  return createWorkspaceWithHeaders(baseUrl, name, apiHeaders());
+}
+
+async function createWorkspaceWithHeaders(baseUrl: string, name: string, headers: Record<string, string>): Promise<string> {
   const response = await fetch(`${baseUrl}/api/workspaces`, {
     method: "POST",
-    headers: apiHeaders(),
+    headers,
     body: JSON.stringify({ name }),
   });
   expect(response.status).toBe(201);
   return (await response.json()).data.id as string;
+}
+
+async function loginCookie(baseUrl: string, username: string, password: string): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  expect(response.status).toBe(200);
+  return response.headers.getSetCookie().find((value) => value.startsWith("token="))!.split(";")[0];
 }
 
 async function writeWorkspaceFile(baseUrl: string, workspaceId: string, filePath: string, content: string): Promise<void> {

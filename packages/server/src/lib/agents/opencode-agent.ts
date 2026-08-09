@@ -21,6 +21,7 @@ export class OpenCodeAgent implements AgentAdapter {
       args: ["run", "--format", "json", input.prompt],
       timeoutMs: input.timeoutMs,
       requestedBy: input.requestedBy,
+      logParser: parseOpenCodeLog,
     });
   }
 
@@ -34,8 +35,9 @@ export class OpenCodeAgent implements AgentAdapter {
 
 export function parseOpenCodeLog(message: string): { type: "text"; text: string } {
   try {
-    const value = JSON.parse(message) as { type?: string; text?: string };
+    const value = JSON.parse(message) as { type?: string; text?: string; part?: { text?: string } };
     if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text };
+    if (value.type === "text" && typeof value.part?.text === "string") return { type: "text", text: value.part.text };
   } catch {
     // OpenCode also emits plain text depending on its installed version.
   }

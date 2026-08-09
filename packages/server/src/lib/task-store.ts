@@ -14,6 +14,7 @@ export interface TaskRecord {
   requestedBy: string;
   status: TaskStatus;
   pid: number | null;
+  processIdentity: string | null;
   exitCode: number | null;
   error: string | null;
   createdAt: string;
@@ -32,6 +33,7 @@ export interface CreateTaskInput {
   outputPath: string;
   status?: TaskStatus;
   pid?: number | null;
+  processIdentity?: string | null;
 }
 
 export class TaskStore {
@@ -44,11 +46,11 @@ export class TaskStore {
     getDb().run(
       `INSERT INTO tasks (
         id, workspace_id, kind, executable, args_json, timeout_ms, requested_by,
-        output_path, status, pid, exit_code, error, created_at, started_at, completed_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+        output_path, status, pid, process_identity, exit_code, error, created_at, started_at, completed_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
       [
         id, input.workspaceId, input.kind, input.executable, JSON.stringify(input.args), input.timeoutMs,
-        input.requestedBy, input.outputPath, status, input.pid ?? null, now, startedAt, completedAt, now,
+        input.requestedBy, input.outputPath, status, input.pid ?? null, input.processIdentity ?? null, now, startedAt, completedAt, now,
       ],
     );
     flushMetaDb();
@@ -85,9 +87,9 @@ export class TaskStore {
     return value;
   }
 
-  setPid(id: string, pid: number): TaskRecord {
+  setPid(id: string, pid: number, processIdentity: string): TaskRecord {
     const now = new Date().toISOString();
-    getDb().run("UPDATE tasks SET pid = ?, updated_at = ? WHERE id = ? AND status = 'running'", [pid, now, id]);
+    getDb().run("UPDATE tasks SET pid = ?, process_identity = ?, updated_at = ? WHERE id = ? AND status = 'running'", [pid, processIdentity, now, id]);
     flushMetaDb();
     const record = this.get(id);
     if (!record) throw new Error("TASK_NOT_FOUND");
@@ -106,15 +108,12 @@ export class TaskStore {
     return record;
   }
 
-  reconcileRunning(): number {
-    const now = new Date().toISOString();
-    getDb().run(
-      "UPDATE tasks SET status = 'interrupted', error = 'Server restarted while task was running', completed_at = ?, updated_at = ? WHERE status = 'running'",
-      [now, now],
-    );
-    const changed = getDb().getRowsModified();
-    if (changed > 0) flushMetaDb();
-    return changed;
+  listRunning(): TaskRecord[] {
+    const statement = getDb().prepare("SELECT * FROM tasks WHERE status = 'running' ORDER BY created_at, id");
+    const records: TaskRecord[] = [];
+    while (statement.step()) records.push(taskFromRow(statement.getAsObject()));
+    statement.free();
+    return records;
   }
 }
 
@@ -136,6 +135,7 @@ function taskFromRow(row: Record<string, unknown>): TaskRecord {
     requestedBy: String(row.requested_by),
     status: String(row.status) as TaskStatus,
     pid: row.pid === null ? null : Number(row.pid),
+    processIdentity: row.process_identity === null || row.process_identity === undefined ? null : String(row.process_identity),
     exitCode: row.exit_code === null ? null : Number(row.exit_code),
     error: row.error === null ? null : String(row.error),
     createdAt: String(row.created_at),
