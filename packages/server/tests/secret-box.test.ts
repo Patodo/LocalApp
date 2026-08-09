@@ -84,6 +84,26 @@ describe("SecretBox", () => {
     expect(fs.readdirSync(path.dirname(keyFile)).filter((entry) => entry.endsWith(".lock"))).toEqual([]);
   });
 
+  it("propagates an adopting creator's directory-sync failure without retrying adoption", () => {
+    const keyFile = createKeyFile();
+    const linkSync = fs.linkSync;
+    const fsyncSync = fs.fsyncSync;
+    let fsyncCalls = 0;
+    vi.spyOn(fs, "linkSync").mockImplementation(((temporaryPath: fs.PathLike, finalPath: fs.PathLike) => {
+      linkSync(temporaryPath, finalPath);
+      throw Object.assign(new Error("already published"), { code: "EEXIST" });
+    }) as typeof fs.linkSync);
+    vi.spyOn(fs, "fsyncSync").mockImplementation(((descriptor: number) => {
+      fsyncCalls += 1;
+      if (fsyncCalls === 2) throw Object.assign(new Error("adopt directory sync failed"), { code: "EIO" });
+      return fsyncSync(descriptor);
+    }) as typeof fs.fsyncSync);
+
+    expect(() => new SecretBox(keyFile).seal("peer-api-key-that-must-not-leak", "peer-a"))
+      .toThrow("adopt directory sync failed");
+    expect(fsyncCalls).toBe(2);
+  });
+
   it("fails closed when the parent-directory fsync cannot durably publish the key", () => {
     const keyFile = createKeyFile();
     const fsyncSync = fs.fsyncSync;

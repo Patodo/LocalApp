@@ -46,6 +46,7 @@ export class SecretBox {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const temporaryPath = path.join(directory, `.${path.basename(this.keyFile)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
     let published = false;
+    let adopting = false;
     try {
       const generated = randomBytes(KEY_BYTES);
       const descriptor = fs.openSync(temporaryPath, "wx", 0o600);
@@ -62,6 +63,7 @@ export class SecretBox {
         const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
         if (code === "EEXIST") {
           fs.rmSync(temporaryPath, { force: true });
+          adopting = true;
           this.key = adoptCompleteKey(this.keyFile, directory);
           return this.key;
         }
@@ -76,7 +78,8 @@ export class SecretBox {
       this.key = generated;
     } catch (error: unknown) {
       fs.rmSync(temporaryPath, { force: true });
-      if (!published && fs.existsSync(this.keyFile)) {
+      if (!published && !adopting && fs.existsSync(this.keyFile)) {
+        adopting = true;
         this.key = adoptCompleteKey(this.keyFile, directory);
       } else {
         throw error;
