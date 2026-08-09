@@ -2,7 +2,6 @@ import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import bcrypt from "bcryptjs";
 import { ISSUE_SAVED_REPLY_LIMIT, normalizeIssueSavedReplyInput, type IssueSavedReplyInput } from "@localapp/server-core";
 
 export const BOOTSTRAP_USER_ID = "localadmin";
@@ -158,7 +157,7 @@ export function flushMetaDb(): void {
   saveDb();
 }
 
-export async function initMetaDb(dataDir: string, bootstrapKey?: string, adminDefaultPassword?: string): Promise<void> {
+export async function initMetaDb(dataDir: string): Promise<void> {
   if (db) return;
 
   if (!SqlJs) {
@@ -390,69 +389,6 @@ export async function initMetaDb(dataDir: string, bootstrapKey?: string, adminDe
 
   saveDb();
 
-  if (bootstrapKey) {
-    const stmt = db.prepare("SELECT key FROM api_keys WHERE key = ? OR key = ?");
-    stmt.bind([bootstrapKey, apiKeyStorageValue(bootstrapKey)]);
-    const exists = stmt.step();
-    stmt.free();
-    if (!exists) {
-      db.run("INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)", [
-        apiKeyStorageValue(bootstrapKey),
-        BOOTSTRAP_USER_ID,
-        new Date().toISOString(),
-      ]);
-      saveDb();
-      console.log(`Bootstrap API key created for user "${BOOTSTRAP_USER_ID}"`);
-    }
-    // Ensure bootstrap user exists with admin role
-    const adminStmt = db.prepare("SELECT id, password FROM users WHERE id = ?");
-    adminStmt.bind([BOOTSTRAP_USER_ID]);
-    const adminExists = adminStmt.step();
-    if (!adminExists) {
-      const pw = adminDefaultPassword || "localadmin";
-      const hash = bcrypt.hashSync(pw, 10);
-      db.run(
-        "INSERT INTO users (id, name, password, provider, role, must_change_password, auth_generation, created_at) VALUES (?, ?, ?, 'local', 'admin', 1, ?, datetime('now'))",
-        [BOOTSTRAP_USER_ID, BOOTSTRAP_USER_ID, hash, randomBytes(16).toString("hex")],
-      );
-    } else {
-      const row = adminStmt.getAsObject() as { password: string };
-      if (!row.password) {
-        const pw = adminDefaultPassword || "localadmin";
-        const hash = bcrypt.hashSync(pw, 10);
-        db.run(
-          "UPDATE users SET password = ?, provider = 'local', must_change_password = 1, role = 'admin', auth_version = auth_version + 1 WHERE id = ?",
-          [hash, BOOTSTRAP_USER_ID],
-        );
-        db.run("DELETE FROM auth_sessions WHERE user_id = ?", [BOOTSTRAP_USER_ID]);
-      } else {
-        db.run("UPDATE users SET role = 'admin' WHERE id = ?", [BOOTSTRAP_USER_ID]);
-      }
-    }
-    adminStmt.free();
-    saveDb();
-  }
-
-  // Ensure "everyone" system group exists
-  {
-    const groupStmt = db.prepare("SELECT id FROM groups WHERE name = 'everyone'");
-    const groupExists = groupStmt.step();
-    groupStmt.free();
-    if (!groupExists) {
-      const groupId = randomBytes(10).toString("hex");
-      db.run("INSERT INTO groups (id, name, description, creator_id, system, created_at) VALUES (?, 'everyone', 'All users', ?, 1, datetime('now'))", [groupId, BOOTSTRAP_USER_ID]);
-      // Add all existing users to everyone group
-      const userStmt = db.prepare("SELECT id FROM users");
-      const now = new Date().toISOString();
-      while (userStmt.step()) {
-        const row = userStmt.getAsObject() as { id: string };
-        db.run("INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)", [groupId, row.id, now]);
-      }
-      userStmt.free();
-      saveDb();
-      console.log('System group "everyone" created');
-    }
-  }
 }
 
 export function getDb(): SqlJsDatabase {
@@ -626,6 +562,59 @@ export function createUser(id: string, name: string, passwordHash: string, provi
   everyoneStmt.free();
   saveDb();
   return { id, name, provider, role: "user", createdAt, displayName: null, avatarUrl: null, bio: null, mustChangePassword: false };
+}
+
+export function createInitialAdmin(
+  id: string,
+  name: string,
+  passwordHash: string,
+  bootstrapApiKey?: string,
+): UserRecord {
+  const d = getDb();
+  const createdAt = new Date().toISOString();
+  d.run("BEGIN");
+  try {
+    const countStmt = d.prepare("SELECT COUNT(*) AS total FROM users");
+    countStmt.step();
+    const { total } = countStmt.getAsObject() as { total: number };
+    countStmt.free();
+    if (total !== 0) throw new Error("SETUP_ALREADY_COMPLETED");
+
+    d.run(
+      "INSERT INTO users (id, name, password, provider, role, auth_generation, created_at) VALUES (?, ?, ?, 'local', 'admin', ?, ?)",
+      [id, name, passwordHash, randomBytes(16).toString("hex"), createdAt],
+    );
+    const groupId = randomBytes(10).toString("hex");
+    d.run(
+      "INSERT INTO groups (id, name, description, creator_id, system, created_at) VALUES (?, 'everyone', 'All users', ?, 1, ?)",
+      [groupId, id, createdAt],
+    );
+    d.run("INSERT INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)", [groupId, id, createdAt]);
+    if (bootstrapApiKey) {
+      d.run("INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)", [
+        apiKeyStorageValue(bootstrapApiKey),
+        id,
+        createdAt,
+      ]);
+    }
+    d.run("COMMIT");
+    saveDb();
+  } catch (error) {
+    d.run("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    id,
+    name,
+    provider: "local",
+    role: "admin",
+    createdAt,
+    displayName: null,
+    avatarUrl: null,
+    bio: null,
+    mustChangePassword: false,
+  };
 }
 
 export function provisionUserWithApiKey(

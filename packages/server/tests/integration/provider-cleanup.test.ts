@@ -25,20 +25,8 @@ describe("provider cleanup regression", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: BOOTSTRAP_USER_ID, password: "localadmin" }),
     });
-    // Admin has must_change_password=1, so we get 403
-    // Use the force-change-password endpoint to set a known password
-    expect(loginRes.status).toBe(403);
-    const loginBody = await loginRes.json();
-    expect(loginBody.code).toBe("MUST_CHANGE_PASSWORD");
-
-    // Force change password
-    const forceRes = await fetch(`${baseUrl}/api/auth/force-change-password`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: BOOTSTRAP_USER_ID, oldPassword: "localadmin", newPassword: "example-admin-new-pw" }),
-    });
-    expect(forceRes.status).toBe(200);
-    const setCookie = forceRes.headers.get("set-cookie");
+    expect(loginRes.status).toBe(200);
+    const setCookie = loginRes.headers.get("set-cookie");
     adminCookie = setCookie?.split(";")[0] || "";
   });
 
@@ -46,11 +34,11 @@ describe("provider cleanup regression", () => {
     await stop();
   });
 
-  it("admin can login after password change", async () => {
+  it("admin can log in with the setup password", async () => {
     const res = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: BOOTSTRAP_USER_ID, password: "example-admin-new-pw" }),
+      body: JSON.stringify({ username: BOOTSTRAP_USER_ID, password: "localadmin" }),
     });
     expect(res.status).toBe(200);
     const body = await res.json();

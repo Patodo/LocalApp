@@ -1,35 +1,10 @@
-import Fastify, { FastifyInstance } from "fastify";
-import multipart from "@fastify/multipart";
-import cookie from "@fastify/cookie";
-import { storagePlugin } from "../../src/plugins/storage.js";
-import { verificationPlugin } from "../../src/plugins/verification.js";
-import { authPlugin } from "../../src/plugins/auth.js";
-import { sessionPlugin } from "../../src/plugins/session.js";
-import { keysRoutes } from "../../src/routes/keys.js";
-import { uploadRoutes } from "../../src/routes/upload.js";
-import { pagesRoutes } from "../../src/routes/pages.js";
-import { serveRoutes } from "../../src/routes/serve.js";
-import { myServeRoutes } from "../../src/routes/my-serve.js";
-import { schemasRoutes } from "../../src/routes/schemas.js";
-import { authRoutes } from "../../src/routes/auth.js";
-import { configRoutes } from "../../src/routes/config.js";
-import { profileRoutes } from "../../src/routes/profile.js";
-import { appSettingsRoutes } from "../../src/routes/app-settings.js";
-import { groupsRoutes } from "../../src/routes/groups.js";
-import { llmRoutes } from "../../src/routes/llm.js";
-import { platformDataRoutes } from "../../src/routes/platform-data.js";
+import type { FastifyInstance } from "fastify";
 import { closeMetaDb } from "../../src/lib/meta-sqlite.js";
-import { adminRoutes } from "../../src/routes/admin.js";
-import { favoritesRoutes } from "../../src/routes/favorites.js";
-import { subscribeRoutes } from "../../src/routes/subscribe.js";
-import { inboxRoutes } from "../../src/routes/inbox.js";
-import { desktopActionsRoutes } from "../../src/routes/desktop-actions.js";
-import { wsRoutes } from "../../src/routes/ws.js";
-import { verificationRoutes } from "../../src/routes/verification.js";
+import { buildServer } from "../../src/server.js";
+import { SetupTokenStore } from "../../src/lib/setup-token-store.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { initContentStorage } from "../../src/lib/s3-client.js";
 
 const TEST_API_KEY = "test-api-key-1234567890abcdef";
 
@@ -41,11 +16,13 @@ export interface CreateTestServerOptions {
   configToml?: string;
   env?: Record<string, string | undefined>;
   websocket?: boolean;
+  cleanSetup?: boolean;
 }
 
 export async function createTestServer(
   options?: CreateTestServerOptions,
-): Promise<{ app: FastifyInstance; dataDir: string; stop: () => Promise<void> }> {
+): Promise<{ app: FastifyInstance; baseUrl: string; dataDir: string; setupTokens: SetupTokenStore; stop: () => Promise<void> }> {
+  closeMetaDb();
   const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-test-"));
 
   if (options?.configToml) {
@@ -63,64 +40,30 @@ export async function createTestServer(
     ...options?.env,
   };
 
-  // Apply env vars
-  for (const [k, v] of Object.entries(env)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
+  const setupTokens = new SetupTokenStore();
+  const app = await buildServer({ env, setupTokens });
+
+  if (!options?.cleanSetup) {
+    const issued = setupTokens.issue();
+    const initialized = await app.inject({
+      method: "POST",
+      url: "/api/setup/initialize",
+      payload: { token: issued.token, username: "localadmin", password: "localadmin" },
+    });
+    if (initialized.statusCode !== 201) throw new Error(`Test setup failed: ${initialized.body}`);
   }
-
-  const app = Fastify({ ignoreTrailingSlash: true });
-
-  if (options?.websocket) {
-    const { default: websocket } = await import("@fastify/websocket");
-    await app.register(websocket);
-  }
-
-  await app.register(storagePlugin);
-  await initContentStorage(app.config);
-  await app.register(verificationPlugin);
-  await app.register(cookie);
-  await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
-  await app.register(sessionPlugin);
-  app.register(verificationRoutes);
-
-  app.get("/health", async () => ({ status: "ok" }));
-  app.register(authRoutes);
-  app.register(profileRoutes);
-  app.register(appSettingsRoutes);
-  app.register(groupsRoutes);
-  app.register(platformDataRoutes);
-  app.register(async (llmScope) => {
-    await authPlugin(llmScope);
-    llmScope.register(llmRoutes);
-  });
-  app.register(myServeRoutes);
-  app.register(serveRoutes);
-
-  app.register(async (authScope) => {
-    await authPlugin(authScope);
-    authScope.register(keysRoutes);
-    authScope.register(configRoutes);
-    authScope.register(uploadRoutes);
-    authScope.register(pagesRoutes);
-    authScope.register(schemasRoutes);
-  });
-
-  app.register(adminRoutes);
-  app.register(favoritesRoutes);
-  app.register(subscribeRoutes);
-  app.register(inboxRoutes);
-  app.register(desktopActionsRoutes);
-  if (options?.websocket) app.register(wsRoutes);
 
   await app.listen({ port: 0, host: "127.0.0.1" });
+  const baseUrl = getAppUrl(app);
 
   return {
     app,
+    baseUrl,
     dataDir,
+    setupTokens,
     stop: async () => {
-      closeMetaDb();
       await app.close();
+      closeMetaDb();
       await fs.promises.rm(dataDir, { recursive: true, force: true });
     },
   };

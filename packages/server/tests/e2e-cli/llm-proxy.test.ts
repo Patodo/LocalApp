@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import Fastify, { FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
+import bcrypt from "bcryptjs";
 import { runCli, createCliTestEnv, createTmpProjectDir, cliEnvVars } from "./helpers.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { closeMetaDb, BOOTSTRAP_USER_ID } from "../../src/lib/meta-sqlite.js";
+import { closeMetaDb, BOOTSTRAP_USER_ID, createInitialAdmin } from "../../src/lib/meta-sqlite.js";
 import { storagePlugin } from "../../src/plugins/storage.js";
 import { authPlugin } from "../../src/plugins/auth.js";
 import { authRoutes } from "../../src/routes/auth.js";
@@ -136,6 +137,12 @@ async function createLlmTestEnv(mockBaseUrl: string): Promise<{ baseUrl: string;
   const app: FastifyInstance = Fastify({ ignoreTrailingSlash: true });
 
   await app.register(storagePlugin);
+  createInitialAdmin(
+    BOOTSTRAP_USER_ID,
+    BOOTSTRAP_USER_ID,
+    await bcrypt.hash("localadmin", 10),
+    "llm-test-key",
+  );
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
 
   app.register(authRoutes);

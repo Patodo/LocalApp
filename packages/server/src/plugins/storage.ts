@@ -48,12 +48,10 @@ export interface PageMeta {
 }
 
 async function storage(app: FastifyInstance) {
-  const config = await loadConfig();
-
-  app.decorate("config", config);
-
+  const config = app.hasDecorator("config") ? app.config : await loadConfig();
+  if (!app.hasDecorator("config")) app.decorate("config", config);
   fs.mkdirSync(config.dataDir, { recursive: true });
-  await initMetaDb(config.dataDir, config.bootstrapApiKey, config.adminDefaultPassword);
+  await initMetaDb(config.dataDir);
 }
 
 export const storagePlugin = fp(storage, { name: "storage" });

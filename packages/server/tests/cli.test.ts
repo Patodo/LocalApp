@@ -3,6 +3,8 @@ import Fastify, { FastifyInstance } from "fastify";
 import { createAuthenticatedCliRoutes } from "../src/routes/cli.js";
 import type { ReleaseManifestProvider } from "../src/lib/release-manifest.js";
 import { storagePlugin } from "../src/plugins/storage.js";
+import { closeMetaDb, createInitialAdmin } from "../src/lib/meta-sqlite.js";
+import bcrypt from "bcryptjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -47,6 +49,7 @@ beforeAll(async () => {
 
   app = Fastify({ ignoreTrailingSlash: true });
   await app.register(storagePlugin);
+  createInitialAdmin("localadmin", "localadmin", await bcrypt.hash("localadmin", 10), TEST_API_KEY);
 
   app.register(createAuthenticatedCliRoutes({ manifestProvider }));
 
@@ -58,6 +61,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  closeMetaDb();
   if (dataDir) {
     await fs.promises.rm(dataDir, { recursive: true, force: true });
   }

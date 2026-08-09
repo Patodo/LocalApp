@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import Fastify, { FastifyInstance } from "fastify";
 import { authPlugin, registerVersionCheck } from "../src/plugins/auth.js";
 import { storagePlugin } from "../src/plugins/storage.js";
+import { closeMetaDb, createInitialAdmin, listUsers } from "../src/lib/meta-sqlite.js";
+import bcrypt from "bcryptjs";
 import { createCliRoutes } from "../src/routes/cli.js";
 import type { ReleaseManifestProvider } from "../src/lib/release-manifest.js";
 import fs from "node:fs";
@@ -28,6 +30,9 @@ const manifestProvider: ReleaseManifestProvider = {
 async function buildApp(): Promise<{ app: FastifyInstance; baseUrl: string }> {
   const app = Fastify({ ignoreTrailingSlash: true });
   await app.register(storagePlugin);
+  if (listUsers(1, 1).total === 0) {
+    createInitialAdmin("localadmin", "localadmin", await bcrypt.hash("localadmin", 10), TEST_API_KEY);
+  }
 
   // Update routes (auth, NO version check)
   app.register(async (scope) => {
@@ -63,6 +68,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  closeMetaDb();
   if (dataDir) {
     await fs.promises.rm(dataDir, { recursive: true, force: true });
   }

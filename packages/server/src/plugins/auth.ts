@@ -57,7 +57,7 @@ export function requireRequestUser(
 
 export async function authPlugin(app: FastifyInstance) {
   const config = app.config;
-  await initMetaDb(config.dataDir, config.bootstrapApiKey, config.adminDefaultPassword);
+  await initMetaDb(config.dataDir);
 
   app.decorateRequest("userId", "");
 

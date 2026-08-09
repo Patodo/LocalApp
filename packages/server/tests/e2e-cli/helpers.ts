@@ -2,6 +2,7 @@ import { execFile as execFileCb } from "node:child_process";
 import Fastify, { FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
 import cookie from "@fastify/cookie";
+import bcrypt from "bcryptjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import { storagePlugin } from "../../src/plugins/storage.js";
 import { verificationPlugin } from "../../src/plugins/verification.js";
 import { sessionPlugin } from "../../src/plugins/session.js";
 import { authPlugin, registerVersionCheck } from "../../src/plugins/auth.js";
-import { closeMetaDb, BOOTSTRAP_USER_ID } from "../../src/lib/meta-sqlite.js";
+import { closeMetaDb, BOOTSTRAP_USER_ID, createInitialAdmin } from "../../src/lib/meta-sqlite.js";
 import { keysRoutes } from "../../src/routes/keys.js";
 import { uploadRoutes } from "../../src/routes/upload.js";
 import { pagesRoutes } from "../../src/routes/pages.js";
@@ -119,6 +120,7 @@ export async function buildCli(): Promise<string> {
 }
 
 export async function createCliTestEnv(opts?: CreateCliTestEnvOptions): Promise<CliTestEnv> {
+  closeMetaDb();
   const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-e2e-"));
   const apiKey = "e2e-test-api-key-" + Math.random().toString(36).slice(2, 10);
   const cliBin = await buildCli();
@@ -139,6 +141,12 @@ export async function createCliTestEnv(opts?: CreateCliTestEnvOptions): Promise<
   const app: FastifyInstance = Fastify({ ignoreTrailingSlash: true });
 
   await app.register(storagePlugin);
+  createInitialAdmin(
+    BOOTSTRAP_USER_ID,
+    BOOTSTRAP_USER_ID,
+    await bcrypt.hash("localadmin", 10),
+    apiKey,
+  );
   await initContentStorage(app.config);
   await app.register(verificationPlugin);
   await app.register(cookie);

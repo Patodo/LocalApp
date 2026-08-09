@@ -3,6 +3,7 @@ import Fastify, { FastifyInstance } from "fastify";
 import multipart from "@fastify/multipart";
 import cookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
+import bcrypt from "bcryptjs";
 import { storagePlugin } from "../../src/plugins/storage.js";
 import { authPlugin } from "../../src/plugins/auth.js";
 import { sessionPlugin } from "../../src/plugins/session.js";
@@ -18,7 +19,7 @@ import { pagesRoutes } from "../../src/routes/pages.js";
 import { schemasRoutes } from "../../src/routes/schemas.js";
 import { configRoutes } from "../../src/routes/config.js";
 import { groupsRoutes } from "../../src/routes/groups.js";
-import { closeMetaDb } from "../../src/lib/meta-sqlite.js";
+import { closeMetaDb, createInitialAdmin } from "../../src/lib/meta-sqlite.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -47,6 +48,7 @@ export const test = base.extend<TestFixtures>({
 
     const app: FastifyInstance = Fastify({ ignoreTrailingSlash: true });
     await app.register(storagePlugin);
+    createInitialAdmin("localadmin", "localadmin", await bcrypt.hash("localadmin", 10), TEST_API_KEY);
     await app.register(cookie);
     await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
     await app.register(sessionPlugin);
