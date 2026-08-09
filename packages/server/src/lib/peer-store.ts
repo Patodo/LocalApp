@@ -5,6 +5,7 @@ import {
   getPeerRecord,
   listPeerRecords,
   updatePeerRecord,
+  updatePeerVerificationIfCurrent,
   type PeerRow,
 } from "./meta-sqlite.js";
 import { SecretBox } from "./secret-box.js";
@@ -42,6 +43,9 @@ export interface PeerVerification {
   transferLimits: Record<string, number>;
 }
 
+export type PeerCheckTarget = { id: string; baseUrl: string; apiKey: string; connectionVersion: number };
+export type RecordVerificationResult = { kind: "updated"; peer: PeerPublic } | { kind: "changed" | "missing" };
+
 export class PeerStore {
   constructor(private readonly secretBox: SecretBox) {}
 
@@ -54,6 +58,7 @@ export class PeerStore {
       baseUrl: input.baseUrl,
       credential: this.secretBox.seal(input.apiKey, id),
       acceptInsecureHttp: input.acceptInsecureHttp,
+      connectionVersion: 1,
       verifiedUserId: null,
       verifiedUserName: null,
       verifiedUserDisplayName: null,
@@ -88,6 +93,7 @@ export class PeerStore {
       baseUrl: input.baseUrl ?? current.baseUrl,
       credential: input.apiKey === undefined ? current.credential : this.secretBox.seal(input.apiKey, id),
       acceptInsecureHttp: input.acceptInsecureHttp ?? current.acceptInsecureHttp,
+      connectionVersion: changedConnection ? current.connectionVersion + 1 : current.connectionVersion,
       verifiedUserId: changedConnection ? null : current.verifiedUserId,
       verifiedUserName: changedConnection ? null : current.verifiedUserName,
       verifiedUserDisplayName: changedConnection ? null : current.verifiedUserDisplayName,
@@ -108,20 +114,33 @@ export class PeerStore {
     return peer ? this.secretBox.open(peer.credential, peer.id) : null;
   }
 
-  recordVerification(id: string, verification: PeerVerification): PeerPublic | null {
+  loadForCheck(id: string): PeerCheckTarget | null {
     const peer = getPeerRecord(id);
-    if (!peer) return null;
-    const updated = updatePeerRecord({
-      ...peer,
+    return peer ? {
+      id: peer.id,
+      baseUrl: peer.baseUrl,
+      apiKey: this.secretBox.open(peer.credential, peer.id),
+      connectionVersion: peer.connectionVersion,
+    } : null;
+  }
+
+  recordVerification(target: PeerCheckTarget, verification: PeerVerification): RecordVerificationResult {
+    const now = new Date().toISOString();
+    const result = updatePeerVerificationIfCurrent({
+      id: target.id,
+      connectionVersion: target.connectionVersion,
       verifiedUserId: verification.user.id,
       verifiedUserName: verification.user.name,
       verifiedUserDisplayName: verification.user.displayName,
       protocolVersion: verification.protocolVersion,
       transferLimits: JSON.stringify(verification.transferLimits),
-      verifiedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      verifiedAt: now,
+      updatedAt: now,
     });
-    return updated ? publicPeer(updated) : null;
+    if (result !== "updated") return { kind: result };
+    const peer = getPeerRecord(target.id);
+    if (!peer) return { kind: "missing" };
+    return { kind: "updated", peer: publicPeer(peer) };
   }
 }
 

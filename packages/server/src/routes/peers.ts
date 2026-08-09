@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { adminAuth } from "../plugins/auth.js";
 import { checkPeerCapabilities, normalizePeerUrl } from "../lib/peer-client.js";
-import { type PeerPublic, PeerStore } from "../lib/peer-store.js";
+import { PeerStore } from "../lib/peer-store.js";
 
 type PeerRequestBody = {
   name?: unknown;
@@ -59,17 +59,25 @@ export async function peersRoutes(app: FastifyInstance, peerStore: PeerStore): P
     });
 
     adminScope.post<{ Params: { id: string } }>("/api/peers/:id/check", async (req, reply) => {
-      const peer = peerStore.getPublic(req.params.id);
-      if (!peer) return reply.status(404).send({ success: false, error: "Peer not found" });
+      let target;
       try {
-        const apiKey = peerStore.loadCredential(peer.id);
-        if (!apiKey) return reply.status(404).send({ success: false, error: "Peer not found" });
-        const verification = await checkPeerCapabilities(peer.baseUrl, apiKey);
-        const verified = peerStore.recordVerification(peer.id, verification);
-        return { success: true, data: verified };
+        target = peerStore.loadForCheck(req.params.id);
       } catch {
         return reply.status(502).send({ success: false, error: "Peer capability check failed" });
       }
+      if (!target) return reply.status(404).send({ success: false, error: "Peer not found" });
+      let verification;
+      try {
+        verification = await checkPeerCapabilities(target.baseUrl, target.apiKey);
+      } catch {
+        return reply.status(502).send({ success: false, error: "Peer capability check failed" });
+      }
+      const persisted = peerStore.recordVerification(target, verification);
+      if (persisted.kind !== "updated") {
+        if (persisted.kind === "missing") return reply.status(404).send({ success: false, error: "Peer not found" });
+        return reply.status(409).send({ success: false, error: "Peer configuration changed during capability check" });
+      }
+      return { success: true, data: persisted.peer };
     });
   });
 }

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { createTestServer, getAppUrl, getTestApiKey } from "./helpers.js";
 import { registerAndLogin } from "../helpers/createUser.js";
@@ -21,6 +21,7 @@ describe("peer connections", () => {
   });
 
   afterAll(async () => { await stop(); });
+  afterEach(() => vi.unstubAllGlobals());
 
   async function adminRequest(path: string, init: RequestInit = {}) {
     return fetch(`${baseUrl}${path}`, {
@@ -108,4 +109,68 @@ describe("peer connections", () => {
     expect((await adminRequest(`/api/peers/${encodeURIComponent(peer.id)}`, { method: "DELETE" })).status).toBe(204);
     expect((await adminRequest(`/api/peers/${encodeURIComponent(peer.id)}/check`, { method: "POST" })).status).toBe(404);
   });
+
+  it("rejects a delayed capability result when the peer connection changes", async () => {
+    const peer = await createPeerForRace("patch-race-peer");
+    const deferred = createDeferredResponse();
+    vi.stubGlobal("fetch", vi.fn(() => { deferred.fetchStarted(); return deferred.promise; }));
+    const checking = app.inject({ method: "POST", url: `/api/peers/${peer.id}/check`, headers: { "x-api-key": getTestApiKey() } });
+    await deferred.started;
+
+    const patched = await app.inject({
+      method: "PATCH", url: `/api/peers/${peer.id}`, headers: { "x-api-key": getTestApiKey(), "content-type": "application/json" },
+      payload: { apiKey: "replacement-peer-api-key" },
+    });
+    expect(patched.statusCode).toBe(200);
+    deferred.resolve(capabilitiesResponse());
+
+    const response = await checking;
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ success: false, error: "Peer configuration changed during capability check" });
+    const listed = await app.inject({ method: "GET", url: "/api/peers", headers: { "x-api-key": getTestApiKey() } });
+    expect(listed.json().data.find((item: { id: string }) => item.id === peer.id).verifiedAt).toBeNull();
+  });
+
+  it("returns not found when a peer is deleted during a delayed capability check", async () => {
+    const peer = await createPeerForRace("delete-race-peer");
+    const deferred = createDeferredResponse();
+    vi.stubGlobal("fetch", vi.fn(() => { deferred.fetchStarted(); return deferred.promise; }));
+    const checking = app.inject({ method: "POST", url: `/api/peers/${peer.id}/check`, headers: { "x-api-key": getTestApiKey() } });
+    await deferred.started;
+
+    expect((await app.inject({ method: "DELETE", url: `/api/peers/${peer.id}`, headers: { "x-api-key": getTestApiKey() } })).statusCode).toBe(204);
+    deferred.resolve(capabilitiesResponse());
+
+    const response = await checking;
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ success: false, error: "Peer not found" });
+  });
+
+  async function createPeerForRace(name: string): Promise<{ id: string }> {
+    const response = await app.inject({
+      method: "POST", url: "/api/peers", headers: { "x-api-key": getTestApiKey(), "content-type": "application/json" },
+      payload: { name, baseUrl: "https://peer.example", apiKey: PEER_API_KEY },
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json().data;
+  }
 });
+
+function createDeferredResponse() {
+  let resolveResponse: (response: Response) => void = () => undefined;
+  let resolveStarted: () => void = () => undefined;
+  return {
+    promise: new Promise<Response>((resolve) => { resolveResponse = resolve; }),
+    started: new Promise<void>((resolve) => { resolveStarted = resolve; }),
+    resolve(response: Response) { resolveResponse(response); },
+    fetchStarted() { resolveStarted(); },
+  };
+}
+
+function capabilitiesResponse(): Response {
+  return new Response(JSON.stringify({ success: true, data: {
+    protocolVersion: 1,
+    user: { id: "target-user", name: "target-user", displayName: null },
+    transferLimits: { maxPackageBytes: 1024 },
+  } }), { status: 200, headers: { "content-type": "application/json" } });
+}

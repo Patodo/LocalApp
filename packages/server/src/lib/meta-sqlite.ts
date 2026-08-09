@@ -24,6 +24,7 @@ export interface PeerRow {
   baseUrl: string;
   credential: string;
   acceptInsecureHttp: boolean;
+  connectionVersion: number;
   verifiedUserId: string | null;
   verifiedUserName: string | null;
   verifiedUserDisplayName: string | null;
@@ -205,6 +206,7 @@ export async function initMetaDb(dataDir: string): Promise<void> {
       base_url TEXT NOT NULL,
       credential TEXT NOT NULL,
       accept_insecure_http INTEGER NOT NULL DEFAULT 0,
+      connection_version INTEGER NOT NULL DEFAULT 1,
       verified_user_id TEXT,
       verified_user_name TEXT,
       verified_user_display_name TEXT,
@@ -215,6 +217,13 @@ export async function initMetaDb(dataDir: string): Promise<void> {
       updated_at TEXT NOT NULL
     )
   `);
+  {
+    const columns = db.prepare("PRAGMA table_info(peers)");
+    const names: string[] = [];
+    while (columns.step()) names.push(String((columns.getAsObject() as { name: string }).name));
+    columns.free();
+    if (!names.includes("connection_version")) db.run("ALTER TABLE peers ADD COLUMN connection_version INTEGER NOT NULL DEFAULT 1");
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS request_logs (
@@ -605,6 +614,7 @@ function peerFromRow(row: Record<string, unknown>): PeerRow {
     baseUrl: String(row.base_url),
     credential: String(row.credential),
     acceptInsecureHttp: Number(row.accept_insecure_http) === 1,
+    connectionVersion: Number(row.connection_version),
     verifiedUserId: row.verified_user_id == null ? null : String(row.verified_user_id),
     verifiedUserName: row.verified_user_name == null ? null : String(row.verified_user_name),
     verifiedUserDisplayName: row.verified_user_display_name == null ? null : String(row.verified_user_display_name),
@@ -619,9 +629,9 @@ function peerFromRow(row: Record<string, unknown>): PeerRow {
 export function createPeerRecord(peer: PeerRow): PeerRow {
   const d = getDb();
   d.run(
-    `INSERT INTO peers (id, name, base_url, credential, accept_insecure_http, verified_user_id, verified_user_name, verified_user_display_name, protocol_version, transfer_limits, verified_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [peer.id, peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.createdAt, peer.updatedAt],
+    `INSERT INTO peers (id, name, base_url, credential, accept_insecure_http, connection_version, verified_user_id, verified_user_name, verified_user_display_name, protocol_version, transfer_limits, verified_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [peer.id, peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.connectionVersion, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.createdAt, peer.updatedAt],
   );
   saveDb();
   return peer;
@@ -646,8 +656,8 @@ export function listPeerRecords(): PeerRow[] {
 export function updatePeerRecord(peer: PeerRow): PeerRow | null {
   const d = getDb();
   d.run(
-    `UPDATE peers SET name = ?, base_url = ?, credential = ?, accept_insecure_http = ?, verified_user_id = ?, verified_user_name = ?, verified_user_display_name = ?, protocol_version = ?, transfer_limits = ?, verified_at = ?, updated_at = ? WHERE id = ?`,
-    [peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.updatedAt, peer.id],
+    `UPDATE peers SET name = ?, base_url = ?, credential = ?, accept_insecure_http = ?, connection_version = ?, verified_user_id = ?, verified_user_name = ?, verified_user_display_name = ?, protocol_version = ?, transfer_limits = ?, verified_at = ?, updated_at = ? WHERE id = ?`,
+    [peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.connectionVersion, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.updatedAt, peer.id],
   );
   if (d.getRowsModified() === 0) return null;
   saveDb();
@@ -660,6 +670,29 @@ export function deletePeerRecord(id: string): boolean {
   const deleted = d.getRowsModified() > 0;
   if (deleted) saveDb();
   return deleted;
+}
+
+export function updatePeerVerificationIfCurrent(input: {
+  id: string;
+  connectionVersion: number;
+  verifiedUserId: string;
+  verifiedUserName: string;
+  verifiedUserDisplayName: string | null;
+  protocolVersion: number;
+  transferLimits: string;
+  verifiedAt: string;
+  updatedAt: string;
+}): "updated" | "changed" | "missing" {
+  const d = getDb();
+  d.run(
+    `UPDATE peers SET verified_user_id = ?, verified_user_name = ?, verified_user_display_name = ?, protocol_version = ?, transfer_limits = ?, verified_at = ?, updated_at = ? WHERE id = ? AND connection_version = ?`,
+    [input.verifiedUserId, input.verifiedUserName, input.verifiedUserDisplayName, input.protocolVersion, input.transferLimits, input.verifiedAt, input.updatedAt, input.id, input.connectionVersion],
+  );
+  if (d.getRowsModified() > 0) {
+    saveDb();
+    return "updated";
+  }
+  return getPeerRecord(input.id) ? "changed" : "missing";
 }
 
 function toUserRecord(row: UserRow): UserRecord {

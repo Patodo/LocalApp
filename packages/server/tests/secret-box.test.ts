@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SecretBox } from "../src/lib/secret-box.js";
 
 const directories: string[] = [];
@@ -13,6 +13,7 @@ function createKeyFile(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (directories.length) fs.rmSync(directories.pop()!, { recursive: true, force: true });
 });
 
@@ -32,10 +33,69 @@ describe("SecretBox", () => {
     const box = new SecretBox(keyFile);
     const sealed = box.seal("peer-api-key-that-must-not-leak", "peer-a");
     const [version, iv, ciphertext, tag] = sealed.split(".");
-    const tampered = `${version}.${iv}.${ciphertext.slice(0, -1)}A.${tag}`;
+    const replacement = tag.startsWith("A") ? "B" : "A";
+    const tampered = `${version}.${iv}.${ciphertext}.${replacement}${tag.slice(1)}`;
 
     expect(() => box.open(tampered, "peer-a")).toThrow("Invalid encrypted credential");
     if (process.platform !== "win32") expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(keyFile)).toHaveLength(32);
+  });
+
+  it("never exposes an empty final key while publishing the first master key", () => {
+    const keyFile = createKeyFile();
+    const writeFileSync = fs.writeFileSync;
+    let observedEmptyFinalKey = false;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (fs.existsSync(keyFile) && fs.statSync(keyFile).size === 0) observedEmptyFinalKey = true;
+      return writeFileSync(...args);
+    }) as typeof fs.writeFileSync);
+
+    new SecretBox(keyFile).seal("peer-api-key-that-must-not-leak", "peer-a");
+
+    expect(observedEmptyFinalKey).toBe(false);
+    expect(fs.readFileSync(keyFile)).toHaveLength(32);
+  });
+
+  it("adopts a complete key published by a concurrent first creator without a stale lock", () => {
+    const keyFile = createKeyFile();
+    const linkSync = fs.linkSync;
+    let simulatedRace = false;
+    vi.spyOn(fs, "linkSync").mockImplementation(((temporaryPath: fs.PathLike, finalPath: fs.PathLike) => {
+      linkSync(temporaryPath, finalPath);
+      simulatedRace = true;
+      const error = Object.assign(new Error("already published"), { code: "EEXIST" });
+      throw error;
+    }) as typeof fs.linkSync);
+
+    const first = new SecretBox(keyFile);
+    const sealed = first.seal("peer-api-key-that-must-not-leak", "peer-a");
+    const concurrent = new SecretBox(keyFile);
+
+    expect(simulatedRace).toBe(true);
+    expect(concurrent.open(sealed, "peer-a")).toBe("peer-api-key-that-must-not-leak");
+    expect(fs.readFileSync(keyFile)).toHaveLength(32);
+    expect(fs.readdirSync(path.dirname(keyFile)).filter((entry) => entry.endsWith(".lock"))).toEqual([]);
+  });
+
+  it("fails closed when the parent-directory fsync cannot durably publish the key", () => {
+    const keyFile = createKeyFile();
+    const fsyncSync = fs.fsyncSync;
+    let fsyncCount = 0;
+    vi.spyOn(fs, "fsyncSync").mockImplementation(((descriptor: number) => {
+      fsyncCount += 1;
+      if (fsyncCount === 2) throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
+      return fsyncSync(descriptor);
+    }) as typeof fs.fsyncSync);
+
+    expect(() => new SecretBox(keyFile).seal("peer-api-key-that-must-not-leak", "peer-a"))
+      .toThrow("directory sync failed");
+  });
+
+  it("fails closed for a genuinely pre-existing malformed master key", () => {
+    const keyFile = createKeyFile();
+    fs.writeFileSync(keyFile, Buffer.alloc(31));
+
+    expect(() => new SecretBox(keyFile).seal("peer-api-key-that-must-not-leak", "peer-a"))
+      .toThrow("Peer master key must contain exactly 32 bytes");
   });
 });
