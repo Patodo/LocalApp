@@ -76,7 +76,12 @@ describe("Local Runtime formal entry E2E", () => {
     expect(identity.statusCode, identity.body).toBe(200);
     expect(identity.json()).toEqual({
       success: true,
-      data: { id: "local-user", name: "Local User", role: "owner" },
+      data: {
+        id: "local-user",
+        name: "Local User",
+        displayName: "Local User",
+        role: "owner",
+      },
     });
   });
 

@@ -4,12 +4,13 @@ use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
 
-pub const LOCAL_SCHEMA_VERSION: u32 = 3;
+pub const LOCAL_SCHEMA_VERSION: u32 = 4;
 
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("migrations/001_local_state.sql")),
     (2, include_str!("migrations/002_js_environments.sql")),
     (3, include_str!("migrations/003_task_server_sync.sql")),
+    (4, include_str!("migrations/004_local_platform.sql")),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -241,6 +241,7 @@ fn local_runtime(paths: &DesktopPaths) -> LocalRuntimeController {
         ready_timeout: Duration::from_secs(10),
         restart_delay: Duration::from_millis(100),
         restart_limit: 1,
+        resources: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/local-runtime"),
     })
 }
 

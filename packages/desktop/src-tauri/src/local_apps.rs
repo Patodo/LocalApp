@@ -1479,7 +1479,7 @@ fn remove_transaction_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_local_app_id(value: &str) -> Result<(), String> {
+pub(crate) fn validate_local_app_id(value: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
     let valid = (3..=63).contains(&bytes.len())
         && bytes.first().is_some_and(|byte| byte.is_ascii_lowercase())
@@ -1723,6 +1723,6 @@ fn migration_error(error: impl std::fmt::Display) -> String {
     format!("Local application migration failed: {error}")
 }
 
-fn io_error(error: impl std::fmt::Display) -> String {
+pub(crate) fn io_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }

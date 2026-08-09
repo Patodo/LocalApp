@@ -1440,6 +1440,7 @@ dependencies = [
  "httpmock",
  "include_dir",
  "localapp-core",
+ "localapp-template",
  "portable-pty",
  "reqwest",
  "rusqlite",
@@ -1462,6 +1463,15 @@ dependencies = [
  "sha2",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "localapp-template"
+version = "0.1.0"
+dependencies = [
+ "include_dir",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

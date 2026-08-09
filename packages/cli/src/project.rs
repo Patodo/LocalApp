@@ -15,9 +15,9 @@ const RESERVED_NAMES: &[&str] = &[
 pub struct ManifestDb {
     #[serde(default = "default_db_mode")]
     pub mode: String,
-    #[serde(default, rename = "sqlAccess")]
+    #[serde(default, rename = "sqlAccess", skip_serializing_if = "Option::is_none")]
     pub sql_access: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_access: Option<HashMap<String, String>>,
 }
 
@@ -27,7 +27,7 @@ fn default_db_mode() -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ManifestShell {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub navbar: Option<bool>,
 }
 
@@ -76,9 +76,9 @@ pub struct ManifestNotify {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestBackend {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
 }
 
@@ -138,15 +138,15 @@ pub struct Manifest {
     pub description: String,
     #[serde(default = "default_dist_dir", rename = "distDir")]
     pub dist_dir: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db: Option<ManifestDb>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<ManifestShell>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issues: Option<ManifestIssues>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify: Option<ManifestNotify>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<ManifestBackend>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration: Option<ManifestCollaboration>,

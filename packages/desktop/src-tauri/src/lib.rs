@@ -1,16 +1,22 @@
 pub mod actions;
+pub mod agent;
 pub mod bus;
 pub mod desktop_control;
 pub mod execution;
 mod local_app_commands;
 pub mod local_apps;
 pub mod local_runtime;
+pub mod local_platform;
 pub mod local_store;
 pub mod paths;
 pub mod platform;
+pub mod process_util;
 pub mod runner;
 mod server_profiles;
 mod settings;
+mod studio_agent;
+mod studio_commands;
+mod studio_projects;
 pub mod task_repository;
 pub mod trust;
 
@@ -48,6 +54,15 @@ use server_profiles::{
     list_server_profiles, publish_local_app, remove_server_profile, save_server_profile,
     use_server_profile,
 };
+use studio_commands::{
+    build_studio_project, create_studio_project, delete_studio_project, install_studio_project,
+    list_studio_dir, list_studio_projects, publish_studio_project, read_studio_file,
+    reload_studio_project, write_studio_file,
+};
+use studio_agent::{
+    cancel_studio_agent, list_available_agents, list_studio_agents, read_studio_agent_logs,
+    run_studio_agent, send_studio_message,
+};
 
 fn reconciliation_target(
     server_status: &ActionStatus,
@@ -84,12 +99,14 @@ fn reconciliation_target(
         status => status.clone(),
     }
 }
+use crate::local_platform::LocalPlatformRepository;
 use bus::{
     BusController, BusObserver, ConnectionState, NativeNotificationAction, NotificationActivation,
     NotificationClickAction, NotificationPayload, notification_activation, notification_click_plan,
 };
 use platform::{
-    Favorite, FavoriteService, InboxListInput, InboxPage, InboxService, normalize_app_path,
+    Favorite, FavoriteService, InboxListInput, InboxPage, InboxService, format_millis,
+    normalize_app_path,
 };
 use settings::SettingsStore;
 pub use settings::{PublicSettings, SettingsUpdate};
@@ -97,7 +114,7 @@ use task_repository::{LocalTask, TaskLogs, TaskRepository};
 use trust::{AppTrust, TrustKeyInput, TrustRepository};
 
 pub struct AppState {
-    config: Option<Config>,
+    config: Mutex<Option<Config>>,
     settings: Mutex<SettingsStore>,
     local_store: LocalStore,
     bus: BusController,
@@ -109,9 +126,29 @@ pub struct AppState {
     desktop_control: Mutex<Option<DesktopControlServer>>,
     local_runtime_token: String,
     quitting: AtomicBool,
+    /// Studio agent 会话注册表（源码创建/编辑用的 coding agent 进程）。
+    pub agent_sessions: Arc<agent::AgentSessionRegistry>,
 }
 
 impl AppState {
+    /// 当前生效的 Config 快照（无配置时为 None）。
+    fn config(&self) -> Option<Config> {
+        self.config
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// 热更新生效的 Config（server profile 切换/退出登录时调用）。
+    pub(crate) fn set_config(&self, config: Option<Config>) -> Result<(), String> {
+        let mut guard = self
+            .config
+            .lock()
+            .map_err(|_| "Desktop state is unavailable".to_string())?;
+        *guard = config;
+        Ok(())
+    }
+
     fn load() -> Result<Self, String> {
         let settings = SettingsStore::load()?;
         let notifications_enabled = settings.notifications_enabled();
@@ -122,7 +159,7 @@ impl AppState {
         let _ = tasks
             .cleanup_completed_before(now_millis().saturating_sub(30_i64 * 24 * 60 * 60 * 1000));
         Ok(Self {
-            config: Config::load(),
+            config: Mutex::new(Config::load()),
             settings: Mutex::new(settings),
             local_store,
             bus: BusController::default(),
@@ -134,6 +171,7 @@ impl AppState {
             desktop_control: Mutex::new(None),
             local_runtime_token: uuid::Uuid::new_v4().to_string(),
             quitting: AtomicBool::new(false),
+            agent_sessions: Arc::new(agent::AgentSessionRegistry::new()),
         })
     }
 }
@@ -309,7 +347,7 @@ struct PlatformAccount {
 
 #[tauri::command]
 async fn get_account(state: State<'_, AppState>) -> Result<AccountState, String> {
-    let Some(config) = state.config.clone() else {
+    let Some(config) = state.config() else {
         return Ok(AccountState::offline());
     };
     if config.api_key.trim().is_empty() {
@@ -324,22 +362,48 @@ async fn get_account(state: State<'_, AppState>) -> Result<AccountState, String>
     AccountState::connected(&config, account, state.bus.connection_state().as_str())
 }
 
-fn inbox_service(state: &AppState) -> Result<InboxService, String> {
-    let config = state
-        .config
-        .clone()
-        .ok_or_else(|| "LocalApp is not configured".to_string())?;
-    configured_server_url(&config)?;
-    Ok(InboxService::new(config))
+/// 消息数据源：有远程配置用远程 server，否则用本地 SQLite。
+enum InboxSource<'a> {
+    Remote(InboxService),
+    Local(platform::LocalInboxService<'a>),
 }
 
-fn favorites_service(state: &AppState) -> Result<FavoriteService, String> {
-    let config = state
-        .config
-        .clone()
-        .ok_or_else(|| "LocalApp is not configured".to_string())?;
-    configured_server_url(&config)?;
-    Ok(FavoriteService::new(config))
+/// 收藏数据源：有远程配置用远程 server，否则用本地 SQLite。
+enum FavoriteSource<'a> {
+    Remote(FavoriteService),
+    Local(platform::LocalFavoriteService<'a>),
+}
+
+fn inbox_source(state: &AppState) -> Result<InboxSource<'_>, String> {
+    if let Some(config) = state.config()
+        && !config.api_key.trim().is_empty()
+    {
+        configured_server_url(&config)?;
+        return Ok(InboxSource::Remote(InboxService::new(config)));
+    }
+    Ok(InboxSource::Local(platform::LocalInboxService::new(
+        &state.local_store,
+    )))
+}
+
+fn favorites_source(state: &AppState) -> Result<FavoriteSource<'_>, String> {
+    if let Some(config) = state.config()
+        && !config.api_key.trim().is_empty()
+    {
+        configured_server_url(&config)?;
+        return Ok(FavoriteSource::Remote(FavoriteService::new(config)));
+    }
+    Ok(FavoriteSource::Local(platform::LocalFavoriteService::new(
+        &state.local_store,
+    )))
+}
+
+fn inbox_service(state: &AppState) -> Result<InboxSource<'_>, String> {
+    inbox_source(state)
+}
+
+fn favorites_service(state: &AppState) -> Result<FavoriteSource<'_>, String> {
+    favorites_source(state)
 }
 
 #[tauri::command]
@@ -347,16 +411,23 @@ async fn list_inbox(
     state: State<'_, AppState>,
     input: Option<InboxListInput>,
 ) -> Result<InboxPage, String> {
-    let service = inbox_service(&state)?;
     let input = input.unwrap_or_default();
-    service
-        .list(input.cursor.as_deref(), input.unread_only)
-        .await
+    match inbox_service(&state)? {
+        InboxSource::Remote(service) => {
+            service
+                .list(input.cursor.as_deref(), input.unread_only)
+                .await
+        }
+        InboxSource::Local(service) => service.list(input.cursor.as_deref(), input.unread_only),
+    }
 }
 
 #[tauri::command]
 async fn get_unread_count(state: State<'_, AppState>) -> Result<u32, String> {
-    inbox_service(&state)?.unread_count().await
+    match inbox_service(&state)? {
+        InboxSource::Remote(service) => service.unread_count().await,
+        InboxSource::Local(service) => service.unread_count(),
+    }
 }
 
 #[tauri::command]
@@ -365,7 +436,10 @@ async fn mark_notification_read(
     state: State<'_, AppState>,
     notification_id: String,
 ) -> Result<platform::InboxItem, String> {
-    let item = inbox_service(&state)?.mark_read(&notification_id).await?;
+    let item = match inbox_service(&state)? {
+        InboxSource::Remote(service) => service.mark_read(&notification_id).await,
+        InboxSource::Local(service) => service.mark_read(&notification_id),
+    }?;
     emit_current_unread_count(&app, &state).await;
     Ok(item)
 }
@@ -376,29 +450,59 @@ async fn delete_notification(
     state: State<'_, AppState>,
     notification_id: String,
 ) -> Result<(), String> {
-    inbox_service(&state)?.delete(&notification_id).await?;
+    match inbox_service(&state)? {
+        InboxSource::Remote(service) => service.delete(&notification_id).await,
+        InboxSource::Local(service) => service.delete(&notification_id),
+    }?;
     emit_current_unread_count(&app, &state).await;
     Ok(())
 }
 
 #[tauri::command]
 async fn mark_all_read(app: AppHandle, state: State<'_, AppState>) -> Result<u32, String> {
-    let changed = inbox_service(&state)?.mark_all_read().await?;
+    let changed = match inbox_service(&state)? {
+        InboxSource::Remote(service) => service.mark_all_read().await,
+        InboxSource::Local(service) => service.mark_all_read(),
+    }?;
     let _ = app.emit("desktop://unread-count", 0_u32);
     Ok(changed)
 }
 
 async fn emit_current_unread_count(app: &AppHandle, state: &AppState) {
-    if let Ok(service) = inbox_service(state)
-        && let Ok(count) = service.unread_count().await
-    {
+    let count = match inbox_service(state) {
+        Ok(InboxSource::Remote(service)) => service.unread_count().await.ok(),
+        Ok(InboxSource::Local(service)) => service.unread_count().ok(),
+        Err(_) => None,
+    };
+    if let Some(count) = count {
         let _ = app.emit("desktop://unread-count", count);
     }
 }
 
 #[tauri::command]
 async fn list_favorites(state: State<'_, AppState>) -> Result<Vec<Favorite>, String> {
-    favorites_service(&state)?.list().await
+    match favorites_service(&state)? {
+        FavoriteSource::Remote(service) => service.list().await,
+        FavoriteSource::Local(service) => service.list(),
+    }
+}
+
+#[tauri::command]
+async fn add_favorite(
+    state: State<'_, AppState>,
+    stored_page_path: String,
+    page_name: Option<String>,
+) -> Result<Favorite, String> {
+    match favorites_source(&state)? {
+        FavoriteSource::Remote(service) => {
+            service
+                .add(&stored_page_path, page_name.as_deref(), None)
+                .await
+        }
+        FavoriteSource::Local(service) => {
+            service.add(&stored_page_path, page_name.as_deref(), None)
+        }
+    }
 }
 
 #[tauri::command]
@@ -406,7 +510,10 @@ async fn remove_favorite(
     state: State<'_, AppState>,
     stored_page_path: String,
 ) -> Result<(), String> {
-    favorites_service(&state)?.remove(&stored_page_path).await
+    match favorites_service(&state)? {
+        FavoriteSource::Remote(service) => service.remove(&stored_page_path).await,
+        FavoriteSource::Local(service) => service.remove(&stored_page_path),
+    }
 }
 
 #[tauri::command]
@@ -415,7 +522,7 @@ fn get_settings(state: State<'_, AppState>) -> Result<PublicSettings, String> {
         .settings
         .lock()
         .map_err(|_| "Desktop settings are unavailable".to_string())?;
-    let public = settings.public(state.config.as_ref())?;
+    let public = settings.public(state.config().as_ref())?;
     drop(settings);
     merge_script_environment(public, &state.local_store)
 }
@@ -448,7 +555,7 @@ fn update_settings(
         .settings
         .lock()
         .map_err(|_| "Desktop settings are unavailable".to_string())?
-        .update(state.config.as_ref(), input);
+        .update(state.config().as_ref(), input);
     if result.is_err() && launch_at_login.is_some() {
         let _ = set_autostart(&app, previous_launch_at_login);
     }
@@ -544,7 +651,43 @@ async fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<(), String
     config.api_key.clear();
     config.save()?;
     state.bus.stop().await;
-    app.restart()
+    state.set_config(None)?;
+    let _ = app.emit(
+        "desktop://connection",
+        ConnectionPayload { status: "offline" },
+    );
+    Ok(())
+}
+
+/// 按磁盘上的最新配置热应用：更新 state.config，重建 WebSocket（有 API key 时）。
+/// server profile 切换/退出登录后调用，不重启进程。
+pub(crate) async fn apply_server_config(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let config = Config::load();
+    state.set_config(config.clone())?;
+    state.bus.stop().await;
+
+    let Some(config) = config.filter(|config| !config.api_key.trim().is_empty()) else {
+        let _ = app.emit(
+            "desktop://connection",
+            ConnectionPayload { status: "offline" },
+        );
+        return Ok(());
+    };
+    configured_server_url(&config)?;
+    let installation_id = state
+        .settings
+        .lock()
+        .map_err(|_| "Desktop settings are unavailable".to_string())?
+        .installation_id()
+        .to_string();
+    let observer = TauriBusObserver {
+        app: app.clone(),
+        config: config.clone(),
+        installation_id: installation_id.clone(),
+        notifications_enabled: Arc::clone(&state.notifications_enabled),
+    };
+    state.bus.start(config, installation_id, observer);
+    Ok(())
 }
 
 #[tauri::command]
@@ -572,8 +715,7 @@ async fn disconnect_bus(app: AppHandle, state: State<'_, AppState>) -> Result<()
 #[tauri::command]
 fn reconnect_bus(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let config = state
-        .config
-        .clone()
+        .config()
         .ok_or_else(|| "LocalApp is not configured".to_string())?;
     configured_server_url(&config)?;
     let installation_id = state
@@ -595,10 +737,9 @@ fn reconnect_bus(app: AppHandle, state: State<'_, AppState>) -> Result<(), Strin
 #[tauri::command]
 fn open_external(state: State<'_, AppState>, url: String) -> Result<(), String> {
     let config = state
-        .config
-        .as_ref()
+        .config()
         .ok_or_else(|| "LocalApp is not configured".to_string())?;
-    let url = validate_external_url(config, &url)?;
+    let url = validate_external_url(&config, &url)?;
 
     open_configured_url(url)
 }
@@ -610,8 +751,7 @@ async fn open_notification(
     url: String,
 ) -> Result<Option<platform::InboxItem>, String> {
     let config = state
-        .config
-        .clone()
+        .config()
         .ok_or_else(|| "LocalApp is not configured".to_string())?;
     execute_notification_click(config, notification_id.as_deref(), &url).await
 }
@@ -623,8 +763,7 @@ fn take_pending_activations(state: State<'_, AppState>) -> Vec<ActionActivation>
 
 fn action_service(state: &AppState) -> Result<ActionService, String> {
     let config = state
-        .config
-        .clone()
+        .config()
         .ok_or_else(|| "LocalApp is not configured".to_string())?;
     configured_server_url(&config)?;
     let installation_id = state
@@ -999,6 +1138,7 @@ async fn finish_task(app: &AppHandle, request_id: &str, outcome: TaskExecutionOu
         return;
     };
     let _ = app.emit("desktop://task-updated", completed.clone());
+    record_local_task_inbox(app, &completed);
     let update = outcome.server_update();
     let status = update.status.clone();
     drop(state);
@@ -1008,6 +1148,56 @@ async fn finish_task(app: &AppHandle, request_id: &str, outcome: TaskExecutionOu
             let _ = TaskRepository::new(&state.local_store).mark_server_synced(request_id, status);
         }
     }
+}
+
+/// 本地模式下把任务完成/失败写入本地消息列表，并推送通知。
+/// 远程模式下任务状态由 server 管理，不重复入本地消息。
+fn record_local_task_inbox(app: &AppHandle, task: &LocalTask) {
+    let state = app.state::<AppState>();
+    let is_local_mode = state
+        .config()
+        .is_none_or(|config| config.api_key.trim().is_empty());
+    if !is_local_mode {
+        return;
+    }
+    let (title, body, priority) = match task.status {
+        ActionStatus::Succeeded => (
+            format!("任务「{}」已完成", task.title),
+            task.result.as_ref().map(|result| result.to_string()),
+            "normal",
+        ),
+        ActionStatus::Failed => (
+            format!("任务「{}」失败", task.title),
+            task.error_summary.clone(),
+            "high",
+        ),
+        _ => return,
+    };
+    let repository = LocalPlatformRepository::new(&state.local_store);
+    let Ok(row) = repository.insert_inbox_item(
+        &task.app_owner,
+        &task.app_name,
+        &title,
+        body.as_deref(),
+        None,
+        priority,
+    ) else {
+        return;
+    };
+    let _ = app.emit(
+        "desktop://notification",
+        NotificationPayload {
+            id: row.id.clone(),
+            app_owner: row.app_owner.clone(),
+            app_name: row.app_name.clone(),
+            title: row.title.clone(),
+            body: row.body.clone(),
+            url: row.url.clone(),
+            priority: row.priority.clone(),
+            created_at: format_millis(row.created_at),
+        },
+    );
+    let _ = app.emit("desktop://unread-count", 1_u32);
 }
 
 async fn transition_local_and_server(
@@ -1112,10 +1302,9 @@ async fn execute_notification_click(
 #[tauri::command]
 fn open_app(state: State<'_, AppState>, app_path: String) -> Result<(), String> {
     let config = state
-        .config
-        .as_ref()
+        .config()
         .ok_or_else(|| "LocalApp is not configured".to_string())?;
-    open_configured_url(configured_app_url(config, &app_path)?)
+    open_configured_url(configured_app_url(&config, &app_path)?)
 }
 
 fn local_runtime_controller(state: &AppState) -> Result<LocalRuntimeController, String> {
@@ -1430,7 +1619,7 @@ fn toggle_notifications(app: &AppHandle) {
         .map_err(|_| ())
         .and_then(|mut settings| {
             settings
-                .update(state.config.as_ref(), update)
+                .update(state.config().as_ref(), update)
                 .map_err(|_| ())
         });
     if updated.is_ok() {
@@ -1573,8 +1762,7 @@ pub fn run() {
             let _ = set_autostart(app.handle(), launch_at_login);
 
             if let Some(config) = state
-                .config
-                .clone()
+                .config()
                 .filter(|config| !config.api_key.trim().is_empty())
             {
                 let installation_id = state
@@ -1608,6 +1796,7 @@ pub fn run() {
             delete_notification,
             mark_all_read,
             list_favorites,
+            add_favorite,
             remove_favorite,
             get_settings,
             update_settings,
@@ -1643,7 +1832,25 @@ pub fn run() {
             save_server_profile,
             remove_server_profile,
             use_server_profile,
-            publish_local_app
+            publish_local_app,
+            // Studio（应用源码管理 + 构建/安装/发布）
+            create_studio_project,
+            list_studio_projects,
+            read_studio_file,
+            write_studio_file,
+            list_studio_dir,
+            delete_studio_project,
+            build_studio_project,
+            install_studio_project,
+            publish_studio_project,
+            reload_studio_project,
+            // Studio agent（外部 coding agent 进程接入）
+            run_studio_agent,
+            send_studio_message,
+            cancel_studio_agent,
+            list_studio_agents,
+            read_studio_agent_logs,
+            list_available_agents
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LocalApp desktop");
@@ -1665,6 +1872,10 @@ pub fn run() {
             if let Ok(controller) = local_runtime_controller(&state) {
                 controller.request_stop();
             }
+            // 关闭 opencode serve 进程(Studio agent 共享实例)
+            tauri::async_runtime::block_on(async {
+                agent::opencode_server::shutdown_global().await;
+            });
         }
         _ => {}
     });

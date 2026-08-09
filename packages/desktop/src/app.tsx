@@ -5,6 +5,7 @@ import {
   Inbox,
   MonitorCog,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getDesktopGateway, type DesktopGateway } from "./lib/desktop-gateway";
@@ -20,16 +21,17 @@ import { FavoritesView } from "./views/favorites-view";
 import { AppsView } from "./views/apps-view";
 import { MessagesView } from "./views/messages-view";
 import { SettingsView } from "./views/settings-view";
+import { StudioView } from "./views/studio-view";
 import { TasksView } from "./views/tasks-view";
 
-type ViewId = "apps" | "messages" | "favorites" | "tasks" | "settings";
+type ViewId = "apps" | "studio" | "messages" | "favorites" | "tasks" | "settings";
 
 const navigation: Array<{ id: ViewId; label: string; icon: typeof Inbox }> = [
-  { id: "apps", label: "本地应用", icon: Boxes },
+  { id: "apps", label: "应用", icon: Boxes },
+  { id: "studio", label: "Studio", icon: Sparkles },
   { id: "messages", label: "消息", icon: Inbox },
   { id: "favorites", label: "收藏", icon: Heart },
   { id: "tasks", label: "本地任务", icon: MonitorCog },
-  { id: "settings", label: "设置", icon: Settings },
 ];
 
 const terminalStatuses = new Set<LocalTask["status"]>([
@@ -121,6 +123,12 @@ export function App() {
           if (event.type === "connection:changed") {
             connectionRevision += 1;
             setConnection(event.status);
+            void gateway
+              .getAccount()
+              .then((nextAccount) => {
+                if (!disposed) setAccount(nextAccount);
+              })
+              .catch(() => undefined);
             if (event.status === "connected") void reconcileActions(true);
           } else if (event.type === "inbox:updated") {
             unreadRevision += 1;
@@ -140,6 +148,8 @@ export function App() {
               ...current,
               [event.log.requestId]: (current[event.log.requestId] ?? 0) + 1,
             }));
+          } else if (event.type === "local-apps:changed") {
+            void gateway.listLocalApps().then(setLocalApps).catch(() => undefined);
           }
         });
         if (disposed) {
@@ -225,25 +235,38 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-connection" aria-label="连接状态">
-          <span className={`status-dot is-${connection}`} aria-hidden="true" />
-          <div>
-            <span>{connectionLabel(connection)}</span>
-            <small>{account?.serverUrl || "未配置服务器"}</small>
-          </div>
-        </div>
-        <div className="sidebar-account" aria-label="当前账户">
-          <span className="profile-initial" aria-hidden="true">{account?.displayName?.slice(0, 1).toUpperCase() || "Q"}</span>
-          <div>
-            <strong>{account?.displayName || "未登录"}</strong>
-            <small>{account?.id ? "LocalApp 用户" : "离线账户"}</small>
-          </div>
-        </div>
+        {account?.id ? (
+          <>
+            <div className="sidebar-connection" aria-label="连接状态">
+              <span className={`status-dot is-${connection}`} aria-hidden="true" />
+              <div>
+                <span>{connectionLabel(connection)}</span>
+                <small>{account?.serverUrl || ""}</small>
+              </div>
+            </div>
+            <div className="sidebar-account" aria-label="当前账户">
+              <span className="profile-initial" aria-hidden="true">{account?.displayName?.slice(0, 1).toUpperCase() || "Q"}</span>
+              <div>
+                <strong>{account?.displayName || ""}</strong>
+                <small>{account?.id ? "LocalApp 用户" : ""}</small>
+              </div>
+            </div>
+          </>
+        ) : null}
+        <button
+          aria-current={activeView === "settings" ? "page" : undefined}
+          className={`nav-button nav-button-footer${activeView === "settings" ? " is-active" : ""}`}
+          onClick={() => setActiveView("settings")}
+          type="button"
+        >
+          <Settings aria-hidden="true" size={19} strokeWidth={1.8} />
+          <span>设置</span>
+        </button>
       </aside>
 
       <section className="workspace">
         <div className="content-area">
-          {renderView(activeView, tasks, localApps, localRuntime, serverProfiles, {
+          {renderView(activeView, tasks, localApps, localRuntime, serverProfiles, !account?.id, gateway, {
             trustAndRun: async (requestId) => storeTask(await gateway.trustAndRunTask(requestId)),
             reject: async (requestId) => storeTask(await gateway.rejectLocalTask(requestId)),
             cancel: async (requestId) => storeTask(await gateway.cancelLocalTask(requestId)),
@@ -295,6 +318,8 @@ function renderView(
   localApps: LocalApp[],
   localRuntime: LocalRuntimeSnapshot,
   serverProfiles: ServerProfileSummary[],
+  isLocalMode: boolean,
+  gateway: DesktopGateway,
   actions: {
     trustAndRun: (requestId: string) => Promise<void>;
     reject: (requestId: string) => Promise<void>;
@@ -315,7 +340,6 @@ function renderView(
         <AppsView
           apps={localApps}
           profiles={serverProfiles}
-          runtime={localRuntime}
           onDelete={actions.deleteLocalApp}
           onInstall={actions.installLocalApp}
           onOpen={actions.openLocalApp}
@@ -325,8 +349,10 @@ function renderView(
       );
     case "messages":
       return <MessagesView />;
+    case "studio":
+      return <StudioView gateway={gateway} profiles={serverProfiles} />;
     case "favorites":
-      return <FavoritesView />;
+      return <FavoritesView isLocalMode={isLocalMode} />;
     case "tasks":
       return (
         <TasksView
@@ -340,6 +366,6 @@ function renderView(
         />
       );
     case "settings":
-      return <SettingsView />;
+      return <SettingsView runtime={localRuntime} />;
   }
 }

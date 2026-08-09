@@ -412,4 +412,48 @@ mod tests {
         assert_eq!(requires.identity, vec!["currentUser", "pageOwner"]);
         assert!(requires.primitives.is_empty());
     }
+
+    #[test]
+    fn generated_manifest_omits_optional_null_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        write_project_files(
+            dir.path(),
+            "first-run-app",
+            &Some("First run".to_string()),
+            "http://localhost:3000",
+        )
+        .unwrap();
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert!(manifest.get("shell").is_none());
+        assert!(manifest.get("notify").is_none());
+        assert!(manifest["db"].get("defaultAccess").is_none());
+        assert!(manifest["backend"].get("include").is_none());
+    }
+
+    #[test]
+    fn builtin_backend_seed_matches_the_initial_security_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::template::extract_backend_seed_if_missing(dir.path()).unwrap();
+        let files = ["queries.json", "mutations.json"]
+            .into_iter()
+            .map(|name| {
+                (
+                    format!("backend/resources/work_items/{name}"),
+                    std::fs::read(dir.path().join("backend/resources/work_items").join(name))
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let summary =
+            crate::commands::backend_security::validate_backend_security_files(&files, true)
+                .unwrap();
+        assert_eq!(summary.legacy_missing, 0);
+        assert!(summary.platform_verified > 0);
+    }
 }

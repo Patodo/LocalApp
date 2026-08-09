@@ -4,6 +4,7 @@ pub mod backend_security;
 pub mod build;
 pub mod check;
 pub mod db;
+pub mod desktop;
 pub mod dev;
 pub mod eject;
 pub mod generate;

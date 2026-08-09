@@ -8,7 +8,14 @@
         "title": { "type": "string", "required": true },
         "status": { "type": "string", "enum": ["todo", "doing", "done"] }
       },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:982417ac22872f0b0e48dd9c410a998ec4b7fb43163a58686d827ca533cf6f40"
+      }
     },
     "$work_items.update": {
       "kind": "mutation",
@@ -18,15 +25,29 @@
         "title": { "type": "string", "required": true },
         "status": { "type": "string", "required": true, "enum": ["todo", "doing", "done"] }
       },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:b71c542a4fa372e2332a48e5b2e9a69bfc8df7211bd96cb6d2bbcc43b43f6742"
+      }
     },
     "$work_items.delete": {
       "kind": "mutation",
-      "sql": "DELETE FROM work_items WHERE id = :id",
+      "sql": "DELETE FROM work_items WHERE id = :id AND created_by = :currentUserId",
       "params": {
         "id": { "type": "number", "required": true }
       },
-      "access": "owner"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "owner-delete-v1",
+        "resource": "work_items",
+        "config": { "identityField": "created_by" },
+        "digest": "sha256:42ad34c17b3c8c1778c13236724b18c95868dde156104231acff9e67830426a8"
+      }
     },
     "$work_items.start": {
       "kind": "mutation",
@@ -34,7 +55,14 @@
       "params": {
         "id": { "type": "number", "required": true }
       },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:8d03430ecdd3283fc62bb6fe6b1adf6e50647dbfd27df7e7bfdb04ee84d86531"
+      }
     },
     "$work_items.complete": {
       "kind": "mutation",
@@ -42,7 +70,14 @@
       "params": {
         "id": { "type": "number", "required": true }
       },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:1a9cf9dd88903127ec6d056ca0bf11184b7e041440f72555ba889806af3bcbbb"
+      }
     }
   }
 }

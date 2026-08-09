@@ -1,68 +1,9 @@
-pub fn script_invokes_localapp_dev(script: &str) -> bool {
-    let words = shell_words(script);
-    words
-        .windows(2)
-        .any(|pair| is_localapp_command(&pair[0]) && pair[1] == "dev")
-}
+//! 脚本工具。
+//!
+//! 实现已下沉到 `localapp-template` crate，本模块仅做 re-export，
+//! 保持 CLI 内部 `use crate::scripts::script_invokes_localapp_dev` 调用点不变。
 
-fn is_localapp_command(word: &str) -> bool {
-    let normalized = word.replace('\\', "/");
-    let command = normalized.rsplit('/').next().unwrap_or(word);
-    let command = command
-        .strip_suffix(".cmd")
-        .or_else(|| command.strip_suffix(".exe"))
-        .unwrap_or(command);
-    command == "localapp"
-}
-
-fn shell_words(script: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-
-    for ch in script.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-
-        if let Some(q) = quote {
-            if ch == q {
-                quote = None;
-            } else {
-                current.push(ch);
-            }
-            continue;
-        }
-
-        if ch == '"' || ch == '\'' {
-            quote = Some(ch);
-            continue;
-        }
-
-        if ch.is_whitespace() {
-            if !current.is_empty() {
-                words.push(std::mem::take(&mut current));
-            }
-            continue;
-        }
-
-        current.push(ch);
-    }
-
-    if !current.is_empty() {
-        words.push(current);
-    }
-
-    words
-}
+pub use localapp_template::script_invokes_localapp_dev;
 
 #[cfg(test)]
 mod tests {

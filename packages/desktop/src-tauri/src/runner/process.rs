@@ -1,6 +1,7 @@
 use super::protocol::{
     FrameDecoder, HostMessage, LogStream, ProtocolError, RunnerMessage, encode_frame,
 };
+use crate::process_util::{ProcessTree, configure_process_group};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -8,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -408,7 +409,7 @@ fn is_secret_environment_key(key: &str) -> bool {
             || normalized.contains("TOKEN"))
 }
 
-fn bounded_log_event(task_id: &str, stream: LogStream, message: &str) -> LogEvent {
+pub(crate) fn bounded_log_event(task_id: &str, stream: LogStream, message: &str) -> LogEvent {
     let (message, truncated) = truncate_utf8(message, MAX_CALLBACK_MESSAGE_BYTES);
     LogEvent {
         task_id: task_id.into(),
@@ -418,7 +419,7 @@ fn bounded_log_event(task_id: &str, stream: LogStream, message: &str) -> LogEven
     }
 }
 
-fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {
+pub(crate) fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {
     if value.len() <= max_bytes {
         return (value.into(), false);
     }
@@ -472,99 +473,6 @@ fn interrupted_message(code: &str, message: &str) -> ExecutionOutcome {
     failed(FailureClassification::Interrupted, code, message)
 }
 
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.as_std_mut().process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
-
-#[cfg(unix)]
-struct ProcessTree {
-    process_group_id: i32,
-}
-
-#[cfg(unix)]
-impl ProcessTree {
-    fn attach(child: &Child) -> std::io::Result<Self> {
-        let process_group_id = child
-            .id()
-            .ok_or_else(|| std::io::Error::other("runner process ID unavailable"))?
-            as i32;
-        Ok(Self { process_group_id })
-    }
-
-    async fn terminate_and_reap(self, child: &mut Child) {
-        unsafe {
-            libc::kill(-self.process_group_id, libc::SIGKILL);
-        }
-        let _ = child.wait().await;
-    }
-}
-
-#[cfg(windows)]
-struct ProcessTree {
-    job: windows_sys::Win32::Foundation::HANDLE,
-}
-
-#[cfg(windows)]
-impl ProcessTree {
-    fn attach(child: &Child) -> std::io::Result<Self> {
-        use std::mem::{size_of, zeroed};
-        use windows_sys::Win32::System::JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
-        };
-
-        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if job.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let configured = unsafe {
-            SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                std::ptr::addr_of!(information).cast(),
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        let process = child
-            .raw_handle()
-            .ok_or_else(|| std::io::Error::other("runner process handle unavailable"))?
-            .cast();
-        let assigned = configured != 0 && unsafe { AssignProcessToJobObject(job, process) } != 0;
-        if !assigned {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                windows_sys::Win32::Foundation::CloseHandle(job);
-            }
-            return Err(error);
-        }
-        Ok(Self { job })
-    }
-
-    async fn terminate_and_reap(self, child: &mut Child) {
-        unsafe {
-            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1);
-        }
-        let _ = child.wait().await;
-    }
-}
-
-#[cfg(windows)]
-impl Drop for ProcessTree {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.job);
-        }
-    }
-}
-
 #[cfg(windows)]
 pub fn assert_windows_job_object_support() {
     use windows_sys::Win32::System::JobObjects::{
@@ -572,19 +480,4 @@ pub fn assert_windows_job_object_support() {
     };
     let _ = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     let _ = JobObjectExtendedLimitInformation;
-}
-
-#[cfg(not(any(unix, windows)))]
-struct ProcessTree;
-
-#[cfg(not(any(unix, windows)))]
-impl ProcessTree {
-    fn attach(_child: &Child) -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    async fn terminate_and_reap(self, child: &mut Child) {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
 }

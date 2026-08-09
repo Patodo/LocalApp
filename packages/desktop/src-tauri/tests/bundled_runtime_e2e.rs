@@ -1,3 +1,6 @@
+#[path = "../src/process_util.rs"]
+mod process_util;
+
 #[path = "../src/runner/mod.rs"]
 mod runner;
 

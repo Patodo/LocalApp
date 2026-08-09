@@ -33,6 +33,7 @@ function createGateway() {
     deleteNotification: vi.fn(),
     markAllRead: vi.fn(),
     listFavorites: vi.fn().mockResolvedValue(favorites),
+    addFavorite: vi.fn().mockResolvedValue(undefined),
     removeFavorite: vi.fn().mockResolvedValue(undefined),
     openApp: vi.fn().mockResolvedValue(undefined),
     getSettings: vi.fn(),

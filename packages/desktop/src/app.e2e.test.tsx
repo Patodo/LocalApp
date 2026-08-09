@@ -41,18 +41,18 @@ it("lets a first-time user install and open a local app without a server account
 
   render(<App />);
 
-  expect(await screen.findByText("未配置服务器")).toBeVisible();
-  expect(screen.getByText("未登录")).toBeVisible();
-  expect(screen.getByText("离线账户")).toBeVisible();
-  expect(screen.getByLabelText("本地应用为空")).toBeVisible();
+  expect(await screen.findByLabelText("本地应用为空")).toBeVisible();
+  expect(screen.queryByText("未配置服务器")).not.toBeInTheDocument();
+  expect(screen.queryByText("未登录")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("连接状态")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("当前账户")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装应用包" })).toBeEnabled();
   expect(screen.queryByText(/请先登录|登录后/)).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "安装应用包" }));
 
   expect(gateway.installLocalApp).toHaveBeenCalledOnce();
-  expect(await screen.findByRole("heading", { name: "offline-notes" })).toBeVisible();
-  expect(screen.getByText("运行中")).toBeVisible();
+  expect(await screen.findByRole("heading", { name: /offline-notes/ })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "打开 offline-notes" }));
   expect(gateway.openLocalApp).toHaveBeenCalledWith("offline-notes");
 
@@ -111,6 +111,7 @@ function offlineGateway(): DesktopGateway {
     deleteNotification: vi.fn(),
     markAllRead: vi.fn().mockResolvedValue(0),
     listFavorites: vi.fn().mockResolvedValue([]),
+    addFavorite: vi.fn(),
     removeFavorite: vi.fn(),
     openApp: vi.fn(),
     getSettings: vi.fn().mockResolvedValue({
@@ -158,6 +159,22 @@ function offlineGateway(): DesktopGateway {
     removeServerProfile: vi.fn(),
     useServerProfile: vi.fn(),
     publishLocalApp: vi.fn(),
+    createStudioProject: vi.fn(),
+    listStudioProjects: vi.fn().mockResolvedValue([]),
+    readStudioFile: vi.fn(),
+    writeStudioFile: vi.fn(),
+    listStudioDir: vi.fn().mockResolvedValue([]),
+    deleteStudioProject: vi.fn(),
+    buildStudioProject: vi.fn(),
+    installStudioProject: vi.fn(),
+    publishStudioProject: vi.fn(),
+    reloadStudioProject: vi.fn(),
+    runStudioAgent: vi.fn(),
+    sendStudioMessage: vi.fn(),
+    listAvailableAgents: vi.fn().mockResolvedValue([]),
+    cancelStudioAgent: vi.fn(),
+    listStudioAgents: vi.fn().mockResolvedValue([]),
+    readStudioAgentLogs: vi.fn().mockResolvedValue({ sessionId: "", stdout: "", stderr: "" }),
     listen: vi.fn().mockResolvedValue(() => undefined),
   };
 }

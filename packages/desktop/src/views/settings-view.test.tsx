@@ -79,6 +79,21 @@ afterEach(() => {
 });
 
 describe("SettingsView", () => {
+  it("shows the local runtime service status on the general tab", async () => {
+    render(
+      <SettingsView
+        runtime={{
+          status: "running",
+          restartCount: 2,
+          ready: { host: "127.0.0.1", port: 43127, pid: 1234 },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("本地运行服务")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("运行中");
+  });
+
   it("updates registry and proxy secrets without displaying stored credentials", async () => {
     const user = userEvent.setup();
     const desktop = gateway();
@@ -86,6 +101,7 @@ describe("SettingsView", () => {
 
     render(<SettingsView />);
 
+    await user.click(screen.getByRole("tab", { name: "脚本环境" }));
     expect(await screen.findByDisplayValue("https://registry.npmjs.org/")).toBeVisible();
     expect(screen.getByText("已配置 HTTP 代理")).toBeVisible();
     const httpProxy = screen.getByLabelText("HTTP 代理");
@@ -113,9 +129,10 @@ describe("SettingsView", () => {
 
     render(<SettingsView />);
 
+    await user.click(screen.getByRole("tab", { name: "可信应用" }));
     expect(await screen.findByText("alice/reports")).toBeVisible();
     expect(screen.getByText("Release Publisher")).toBeVisible();
-    expect(screen.getAllByText("https://work.example")).toHaveLength(2);
+    expect(screen.getAllByText("https://work.example")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "撤销 alice/reports 的信任" }));
 
     expect(desktop.revokeAppTrust).toHaveBeenCalledWith({
@@ -133,7 +150,7 @@ describe("SettingsView", () => {
     setDesktopGatewayForTests(desktop);
 
     render(<SettingsView />);
-    await screen.findByDisplayValue("https://registry.npmjs.org/");
+    await screen.findByRole("button", { name: "检查更新" });
     await user.click(screen.getByRole("button", { name: "检查更新" }));
 
     expect(desktop.checkForUpdates).toHaveBeenCalledOnce();
@@ -148,7 +165,8 @@ describe("SettingsView", () => {
     setDesktopGatewayForTests(desktop);
 
     render(<SettingsView />);
-    await screen.findByText("尚未配置发布服务器");
+    await user.click(screen.getByRole("tab", { name: "服务器" }));
+    await screen.findByText("尚未配置服务器");
     await user.type(screen.getByLabelText("Profile 名称"), "production");
     await user.type(screen.getByLabelText("Profile Server URL"), "https://work.example");
     await user.type(screen.getByLabelText("Profile API Key"), "test-private-profile-key");
@@ -170,7 +188,7 @@ describe("SettingsView", () => {
     setDesktopGatewayForTests(desktop);
 
     render(<SettingsView />);
-    await screen.findByDisplayValue("https://registry.npmjs.org/");
+    await screen.findByRole("button", { name: "检查更新" });
     await user.click(screen.getByRole("button", { name: "清除缓存" }));
     expect(desktop.clearDependencyCache).toHaveBeenCalledOnce();
 

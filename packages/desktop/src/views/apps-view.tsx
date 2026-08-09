@@ -9,7 +9,6 @@ import {
 import { useState } from "react";
 import type {
   LocalApp,
-  LocalRuntimeSnapshot,
   PublishResult,
   ServerProfileSummary,
 } from "../lib/types";
@@ -17,7 +16,6 @@ import type {
 interface AppsViewProps {
   apps: LocalApp[];
   profiles: ServerProfileSummary[];
-  runtime: LocalRuntimeSnapshot;
   onInstall: () => Promise<void> | void;
   onOpen: (appId: string) => Promise<void> | void;
   onPublish: (appId: string, profileName: string) => Promise<PublishResult>;
@@ -28,7 +26,6 @@ interface AppsViewProps {
 export function AppsView({
   apps,
   profiles,
-  runtime,
   onDelete,
   onInstall,
   onOpen,
@@ -80,7 +77,7 @@ export function AppsView({
     <section className="view-stack apps-view">
       <header className="view-header apps-header">
         <div>
-          <h1>本地应用</h1>
+          <h1>应用</h1>
           <p>安装在这台设备上的 LocalApp 应用</p>
         </div>
         <button className="primary-button" onClick={() => void onInstall()} type="button">
@@ -88,13 +85,6 @@ export function AppsView({
           安装应用包
         </button>
       </header>
-
-      <div className="runtime-strip" aria-label="本地运行服务">
-        <span className={`status-dot is-${runtime.status}`} aria-hidden="true" />
-        <strong>本地运行服务</strong>
-        <span>{runtimeLabel(runtime.status)}</span>
-        {runtime.error ? <small>{runtime.error}</small> : null}
-      </div>
 
       {apps.length === 0 ? (
         <div className="empty-state" aria-label="本地应用为空">
@@ -110,7 +100,10 @@ export function AppsView({
                   {app.appId.slice(0, 1).toUpperCase()}
                 </span>
                 <div>
-                  <h2>{app.appId}</h2>
+                  <h2>
+                    {app.appId}
+                    <span className="app-badge">本地</span>
+                  </h2>
                   <p>
                     版本 <span>{app.currentVersion}</span>
                   </p>
@@ -304,21 +297,6 @@ export function AppsView({
       ) : null}
     </section>
   );
-}
-
-function runtimeLabel(status: LocalRuntimeSnapshot["status"]): string {
-  switch (status) {
-    case "running":
-      return "运行中";
-    case "starting":
-      return "启动中";
-    case "restarting":
-      return "正在恢复";
-    case "failed":
-      return "不可用";
-    case "stopped":
-      return "已停止";
-  }
 }
 
 function appStatusLabel(status: LocalApp["status"]): string {

@@ -1,8 +1,8 @@
+use crate::scripts::script_invokes_localapp_dev;
 use crate::template::{
     extract_backend_seed_if_missing, extract_cli_zone, postprocess_package_json,
-    write_runtime_version,
+    remove_runtime_compatibility_path, write_runtime_version,
 };
-use crate::scripts::script_invokes_localapp_dev;
 use crate::version::cli_version;
 use std::fs;
 use std::path::Path;
@@ -299,6 +299,7 @@ fn read_runtime_version(project_dir: &Path) -> Option<String> {
 }
 
 fn remove_cli_zones(project_dir: &Path) -> Result<(), String> {
+    remove_runtime_compatibility_path(project_dir)?;
     let runtime = project_dir.join(".localapp/runtime");
     if runtime.exists() {
         fs::remove_dir_all(&runtime).map_err(|e| format!("Failed to remove runtime: {e}"))?;

@@ -8,7 +8,7 @@ mod scripts;
 mod template;
 mod version;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 const SCHEMAS_DEPRECATED_MESSAGE: &str = "localapp schemas is deprecated and no longer writes platform schemas. Use 'localapp generate schema <name>' to scaffold backend/resources/<name>/, then edit backend contract files.";
 
@@ -20,11 +20,15 @@ const SCHEMAS_DEPRECATED_MESSAGE: &str = "localapp schemas is deprecated and no 
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// 启动 LocalApp Desktop 桌面客户端（普通用户的主入口）
+    Desktop,
+    /// 查看 CLI 命令帮助（`localapp <command>` 即可执行，无需此前缀）
+    Cli,
     /// 创建新项目（含模板下载、依赖安装、首次部署）
     Init {
         /// 项目名称（小写字母、数字、连字符，3-63 个字符）
@@ -361,7 +365,26 @@ enum BackendAction {
 async fn main() {
     let cli = Cli::parse();
 
-    let result = match cli.command {
+    // 无子命令或显式 `desktop`：启动 LocalApp Desktop（普通用户的主入口）。
+    // `cli`：打印 CLI 命令帮助（实际执行无需此前缀，直接 `localapp <command>`）。
+    match cli.command {
+        None | Some(Commands::Desktop) => {
+            if let Err(e) = commands::desktop::launch() {
+                eprintln!("{}", serde_json::json!({ "error": e }));
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some(Commands::Cli) => {
+            let _ = Cli::command().print_help();
+            return;
+        }
+        _ => {}
+    }
+
+    // 到达此处的都是已有 CLI 子命令（Init/Upload/...），前面已排除 None/Desktop/Cli。
+    let command = cli.command.expect("command resolved above");
+    let result = match command {
         Commands::Init {
             name,
             description,
@@ -535,6 +558,8 @@ async fn main() {
                 Err(e) => Err(e),
             },
         },
+        // 前置 match 已处理并 return，逻辑上不会到达。
+        Commands::Desktop | Commands::Cli => unreachable!("desktop/cli handled before dispatch"),
     };
 
     if let Err(e) = result {
@@ -562,7 +587,7 @@ mod tests {
             "schema.json",
         ]);
         match cli.command {
-            Commands::Schemas { args } => {
+            Some(Commands::Schemas { args }) => {
                 assert_eq!(args, vec!["create", "tasks", "--file", "schema.json"]);
             }
             _ => panic!("schemas command should parse as deprecated compatibility command"),
@@ -575,7 +600,7 @@ mod tests {
     fn check_json_command_is_non_interactive_and_parseable() {
         let cli = Cli::parse_from(["localapp", "check", "--json"]);
         match cli.command {
-            Commands::Check { json, .. } => assert!(json),
+            Some(Commands::Check { json, .. }) => assert!(json),
             _ => panic!("check command should parse"),
         }
     }
@@ -585,9 +610,9 @@ mod tests {
         let cli = Cli::try_parse_from(["localapp", "verify", "--as", "member", "--json"])
             .expect("verify command should parse");
         match cli.command {
-            Commands::Verify {
+            Some(Commands::Verify {
                 as_identity, json, ..
-            } => {
+            }) => {
                 assert_eq!(as_identity, "member");
                 assert!(json);
             }
@@ -601,7 +626,7 @@ mod tests {
         let cli = Cli::try_parse_from(["localapp", "upload", "./dist", "--verify"])
             .expect("upload --verify should parse");
         match cli.command {
-            Commands::Upload { path, verify, .. } => {
+            Some(Commands::Upload { path, verify, .. }) => {
                 assert_eq!(path.as_deref(), Some("./dist"));
                 assert!(verify);
             }
@@ -620,7 +645,7 @@ mod tests {
         ])
         .expect("build --package should parse");
         match build.command {
-            Commands::Build { package, output } => {
+            Some(Commands::Build { package, output }) => {
                 assert!(package);
                 assert_eq!(output.as_deref(), Some("dist/app.localapp"));
             }
@@ -630,9 +655,9 @@ mod tests {
         let install = Cli::try_parse_from(["localapp", "local", "install", "app.localapp"])
             .expect("local install should parse");
         match install.command {
-            Commands::Local {
+            Some(Commands::Local {
                 action: LocalAction::Install { package },
-            } => assert_eq!(package, "app.localapp"),
+            }) => assert_eq!(package, "app.localapp"),
             _ => panic!("local install command should parse"),
         }
 
@@ -661,9 +686,9 @@ mod tests {
             Cli::try_parse_from(["localapp", "upload", "--profile", "staging", "--verify"])
                 .expect("upload --profile should parse");
         match upload.command {
-            Commands::Upload {
+            Some(Commands::Upload {
                 profile, verify, ..
-            } => {
+            }) => {
                 assert_eq!(profile.as_deref(), Some("staging"));
                 assert!(verify);
             }
@@ -674,20 +699,35 @@ mod tests {
             .expect("check --profile should parse");
         assert!(matches!(
             check.command,
-            Commands::Check {
+            Some(Commands::Check {
                 profile: Some(profile),
                 ..
-            } if profile == "staging"
+            }) if profile == "staging"
         ));
 
         let verify = Cli::try_parse_from(["localapp", "verify", "--profile", "staging"])
             .expect("verify --profile should parse");
         assert!(matches!(
             verify.command,
-            Commands::Verify {
+            Some(Commands::Verify {
                 profile: Some(profile),
                 ..
-            } if profile == "staging"
+            }) if profile == "staging"
         ));
+    }
+
+    #[test]
+    fn bare_command_parses_as_none_and_desktop_subcommand_exists() {
+        // `localapp` 无子命令 → None，由 main 分流去启动 Desktop。
+        let bare = Cli::parse_from(["localapp"]);
+        assert!(bare.command.is_none());
+
+        // `localapp desktop` 显式启动 Desktop。
+        let desktop = Cli::parse_from(["localapp", "desktop"]);
+        assert!(matches!(desktop.command, Some(Commands::Desktop)));
+
+        // `localapp cli` 进入命令帮助。
+        let cli_help = Cli::parse_from(["localapp", "cli"]);
+        assert!(matches!(cli_help.command, Some(Commands::Cli)));
     }
 }

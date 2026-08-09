@@ -30,6 +30,7 @@ function createGateway(): DesktopGateway {
     deleteNotification: vi.fn(),
     markAllRead: vi.fn(),
     listFavorites: vi.fn().mockResolvedValue([]),
+    addFavorite: vi.fn(),
     removeFavorite: vi.fn(),
     openApp: vi.fn(),
     getSettings: vi.fn(),
@@ -69,6 +70,22 @@ function createGateway(): DesktopGateway {
     removeServerProfile: vi.fn(),
     useServerProfile: vi.fn(),
     publishLocalApp: vi.fn(),
+    createStudioProject: vi.fn(),
+    listStudioProjects: vi.fn().mockResolvedValue([]),
+    readStudioFile: vi.fn(),
+    writeStudioFile: vi.fn(),
+    listStudioDir: vi.fn().mockResolvedValue([]),
+    deleteStudioProject: vi.fn(),
+    buildStudioProject: vi.fn(),
+    installStudioProject: vi.fn(),
+    publishStudioProject: vi.fn(),
+    reloadStudioProject: vi.fn(),
+    runStudioAgent: vi.fn(),
+    sendStudioMessage: vi.fn(),
+    listAvailableAgents: vi.fn().mockResolvedValue([]),
+    cancelStudioAgent: vi.fn(),
+    listStudioAgents: vi.fn().mockResolvedValue([]),
+    readStudioAgentLogs: vi.fn().mockResolvedValue({ sessionId: "", stdout: "", stderr: "" }),
     listen: vi.fn().mockResolvedValue(() => undefined),
   };
 }
@@ -146,6 +163,7 @@ it("loads and updates desktop settings and controls the bus lifecycle", async ()
   await user.click(autostart);
   expect(gateway.updateSettings).toHaveBeenCalledWith({ launchAtLogin: true });
 
+  await user.click(screen.getByRole("tab", { name: "服务器" }));
   await user.click(screen.getByRole("button", { name: "断开连接" }));
   expect(gateway.disconnectBus).toHaveBeenCalledOnce();
   await user.click(screen.getByRole("button", { name: "重新连接" }));
@@ -153,7 +171,7 @@ it("loads and updates desktop settings and controls the bus lifecycle", async ()
 });
 
 describe("App navigation", () => {
-  it("keeps the desktop shell focused on five views", async () => {
+  it("keeps the desktop shell focused on the main views", async () => {
     const user = userEvent.setup();
 
     render(<App />);
@@ -162,7 +180,7 @@ describe("App navigation", () => {
 
     const desktopNavigation = within(screen.getByRole("navigation", { name: "桌面功能" }));
     expect(desktopNavigation.getAllByRole("button")).toHaveLength(5);
-    expect(screen.getByRole("button", { name: "本地应用" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "应用" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -176,21 +194,22 @@ describe("App navigation", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("button", { name: "本地应用" })).not.toHaveAttribute(
+    expect(screen.getByRole("button", { name: "应用" })).not.toHaveAttribute(
       "aria-current",
     );
   });
 
-  it("keeps connection and account controls at the bottom of the sidebar", async () => {
+  it("keeps connection, account, and settings at the bottom of the sidebar", async () => {
+    setDesktopGatewayForTests(createGateway());
     render(<App />);
 
     await screen.findByLabelText("本地应用为空");
     const settings = screen.getByRole("button", { name: "设置" });
-    const connection = screen.getByLabelText("连接状态");
+    const connection = await screen.findByLabelText("连接状态");
     const account = screen.getByLabelText("当前账户");
 
-    expect(settings.compareDocumentPosition(connection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(connection.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(account.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -211,7 +230,8 @@ it("keeps a newer connection event when the initial account request resolves lat
     await Promise.resolve();
   });
   act(() => eventHandler?.({ type: "connection:changed", status: "connected" }));
-  expect(screen.getByText("已连接")).toBeVisible();
+  // account 尚未加载，连接状态区块暂不渲染；等 account 到达后按最新 connection 显示。
+  expect(screen.queryByText("已连接")).not.toBeInTheDocument();
 
   await act(async () => {
     account.resolve({

@@ -3,10 +3,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const DATA_DIR_ENV: &str = "LOCALAPP_DESKTOP_DATA_DIR";
+/// 覆盖 Studio 源码项目根目录（测试用）。
+const PROJECTS_DIR_ENV: &str = "LOCALAPP_STUDIO_PROJECTS_DIR";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesktopPaths {
     root: PathBuf,
+    /// Studio 源码项目根：默认在用户可见的 Documents 下，
+    /// 让用户和 coding agent 能自然访问（不像 app data 目录会被 agent 当外部目录拦截）。
+    /// 用 LOCALAPP_STUDIO_PROJECTS_DIR 环境变量覆盖（测试用）。
+    projects_root: PathBuf,
 }
 
 impl DesktopPaths {
@@ -19,11 +25,21 @@ impl DesktopPaths {
                 default_data_root(base, cfg!(windows))
             }
         };
-        Ok(Self { root })
+        let projects_root = match env::var_os(PROJECTS_DIR_ENV) {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => default_projects_root(),
+        };
+        Ok(Self { root, projects_root })
     }
 
     pub fn from_root(root: PathBuf) -> Self {
-        Self { root }
+        // from_root 主要给测试用：projects_root 跟随 root（不走 Documents），
+        // 保证测试隔离。可用 PROJECTS_DIR_ENV 覆盖。
+        let projects_root = match env::var_os(PROJECTS_DIR_ENV) {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => root.join("studio"),
+        };
+        Self { root, projects_root }
     }
 
     pub fn ensure(&self) -> Result<(), String> {
@@ -38,6 +54,7 @@ impl DesktopPaths {
             self.js_environments(),
             self.apps(),
             self.app_data(),
+            self.projects(),
         ] {
             fs::create_dir_all(&path).map_err(|_| {
                 format!(
@@ -81,6 +98,20 @@ impl DesktopPaths {
         self.root.join("local-runtime-registry.json")
     }
 
+    /// Studio 源码项目根目录：每个应用源码位于 `projects/<app-id>/`。
+    ///
+    /// 默认在用户可见的 Documents/LocalApp/projects 下（不走 app data），
+    /// 让用户和 coding agent 能自然访问。与 `apps/`（已安装版本产物）分离：
+    /// 源码是 source of truth，构建产物是派生物。
+    pub fn projects(&self) -> PathBuf {
+        self.projects_root.join("projects")
+    }
+
+    /// Studio 项目注册表：记录 app_id → source_path 映射 + 元数据。
+    pub fn studio_registry(&self) -> PathBuf {
+        self.root.join("studio-projects.json")
+    }
+
 }
 
 fn default_data_root(base: PathBuf, windows: bool) -> PathBuf {
@@ -89,6 +120,23 @@ fn default_data_root(base: PathBuf, windows: bool) -> PathBuf {
     } else {
         base.join("LocalApp")
     }
+}
+
+/// Studio 源码项目默认根目录：用户可见的 Documents/LocalApp/。
+///
+/// 不放 app data（~/Library/Application Support/）的原因：
+/// 1. 用户能在 Finder 里自然看到、编辑源码；
+/// 2. coding agent（opencode/claude）把 app data 目录当作"外部目录"拦截，
+///    导致 Read/Write 被拒绝；
+/// 3. 源码是用户资产，不该藏在系统数据目录里。
+fn default_projects_root() -> PathBuf {
+    if let Some(docs) = dirs::document_dir() {
+        return docs.join("LocalApp");
+    }
+    // 兜底：home/LocalApp
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("LocalApp")
 }
 
 #[cfg(test)]

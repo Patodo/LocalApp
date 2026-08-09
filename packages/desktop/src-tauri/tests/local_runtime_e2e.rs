@@ -350,6 +350,7 @@ impl DesktopFixture {
             ready_timeout: Duration::from_secs(10),
             restart_delay: Duration::from_millis(100),
             restart_limit: 1,
+            resources: manifest_directory.join("resources/local-runtime"),
         })
     }
 }

@@ -6,12 +6,14 @@ import type {
   DesktopSettings,
   DesktopSettingsUpdate,
   DesktopUpdateInfo,
+  LocalRuntimeSnapshot,
   ServerProfileSummary,
   TrustedApp,
 } from "../lib/types";
 
-export function SettingsView() {
+export function SettingsView({ runtime }: { runtime?: LocalRuntimeSnapshot }) {
   const gateway = getDesktopGateway();
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [settings, setSettings] = useState<DesktopSettings>();
   const [account, setAccount] = useState<AccountState>();
   const [trustedApps, setTrustedApps] = useState<TrustedApp[]>([]);
@@ -25,6 +27,8 @@ export function SettingsView() {
   const [profileName, setProfileName] = useState("");
   const [profileUrl, setProfileUrl] = useState("");
   const [profileKey, setProfileKey] = useState("");
+  const [editingCredentials, setEditingCredentials] = useState<string>();
+  const [credentialKeys, setCredentialKeys] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let disposed = false;
@@ -175,6 +179,9 @@ export function SettingsView() {
     setError(undefined);
     try {
       await action();
+      if (operation === "logout") {
+        setAccount(await gateway.getAccount());
+      }
       setPending(undefined);
     } catch {
       setError(failureMessage);
@@ -195,6 +202,7 @@ export function SettingsView() {
       setProfileName("");
       setProfileUrl("");
       setProfileKey("");
+      setAccount(await gateway.getAccount());
     } catch {
       setError("无法保存 Server profile，请检查名称、地址和 API Key。");
     } finally {
@@ -208,6 +216,7 @@ export function SettingsView() {
     setError(undefined);
     try {
       setProfiles(await gateway.removeServerProfile(name));
+      setAccount(await gateway.getAccount());
     } catch {
       setError("无法移除 Server profile。");
     } finally {
@@ -220,9 +229,36 @@ export function SettingsView() {
     setPending(`use-profile:${name}`);
     setError(undefined);
     try {
-      await gateway.useServerProfile(name);
+      const updated = await gateway.useServerProfile(name);
+      setProfiles(updated);
+      const nextAccount = await gateway.getAccount();
+      setAccount(nextAccount);
     } catch {
       setError("无法切换当前 Server。");
+    } finally {
+      setPending(undefined);
+    }
+  }
+
+  async function saveCredentials(name: string) {
+    const apiKey = credentialKeys[name]?.trim();
+    if (pending || !apiKey) return;
+    const profile = profiles.find((entry) => entry.name === name);
+    if (!profile) return;
+    setPending(`credentials:${name}`);
+    setError(undefined);
+    try {
+      setProfiles(await gateway.saveServerProfile({
+        name,
+        serverUrl: profile.serverUrl,
+        apiKey,
+      }));
+      setCredentialKeys((current) => ({ ...current, [name]: "" }));
+      setEditingCredentials(undefined);
+      setAccount(await gateway.getAccount());
+    } catch {
+      setError("无法保存登录凭证。");
+    } finally {
       setPending(undefined);
     }
   }
@@ -231,14 +267,37 @@ export function SettingsView() {
     <div className="view-stack settings-view">
       <div className="page-heading">
         <h1>设置</h1>
-        <p>管理账户连接、脚本环境与可信应用。</p>
+        <p>管理账户连接、服务器、脚本环境与可信应用。</p>
       </div>
       {error ? <div className="message-error" role="alert">{error}</div> : null}
-      <section className="settings-list" aria-label="桌面端偏好">
-        <SettingRow title="账户连接" description={account?.serverUrl || "尚未配置 LocalApp 服务器。"}>
-          <button className="secondary-button" disabled={!account || pending === "connection"} onClick={() => void toggleConnection()} type="button">
-            {account?.connection === "offline" ? "重新连接" : "断开连接"}
+
+      <nav aria-label="设置页签" className="settings-tabs" role="tablist">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            aria-selected={activeTab === tab.id}
+            className="settings-tab"
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            role="tab"
+            type="button"
+          >
+            {tab.label}
           </button>
+        ))}
+      </nav>
+
+      {activeTab === "general" ? (
+        <section className="settings-list" aria-label="桌面端偏好">
+        <SettingRow
+          title="本地运行服务"
+          description={runtime ? runtimeDescription(runtime) : "本地应用运行服务未启动。"}
+        >
+          {runtime ? (
+            <span className={`runtime-status is-${runtime.status}`} role="status">
+              <span className="status-dot" aria-hidden="true" />
+              {runtimeLabel(runtime.status)}
+            </span>
+          ) : null}
         </SettingRow>
         <SettingRow title="系统通知" description="允许 LocalApp 在系统通知中心显示新消息。">
           <PreferenceSwitch checked={settings?.notificationsEnabled ?? false} disabled={!settings || pending !== undefined} label="系统通知" onChange={(value) => void updatePreference("notificationsEnabled", value)} />
@@ -276,7 +335,81 @@ export function SettingsView() {
           </button>
         </SettingRow>
       </section>
+      ) : null}
 
+      {activeTab === "servers" ? (
+      <section className="settings-section" aria-labelledby="server-profiles-heading">
+        <div className="section-heading">
+          <h2 id="server-profiles-heading">服务器</h2>
+          <p>配置本地应用连接的 LocalApp 服务器与登录凭证。API Key 只保存在本机 Rust 配置中，不会回显。</p>
+        </div>
+        <div className="settings-list">
+          <SettingRow title="账户连接" description={account?.serverUrl || "尚未配置 LocalApp 服务器。"}>
+            <button className="secondary-button" disabled={!account || pending === "connection"} onClick={() => void toggleConnection()} type="button">
+              {account?.connection === "offline" ? "重新连接" : "断开连接"}
+            </button>
+          </SettingRow>
+        </div>
+        <div className="server-profile-list">
+          {profiles.length === 0 ? (
+            <div className="trusted-empty"><Server aria-hidden="true" size={19} />尚未配置服务器</div>
+          ) : profiles.map((profile) => (
+            <div className="server-profile-row" key={profile.name}>
+              <div>
+                <strong>{profile.name}</strong>
+                <span>{profile.serverUrl}</span>
+              </div>
+              <div className="profile-row-actions">
+                {profile.active ? (
+                  <span className="active-profile"><Check aria-hidden="true" size={14} />当前</span>
+                ) : (
+                  <button className="text-button" disabled={Boolean(pending)} onClick={() => void useProfile(profile.name)} type="button">设为当前</button>
+                )}
+                <button className="text-button" disabled={Boolean(pending)} onClick={() => setEditingCredentials(editingCredentials === profile.name ? undefined : profile.name)} type="button">
+                  {profile.loggedIn ? "更新凭证" : "配置凭证"}
+                </button>
+                <button aria-label={`移除 ${profile.name}`} className="icon-button" disabled={Boolean(pending)} onClick={() => void removeProfile(profile.name)} title="移除 Server profile" type="button"><Trash2 aria-hidden="true" size={16} /></button>
+              </div>
+              {editingCredentials === profile.name ? (
+                <form
+                  className="profile-credentials"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveCredentials(profile.name);
+                  }}
+                >
+                  <input
+                    aria-label={`${profile.name} 的 API Key`}
+                    autoComplete="off"
+                    onChange={(event) => setCredentialKeys((current) => ({ ...current, [profile.name]: event.target.value }))}
+                    placeholder={profile.loggedIn ? "输入新 API Key 可替换" : "输入 API Key"}
+                    type="password"
+                    value={credentialKeys[profile.name] ?? ""}
+                  />
+                  <button
+                    className="primary-button"
+                    disabled={Boolean(pending) || !credentialKeys[profile.name]?.trim()}
+                    type="submit"
+                  >
+                    保存凭证
+                  </button>
+                </form>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="settings-form server-profile-form">
+          <label><span>名称</span><input aria-label="Profile 名称" autoComplete="off" placeholder="production" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
+          <label><span>Server URL</span><input aria-label="Profile Server URL" autoComplete="url" placeholder="https://work.example" type="url" value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} /></label>
+          <label><span>API Key</span><input aria-label="Profile API Key" autoComplete="off" placeholder="仅写入本机" type="password" value={profileKey} onChange={(event) => setProfileKey(event.target.value)} /></label>
+          <div className="settings-form-actions">
+            <button className="primary-button" disabled={Boolean(pending) || !profileName || !profileUrl || !profileKey} onClick={() => void saveProfile()} type="button">保存 Server</button>
+          </div>
+        </div>
+      </section>
+      ) : null}
+
+      {activeTab === "environment" ? (
       <section className="settings-section" aria-labelledby="script-environment-heading">
         <div className="section-heading">
           <h2 id="script-environment-heading">脚本环境</h2>
@@ -301,42 +434,9 @@ export function SettingsView() {
           </div>
         </div>
       </section>
+      ) : null}
 
-      <section className="settings-section" aria-labelledby="server-profiles-heading">
-        <div className="section-heading">
-          <h2 id="server-profiles-heading">发布服务器</h2>
-          <p>为应用发布保存命名目标。API Key 只保存在本机 Rust 配置中，不会回显。</p>
-        </div>
-        <div className="server-profile-list">
-          {profiles.length === 0 ? (
-            <div className="trusted-empty"><Server aria-hidden="true" size={19} />尚未配置发布服务器</div>
-          ) : profiles.map((profile) => (
-            <div className="server-profile-row" key={profile.name}>
-              <div>
-                <strong>{profile.name}</strong>
-                <span>{profile.serverUrl}</span>
-              </div>
-              <div className="profile-row-actions">
-                {profile.active ? (
-                  <span className="active-profile"><Check aria-hidden="true" size={14} />当前</span>
-                ) : (
-                  <button className="text-button" disabled={Boolean(pending)} onClick={() => void useProfile(profile.name)} type="button">设为当前</button>
-                )}
-                <button aria-label={`移除 ${profile.name}`} className="icon-button" disabled={Boolean(pending)} onClick={() => void removeProfile(profile.name)} title="移除 Server profile" type="button"><Trash2 aria-hidden="true" size={16} /></button>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="settings-form server-profile-form">
-          <label><span>名称</span><input aria-label="Profile 名称" autoComplete="off" placeholder="production" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
-          <label><span>Server URL</span><input aria-label="Profile Server URL" autoComplete="url" placeholder="https://work.example" type="url" value={profileUrl} onChange={(event) => setProfileUrl(event.target.value)} /></label>
-          <label><span>API Key</span><input aria-label="Profile API Key" autoComplete="off" placeholder="仅写入本机" type="password" value={profileKey} onChange={(event) => setProfileKey(event.target.value)} /></label>
-          <div className="settings-form-actions">
-            <button className="primary-button" disabled={Boolean(pending) || !profileName || !profileUrl || !profileKey} onClick={() => void saveProfile()} type="button">保存 Server</button>
-          </div>
-        </div>
-      </section>
-
+      {activeTab === "trusted" ? (
       <section className="settings-section" aria-labelledby="trusted-apps-heading">
         <div className="section-heading">
           <h2 id="trusted-apps-heading">可信应用</h2>
@@ -355,9 +455,19 @@ export function SettingsView() {
           </div>
         )}
       </section>
+      ) : null}
     </div>
   );
 }
+
+type SettingsTab = "general" | "servers" | "environment" | "trusted";
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "general", label: "通用" },
+  { id: "servers", label: "服务器" },
+  { id: "environment", label: "脚本环境" },
+  { id: "trusted", label: "可信应用" },
+];
 
 function SettingRow({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
   return <div className="setting-row"><div><h2>{title}</h2><p>{description}</p></div>{children}</div>;
@@ -365,4 +475,26 @@ function SettingRow({ title, description, children }: { title: string; descripti
 
 function PreferenceSwitch({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (value: boolean) => void }) {
   return <label className="preference-switch"><input aria-label={label} checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} role="switch" type="checkbox" /><span aria-hidden="true" /></label>;
+}
+
+function runtimeLabel(status: LocalRuntimeSnapshot["status"]): string {
+  switch (status) {
+    case "running":
+      return "运行中";
+    case "starting":
+      return "启动中";
+    case "restarting":
+      return "正在恢复";
+    case "failed":
+      return "不可用";
+    case "stopped":
+      return "已停止";
+  }
+}
+
+function runtimeDescription(runtime: LocalRuntimeSnapshot): string {
+  if (runtime.error) return runtime.error;
+  return runtime.ready
+    ? `本机 ${runtime.ready.host}:${runtime.ready.port}，已重启 ${runtime.restartCount} 次。`
+    : "本地应用运行服务启动中。";
 }

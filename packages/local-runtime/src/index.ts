@@ -21,6 +21,21 @@ import {
   LOCAL_SHELL_SCRIPT,
   LOCAL_SHELL_STYLES,
 } from "./shell-assets.js";
+import { ShellData } from "./shell-data.js";
+
+// ── PlatformShell 静态产物(启动时从 resources 读取,全局共享)──
+const resourcesDir = process.env.LOCALAPP_LOCAL_RESOURCES ?? "";
+const platformShellHtmlPath = resourcesDir
+  ? path.join(resourcesDir, "platform-shell", "placeholder", "placeholder.html")
+  : "";
+let platformShellHtml: string | null = null;
+if (platformShellHtmlPath) {
+  try {
+    platformShellHtml = fs.readFileSync(platformShellHtmlPath, "utf8");
+  } catch {
+    platformShellHtml = null;
+  }
+}
 
 const APP_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const CONTENT_KEY_PATTERN = /^[a-zA-Z0-9._-]+$/;
@@ -65,6 +80,7 @@ type AppState = {
   error?: string;
   dbFile: string;
   filesRoot: string;
+  shellData: ShellData;
 };
 
 type Ticket = {
@@ -94,6 +110,7 @@ export async function createLocalRuntime(
       initialized: false,
       dbFile: path.join(registration.dataRoot, "app.db"),
       filesRoot: path.join(registration.dataRoot, "files"),
+      shellData: new ShellData({ dataRoot: registration.dataRoot, appId: registration.id }),
     });
   }
 
@@ -138,6 +155,13 @@ export async function createLocalRuntime(
     }
     if (!apps.has(host)) {
       return reply.status(421).send({ success: false, error: "Invalid local application host" });
+    }
+    // 提前拦截 _next 静态资源(绕过 Fastify 路由器对方括号/圆括号路径段的特殊处理)。
+    // PlatformShell 的 Next.js chunks 路径含 [userId]/[name]/(dashboard) 等特殊字符。
+    if (resourcesDir && request.url.startsWith("/_next/")) {
+      const relPath = decodeURIComponent(request.url.replace(/^\/_next\//, "").split("?")[0]);
+      const filePath = path.join(resourcesDir, "_next", relPath);
+      return serveStaticFile(filePath, reply);
     }
   });
 
@@ -227,6 +251,97 @@ export async function createLocalRuntime(
     state.error = undefined;
     return { success: true, data: { appId, status: "evicted" } };
   });
+
+  // ── 静态资源:_next/(PlatformShell chunks/css)已在 onRequest hook 提前拦截 ──
+  // platformShellHtml / resourcesDir 在模块级初始化(见文件顶部)。
+
+  // ── PlatformShell 依赖的本地 API(必须在 /api/* 之前注册)──
+  // session + origin 校验与 /api/* 一致。
+  function shellApiGuard(request: FastifyRequest, reply: FastifyReply): AppState | null {
+    const appId = parseAppHost(request.headers.host, apps);
+    if (!appId) {
+      reply.status(421).send({ success: false, error: "Invalid host" });
+      return null;
+    }
+    if (!authenticateAppSession(request, appId, sessions)) {
+      reply.status(401).send({ success: false, error: "Local application session required" });
+      return null;
+    }
+    if (request.method !== "GET" && !hasExpectedOrigin(request, appId)) {
+      reply.status(403).send({ success: false, error: "Origin does not match application" });
+      return null;
+    }
+    const state = apps.get(appId);
+    if (!state) {
+      reply.status(404).send({ success: false, error: "Application not found" });
+      return null;
+    }
+    return state;
+  }
+
+  server.get("/api/me", (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleMe(request, reply);
+  });
+  server.get("/api/users", (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleUsers(request, reply);
+  });
+  server.get("/api/pages/:userId/:name/meta", (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleMeta(request, reply);
+  });
+  server.get("/api/favorites/count", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleFavoritesCount(request, reply);
+  });
+  server.get("/api/favorites/check", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleFavoritesCheck(request, reply);
+  });
+  server.post("/api/favorites", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleFavoritesCreate(request, reply);
+  });
+  server.delete("/api/favorites/:pagePath", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleFavoritesDelete(request, reply);
+  });
+  server.get("/api/issues", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleIssuesList(request, reply);
+  });
+  server.post("/api/issues", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleIssueCreate(request, reply);
+  });
+  server.patch("/api/issues/:id", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleIssueUpdate(request, reply);
+  });
+  server.get("/api/issues/config", (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    return state.shellData.handleIssuesConfig(request, reply);
+  });
+  // issues 子端点(labels/views/milestones 等)—— 本地降级返回空
+  for (const sub of ["/api/issues/labels", "/api/issues/views", "/api/issues/milestones"]) {
+    server.get(sub, (request, reply) => {
+      const state = shellApiGuard(request, reply);
+      if (!state) return;
+      return state.shellData.handleIssuesSubEmpty(request, reply);
+    });
+  }
 
   server.get("/*", async (request, reply) => {
     const appId = parseAppHost(request.headers.host, apps);
@@ -508,6 +623,21 @@ function serveStaticOrShell(
 }
 
 function serveShell(state: AppState, reply: FastifyReply) {
+  // 优先用 PlatformShell(与远程 server 一致的导航栏)。
+  // platformShellHtml 是启动时从 resources 读的全局缓存(见路由注册处)。
+  if (platformShellHtml) {
+    const html = injectPlatformShell(platformShellHtml, state.registration.id);
+    return reply
+      .type("text/html; charset=utf-8")
+      .header(
+        "content-security-policy",
+        // PlatformShell 的 Next.js chunks 是同源 /_next/,script-src 'self' 兼容。
+        // style-src 加 'unsafe-inline'(Next.js 有内联样式)。
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      )
+      .send(html);
+  }
+  // 回退:自制本地 shell(PlatformShell 不可用时)
   const indexPath = path.join(state.registration.versionRoot, "dist", "index.html");
   const index = fs.readFileSync(indexPath, "utf8");
   return reply
@@ -517,6 +647,40 @@ function serveShell(state: AppState, reply: FastifyReply) {
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     )
     .send(injectLocalShell(index, state.registration.id));
+}
+
+/**
+ * 把 PlatformShell placeholder.html 改写为本地可用形态。
+ *
+ * 1. RSC payload 字符串替换:placeholder → local-user / appId(复用 serve.ts 逻辑)
+ * 2. 注入 native shell template(app-resource-base="/",本地同源)
+ */
+function injectPlatformShell(html: string, appId: string): string {
+  const userId = "local-user";
+  let result = html
+    .replace(/\\"platform-shell\\",\\"placeholder\\",\\"placeholder\\"/g, `\\"platform-shell\\",\\"${userId}\\",\\"${appId}\\"`)
+    .replace(/\[\\"userId\\",\\"placeholder\\"/g, `[\\"userId\\",\\"${userId}\\"`)
+    .replace(/\[\\"name\\",\\"placeholder\\"/g, `[\\"name\\",\\"${appId}\\"`);
+  // 注入 native shell 标记(本地 app 资源同源,base = "/")
+  const marker = `<template data-localapp-native-shell="true" data-localapp-app-root="root" data-localapp-app-resource-base="/"></template>`;
+  if (!result.includes("data-localapp-native-shell")) {
+    result = result.replace("</body>", `${marker}</body>`);
+  }
+  return result;
+}
+
+/** 从 resources 目录服务静态文件(_next chunks/css 等)。 */
+function serveStaticFile(filePath: string, reply: FastifyReply) {
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    return reply.status(404).send({ success: false, error: "Static asset not found" });
+  }
+  // 防路径穿越
+  const resourcesRoot = path.resolve(resourcesDir);
+  if (!resolved.startsWith(`${resourcesRoot}${path.sep}`) && resolved !== resourcesRoot) {
+    return reply.status(400).send({ success: false, error: "Invalid asset path" });
+  }
+  return reply.type(contentType(resolved)).send(fs.createReadStream(resolved));
 }
 
 function injectLocalShell(index: string, appId: string): string {

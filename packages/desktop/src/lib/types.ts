@@ -189,6 +189,94 @@ export interface TaskLogEvent {
   truncated: boolean;
 }
 
+// ── Studio（应用源码管理 + agent 工作台）──
+
+export interface StudioProject {
+  appId: string;
+  name: string;
+  sourcePath: string;
+  createdAt: number;
+  lastBuiltAt?: number | null;
+  presentOnDisk: boolean;
+}
+
+export interface CreatedStudioProject {
+  appId: string;
+  sourcePath: string;
+}
+
+export interface StudioDirEntry {
+  name: string;
+  isDir: boolean;
+  size?: number | null;
+}
+
+export interface BuildOutcome {
+  appId: string;
+  version: string;
+  packagePath: string;
+  sha256: string;
+  size: number;
+}
+
+export interface InstallOutcome {
+  appId: string;
+  version: string;
+  upgraded: boolean;
+  openable: boolean;
+}
+
+export type AgentSessionStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timedOut";
+
+export interface AgentSession {
+  id: string;
+  appId: string;
+  agentKind: string;
+  status: AgentSessionStatus;
+  startedAt: number;
+  completedAt?: number | null;
+  exitCode?: number | null;
+  error?: string | null;
+  stdoutPath: string;
+  stderrPath?: string | null;
+  opencodeSessionId?: string | null;
+}
+
+export interface StartedAgentSession {
+  sessionId: string;
+  appId: string;
+  agentKind: string;
+  status: AgentSessionStatus;
+  stdoutPath: string;
+  stderrPath: string;
+  supportsContinuation: boolean;
+}
+
+export interface AvailableAgent {
+  kind: string;
+  binary: string;
+  isDefault: boolean;
+}
+
+export interface AgentSessionLogs {
+  sessionId: string;
+  stdout: string;
+  stderr: string;
+}
+
+export interface AgentLogEvent {
+  sessionId: string;
+  stream: "stdout" | "stderr";
+  message: string;
+  truncated: boolean;
+}
+
 export interface ActionSnapshot {
   id: string;
   status: ActionStatus;
@@ -203,4 +291,7 @@ export type DesktopEvent =
   | { type: "inbox:missed"; count: number }
   | { type: "task:updated"; task: LocalTask }
   | { type: "task:log"; log: TaskLogEvent }
+  | { type: "agent:log"; log: AgentLogEvent }
+  | { type: "agent:updated"; sessionId: string; appId: string; agentKind: string }
+  | { type: "local-apps:changed" }
   | { type: "action:activation" };

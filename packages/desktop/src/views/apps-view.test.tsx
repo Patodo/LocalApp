@@ -4,18 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   LocalApp,
-  LocalRuntimeSnapshot,
   ServerProfileSummary,
 } from "../lib/types";
 import { AppsView } from "./apps-view";
 
 afterEach(cleanup);
-
-const runtime: LocalRuntimeSnapshot = {
-  status: "running",
-  restartCount: 0,
-  ready: { host: "127.0.0.1", port: 43127, pid: 1234 },
-};
 
 const app: LocalApp = {
   appId: "notes-app",
@@ -49,7 +42,6 @@ it("lets an offline personal user install and open local applications", async ()
     <AppsView
       apps={[app]}
       profiles={profiles}
-      runtime={runtime}
       onDelete={vi.fn()}
       onInstall={onInstall}
       onOpen={onOpen}
@@ -58,10 +50,9 @@ it("lets an offline personal user install and open local applications", async ()
     />,
   );
 
-  expect(screen.getByRole("heading", { name: "本地应用" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "应用" })).toBeVisible();
   expect(screen.getByText("notes-app")).toBeVisible();
   expect(screen.getByText("1.0.0")).toBeVisible();
-  expect(screen.getByText("运行中")).toBeVisible();
   expect(screen.queryByText(/登录/)).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "安装应用包" }));
@@ -78,7 +69,6 @@ it("distinguishes uninstall with retained data from permanent deletion", async (
     <AppsView
       apps={[app]}
       profiles={profiles}
-      runtime={runtime}
       onDelete={onDelete}
       onInstall={vi.fn()}
       onOpen={vi.fn()}
@@ -112,7 +102,6 @@ it("publishes to an explicitly selected profile without offering local data", as
     <AppsView
       apps={[app]}
       profiles={profiles}
-      runtime={runtime}
       onDelete={vi.fn()}
       onInstall={vi.fn()}
       onOpen={vi.fn()}
@@ -148,7 +137,6 @@ it("shows each app health independently and prevents opening an app with an acti
         },
       ]}
       profiles={profiles}
-      runtime={runtime}
       onDelete={vi.fn()}
       onInstall={vi.fn()}
       onOpen={vi.fn()}
@@ -170,7 +158,6 @@ it("shows an actionable app error when opening fails before runtime health is av
     <AppsView
       apps={[{ ...app, status: "unavailable" }]}
       profiles={profiles}
-      runtime={runtime}
       onDelete={vi.fn()}
       onInstall={vi.fn()}
       onOpen={vi.fn().mockRejectedValue(

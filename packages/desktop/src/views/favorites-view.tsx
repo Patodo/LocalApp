@@ -1,9 +1,9 @@
-import { ExternalLink, Heart, RefreshCw, Trash2 } from "lucide-react";
+import { ExternalLink, Heart, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getDesktopGateway } from "../lib/desktop-gateway";
 import type { Favorite } from "../lib/types";
 
-export function FavoritesView() {
+export function FavoritesView({ isLocalMode = false }: { isLocalMode?: boolean }) {
   const gateway = getDesktopGateway();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
   const [search, setSearch] = useState("");
@@ -12,6 +12,9 @@ export function FavoritesView() {
   const [openingFavoriteId, setOpeningFavoriteId] = useState<number>();
   const [error, setError] = useState<string>();
   const [canRetryLoad, setCanRetryLoad] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
+  const [addPath, setAddPath] = useState("");
+  const [addName, setAddName] = useState("");
   const requestGeneration = useRef(0);
 
   const visibleFavorites = useMemo(() => {
@@ -88,6 +91,25 @@ export function FavoritesView() {
     }
   }
 
+  async function addFavorite() {
+    const path = addPath.trim();
+    if (!path || isAdding) return;
+    setIsAdding(true);
+    setError(undefined);
+    setCanRetryLoad(false);
+
+    try {
+      const favorite = await gateway.addFavorite(path, addName.trim() || undefined);
+      setFavorites((current) => [favorite, ...current]);
+      setAddPath("");
+      setAddName("");
+    } catch {
+      setError("无法添加收藏，请检查应用路径后重试。");
+    } finally {
+      setIsAdding(false);
+    }
+  }
+
   return (
     <div className="view-stack favorites-view">
       <div className="favorites-heading">
@@ -119,6 +141,40 @@ export function FavoritesView() {
         />
       </label>
 
+      {isLocalMode ? (
+        <form
+          className="favorites-add"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void addFavorite();
+          }}
+        >
+          <input
+            aria-label="应用路径"
+            onChange={(event) => setAddPath(event.target.value)}
+            placeholder="应用路径，如 owner/app"
+            required
+            type="text"
+            value={addPath}
+          />
+          <input
+            aria-label="收藏名称"
+            onChange={(event) => setAddName(event.target.value)}
+            placeholder="名称（可选）"
+            type="text"
+            value={addName}
+          />
+          <button
+            className="icon-button"
+            disabled={isAdding}
+            title="添加收藏"
+            type="submit"
+          >
+            <Plus aria-hidden="true" size={18} />
+          </button>
+        </form>
+      ) : null}
+
       {error ? (
         <div className="message-error" role="alert">
           <span>{error}</span>
@@ -131,7 +187,9 @@ export function FavoritesView() {
       ) : null}
 
       {isLoading && favorites.length === 0 ? <FavoritesLoading /> : null}
-      {!isLoading && favorites.length === 0 && !error ? <FavoritesEmpty /> : null}
+      {!isLoading && favorites.length === 0 && !error ? (
+        <FavoritesEmpty isLocalMode={isLocalMode} />
+      ) : null}
       {favorites.length > 0 && visibleFavorites.length === 0 ? <FavoritesNoResults /> : null}
       {visibleFavorites.length > 0 ? (
         <section aria-label="收藏列表" className="favorites-list">
@@ -192,12 +250,16 @@ function FavoritesLoading() {
   );
 }
 
-function FavoritesEmpty() {
+function FavoritesEmpty({ isLocalMode = false }: { isLocalMode?: boolean }) {
   return (
     <section className="empty-state" aria-label="收藏为空">
       <Heart aria-hidden="true" size={26} strokeWidth={1.6} />
       <h2>还没有收藏</h2>
-      <p>在浏览器中收藏应用后，它们会出现在这里。</p>
+      <p>
+        {isLocalMode
+          ? "在上方输入应用路径，把本地应用加入收藏。"
+          : "在浏览器中收藏应用后，它们会出现在这里。"}
+      </p>
     </section>
   );
 }

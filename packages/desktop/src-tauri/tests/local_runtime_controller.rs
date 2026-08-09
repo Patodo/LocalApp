@@ -201,6 +201,7 @@ if ({crash}) {{
             ready_timeout: Duration::from_secs(5),
             restart_delay: Duration::from_millis(150),
             restart_limit: 3,
+            resources: PathBuf::new(),
         }
     }
 }

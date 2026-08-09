@@ -1,10 +1,11 @@
 use crate::AppState;
+use crate::apply_server_config;
 use localapp_core::{
     ProfileStore, PublishResult, ResolvedTarget, ServerProfile, TargetSelector,
     publish_app_version, resolve_target,
 };
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +22,9 @@ pub(crate) fn list_server_profiles() -> Result<Vec<ServerProfileSummary>, String
 }
 
 #[tauri::command]
-pub(crate) fn save_server_profile(
+pub(crate) async fn save_server_profile(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
     name: String,
     server_url: String,
     api_key: String,
@@ -32,21 +35,38 @@ pub(crate) fn save_server_profile(
         server_url,
         api_key,
     })?;
+    // 第一个保存的 profile 自动激活（热生效，不重启）。
+    if store.active_profile.is_none() {
+        if let Some(first) = store.profiles.keys().next().cloned() {
+            store.use_profile(&first)?;
+        }
+    }
+    apply_server_config(&app, &state).await?;
     Ok(public_profiles(&store))
 }
 
 #[tauri::command]
-pub(crate) fn remove_server_profile(name: String) -> Result<Vec<ServerProfileSummary>, String> {
+pub(crate) async fn remove_server_profile(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<ServerProfileSummary>, String> {
     let mut store = ProfileStore::load()?;
     store.remove(&name)?;
+    apply_server_config(&app, &state).await?;
     Ok(public_profiles(&store))
 }
 
 #[tauri::command]
-pub(crate) fn use_server_profile(app: AppHandle, name: String) -> Result<(), String> {
+pub(crate) async fn use_server_profile(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Vec<ServerProfileSummary>, String> {
     let mut store = ProfileStore::load()?;
     store.use_profile(&name)?;
-    app.restart()
+    apply_server_config(&app, &state).await?;
+    Ok(public_profiles(&store))
 }
 
 #[tauri::command]

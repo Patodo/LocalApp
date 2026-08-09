@@ -21,6 +21,7 @@ dialoguer = "0.11"
 include_dir = "0.7"
 rusqlite = { version = "0.31", features = ["bundled"] }
 localapp-core = { path = "../localapp-core" }
+localapp-template = { path = "../localapp-template" }
 
 [dev-dependencies]
 httpmock = "0.7"

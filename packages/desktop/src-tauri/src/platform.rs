@@ -1,3 +1,5 @@
+use crate::local_platform::{LocalFavoriteRow, LocalInboxRow, LocalPlatformRepository};
+use crate::local_store::LocalStore;
 use localapp_core::{Config, PlatformClient};
 use serde::{Deserialize, Serialize};
 use url::form_urlencoded;
@@ -8,6 +10,16 @@ pub struct InboxService {
 
 pub struct FavoriteService {
     client: PlatformClient,
+}
+
+/// 本地数据源的消息服务（无远程 server 配置时使用）。
+pub struct LocalInboxService<'a> {
+    repository: LocalPlatformRepository<'a>,
+}
+
+/// 本地数据源的收藏服务（无远程 server 配置时使用）。
+pub struct LocalFavoriteService<'a> {
+    repository: LocalPlatformRepository<'a>,
 }
 
 impl FavoriteService {
@@ -24,6 +36,27 @@ impl FavoriteService {
             .await
             .map_err(favorites_error)?;
         favorites.into_iter().map(TryInto::try_into).collect()
+    }
+
+    pub async fn add(
+        &self,
+        stored_page_path: &str,
+        page_name: Option<&str>,
+        owner_name: Option<&str>,
+    ) -> Result<Favorite, String> {
+        let favorite: ServerFavorite = self
+            .client
+            .post(
+                "/api/favorites",
+                &serde_json::json!({
+                    "pagePath": stored_page_path,
+                    "pageName": page_name,
+                    "ownerName": owner_name,
+                }),
+            )
+            .await
+            .map_err(|error| format!("Could not save LocalApp favorite: {error}"))?;
+        favorite.try_into()
     }
 
     pub async fn remove(&self, page_path: &str) -> Result<(), String> {
@@ -87,6 +120,124 @@ impl InboxService {
             .map_err(platform_error)?;
         Ok(result.updated)
     }
+}
+
+impl<'a> LocalInboxService<'a> {
+    pub fn new(store: &'a LocalStore) -> Self {
+        Self {
+            repository: LocalPlatformRepository::new(store),
+        }
+    }
+
+    pub fn list(&self, cursor: Option<&str>, unread_only: bool) -> Result<InboxPage, String> {
+        // 本地分页游标 = 上次返回的 created_at（毫秒），每页 20 条。
+        let offset: i64 = cursor
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default();
+        let rows = self.repository.list_inbox(unread_only, 20, offset as usize)?;
+        let has_more = rows.len() == 20;
+        let next_cursor = if has_more {
+            rows.last().map(|row| row.created_at.to_string())
+        } else {
+            None
+        };
+        Ok(InboxPage {
+            items: rows.into_iter().map(local_inbox_item).collect(),
+            next_cursor,
+        })
+    }
+
+    pub fn unread_count(&self) -> Result<u32, String> {
+        self.repository.unread_count()
+    }
+
+    pub fn mark_read(&self, notification_id: &str) -> Result<InboxItem, String> {
+        self.repository
+            .mark_read(notification_id)?
+            .map(local_inbox_item)
+            .ok_or_else(|| "Local message not found".to_string())
+    }
+
+    pub fn delete(&self, notification_id: &str) -> Result<(), String> {
+        self.repository.delete(notification_id)
+    }
+
+    pub fn mark_all_read(&self) -> Result<u32, String> {
+        self.repository.mark_all_read()
+    }
+}
+
+impl<'a> LocalFavoriteService<'a> {
+    pub fn new(store: &'a LocalStore) -> Self {
+        Self {
+            repository: LocalPlatformRepository::new(store),
+        }
+    }
+
+    pub fn list(&self) -> Result<Vec<Favorite>, String> {
+        self.repository
+            .list_favorites()?
+            .into_iter()
+            .map(local_favorite)
+            .collect()
+    }
+
+    pub fn add(
+        &self,
+        stored_page_path: &str,
+        page_name: Option<&str>,
+        owner_name: Option<&str>,
+    ) -> Result<Favorite, String> {
+        let app_path = normalize_app_path(stored_page_path)?;
+        let row = self.repository.add_favorite(
+            &app_path,
+            &app_path,
+            page_name,
+            owner_name,
+        )?;
+        local_favorite(row)
+    }
+
+    pub fn remove(&self, stored_page_path: &str) -> Result<(), String> {
+        let app_path = normalize_app_path(stored_page_path)?;
+        self.repository.remove_favorite(&app_path)
+    }
+}
+
+fn local_inbox_item(row: LocalInboxRow) -> InboxItem {
+    InboxItem {
+        id: row.id,
+        app_owner: row.app_owner,
+        app_name: row.app_name,
+        title: row.title,
+        body: row.body,
+        url: row.url,
+        priority: row.priority,
+        created_at: format_millis(row.created_at),
+        read: row.read_at.is_some(),
+    }
+}
+
+fn local_favorite(row: LocalFavoriteRow) -> Result<Favorite, String> {
+    let id = row
+        .created_at
+        .unsigned_abs()
+        .wrapping_mul(1_000_000)
+        .wrapping_add(row.stored_page_path.len() as u64);
+    Ok(Favorite {
+        id,
+        app_path: row.app_path,
+        stored_page_path: row.stored_page_path,
+        page_name: row.page_name,
+        owner_name: row.owner_name,
+        created_at: format_millis(row.created_at),
+    })
+}
+
+pub(crate) fn format_millis(millis: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(millis)
+        .map(|date| date.to_rfc3339())
+        .unwrap_or_else(|| millis.to_string())
 }
 
 #[derive(Default, Deserialize)]

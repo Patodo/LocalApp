@@ -9,14 +9,28 @@
         "offset": { "type": "number", "required": true }
       },
       "result": { "mode": "page", "maxRows": 100, "maxBytes": 65536 },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:fb685b9370cf289a0b8efc2857f062a11b7cb5436220f858715346bfaae961cc"
+      }
     },
     "$work_items.count": {
       "kind": "query",
       "sql": "SELECT COUNT(*) AS count FROM work_items",
       "params": {},
       "result": { "mode": "aggregate", "maxRows": 1, "maxBytes": 4096 },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:b55c286c41d798ac2cfc78b729b64cee4ee58e4b16f7e330d1fc4a04c3007ba5"
+      }
     },
     "$work_items.get": {
       "kind": "query",
@@ -25,7 +39,14 @@
         "id": { "type": "number", "required": true }
       },
       "result": { "mode": "single", "maxRows": 1, "maxBytes": 8192 },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:6bf8e8a70f128ad0f228101c5684df78936177861f9def2c645467d441f8dbcd"
+      }
     },
     "work_items.mine": {
       "kind": "query",
@@ -35,14 +56,28 @@
         "offset": { "type": "number", "required": true }
       },
       "result": { "mode": "page", "maxRows": 100, "maxBytes": 65536 },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:4669335c90a90bb68ba423f56571ad45205d7847e62159feeeaf99fa765144ed"
+      }
     },
     "work_items.dashboard": {
       "kind": "query",
       "sql": "SELECT status, COUNT(*) AS count FROM work_items GROUP BY status ORDER BY status",
       "params": {},
       "result": { "mode": "aggregate", "maxRows": 20, "maxBytes": 8192 },
-      "access": "authenticated"
+      "access": "authenticated",
+      "security": {
+        "mode": "generated",
+        "template": "authenticated-v1",
+        "resource": "work_items",
+        "config": {},
+        "digest": "sha256:6acd7c20bbfcf789e14e4744bff2a14f7b1310bd9e8868254771a37bff23f60f"
+      }
     }
   }
 }

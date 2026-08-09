@@ -27,6 +27,9 @@ pub struct LocalRuntimeLaunch {
     pub ready_timeout: Duration,
     pub restart_delay: Duration,
     pub restart_limit: u32,
+    /// resources/local-runtime 目录(含 PlatformShell 静态产物 _next/ + platform-shell/)。
+    /// 传给子进程让它能读取并服务 PlatformShell。
+    pub resources: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -344,6 +347,7 @@ impl LocalRuntimeLaunch {
         }
         let node = resource_directory.join(if cfg!(windows) { "node.exe" } else { "node" });
         let script = resource_directory.join("local-runtime/localapp-local-runtime.mjs");
+        let resources = resource_directory.join("local-runtime");
         for (label, path) in [("Node.js", &node), ("Local Runtime", &script)] {
             if !path.is_file() {
                 return Err(format!(
@@ -361,6 +365,7 @@ impl LocalRuntimeLaunch {
             ready_timeout: Duration::from_secs(10),
             restart_delay: Duration::from_millis(500),
             restart_limit: 3,
+            resources,
         })
     }
 }
@@ -456,6 +461,7 @@ async fn launch_child(launch: &LocalRuntimeLaunch) -> Result<(Child, LocalRuntim
         .env("LOCALAPP_LOCAL_REGISTRY", &launch.registry)
         .env("LOCALAPP_LOCAL_CONTROL_TOKEN", &launch.control_token)
         .env("LOCALAPP_LOCAL_PORT", launch.port.to_string())
+        .env("LOCALAPP_LOCAL_RESOURCES", &launch.resources)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
