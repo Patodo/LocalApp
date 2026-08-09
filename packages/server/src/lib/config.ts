@@ -79,7 +79,6 @@ export interface PendingNetworkSettings {
 const warnedDeprecatedConfigDirs = new Set<string>();
 const JWT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const jwtRetryWait = new Int32Array(new SharedArrayBuffer(4));
-const JWT_LOCK_STALE_MS = 250;
 const JWT_PUBLICATION_RETRIES = 25;
 const UNSUPPORTED_HARD_LINK_CODES = new Set(["EOPNOTSUPP", "ENOTSUP", "EPERM", "EXDEV", "EINVAL"]);
 
@@ -267,7 +266,6 @@ function publishJwtWithRenameFallback(temporaryPath: string, jwtKeyFile: string,
           fs.rmSync(temporaryPath, { force: true });
           return readCompleteJwtSecret(jwtKeyFile);
         }
-        removeStaleJwtLock(lockPath);
         Atomics.wait(jwtRetryWait, 0, 0, 10);
       }
     }
@@ -281,21 +279,9 @@ function publishJwtWithRenameFallback(temporaryPath: string, jwtKeyFile: string,
     return secret;
   } finally {
     if (lockDescriptor !== undefined) {
-      try {
-        fs.closeSync(lockDescriptor);
-      } finally {
-        fs.rmSync(lockPath, { force: true });
-        syncDirectory(directory);
-      }
+      // Node has no atomic unlink-if-this-descriptor-still-owns-the-path operation.
+      fs.closeSync(lockDescriptor);
     }
-  }
-}
-
-function removeStaleJwtLock(lockPath: string): void {
-  try {
-    if (Date.now() - fs.statSync(lockPath).mtimeMs >= JWT_LOCK_STALE_MS) fs.rmSync(lockPath, { force: true });
-  } catch (error: unknown) {
-    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 

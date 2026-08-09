@@ -482,3 +482,137 @@ No matching process or root `.localapp-server/` directory remained.
 - Concurrent hard-link-disabled child processes all observe a single valid 43-character key; the tests also assert no temporary key or lock remains.
 - Existing malformed generated key files remain fail-closed; this deliberately follows the user ruling and does not add legacy content compatibility.
 - No Task 2 Fix Round 3 blocker remains. The existing Fastify `FSTDEP021` warning still appears during the full suite.
+
+---
+
+# Task 2 Fix Round 4 Report
+
+## Finding resolved
+
+The hard-link-unsupported JWT publisher no longer reclaims an aged `jwt.key.lock`. An existing lock is observed for the bounded 25 × 10ms retry window; if no complete canonical key appears, publication fails closed with `JWT publication lock at <path> did not become available`. The lock holder closes its descriptor but does not unlink the shared pathname because Node provides no atomic unlink-if-still-owned operation. This removes both name-based deletion paths that could delete a successor lock. Unique complete-before-publication key temporary files are still removed on every losing and error path.
+
+On hard-link-unsupported filesystems, a successful first publication deliberately leaves the `jwt.key.lock` tombstone. Later readers return the valid canonical key while preserving one secret; if that canonical key is removed while the lock remains, startup fails closed instead of silently replacing it. `JWT_SECRET` precedence and malformed canonical-key fail-closed behavior are unchanged, and no arbitrary legacy-key compatibility was added.
+
+## Exact covering test names
+
+Fix Round 4 regression:
+
+- `ServerConfigStore > does not steal an aged live fallback lock or publish competing JWT keys`
+
+Preserved JWT publication behavior:
+
+- `ServerConfigStore > atomically replaces server settings and repairs existing JWT key permissions`
+- `ServerConfigStore > gives concurrent first-start readers one complete JWT secret`
+- `ServerConfigStore > does not return an incomplete JWT key observed during first creation`
+- `ServerConfigStore > publishes a complete JWT key when hard-link publication is unsupported`
+- `ServerConfigStore > gives concurrent readers one complete JWT key when hard links are unsupported`
+- `ServerConfigStore > writes only public settings and keeps environment overrides authoritative`
+- `loadConfig > uses defaults when config.toml does not exist`
+
+The lifecycle protection run covered these exact supervisor tests:
+
+- `supervisor replaces the worker after a network rebind`
+- `supervisor recovers after hard death while a replacement worker is starting`
+- `supervisor supports a same-port host-only rebind`
+- `supervisor rolls back a pending candidate that fails to bind before readiness`
+- `pre-setup CLI LAN options remain contained to loopback and the package main supervises setup`
+- `supervisor test cleanup returns when the child has already exited`
+
+## RED evidence
+
+The deterministic test held an aged lock descriptor open, recorded its inode and content, then started two real fallback publishers with hard links disabled:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts -t "does not steal an aged live fallback lock or publish competing JWT keys"
+```
+
+Before the production change, stale reclamation allowed publication through the live lock and both publishers returned successfully:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 13 skipped (14)
+AssertionError: expected [ 'fulfilled', 'fulfilled' ] to deeply equal [ 'rejected', 'rejected' ]
+```
+
+## GREEN evidence
+
+The exact regression after removing name-based lock deletion:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts -t "does not steal an aged live fallback lock or publish competing JWT keys"
+```
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed | 13 skipped (14)
+```
+
+Focused configuration tests:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/config.test.ts
+```
+
+```text
+Test Files  2 passed (2)
+Tests  28 passed (28)
+```
+
+Server build:
+
+```sh
+pnpm -C packages/server build
+```
+
+```text
+@localapp/server build: tsc exit 0
+```
+
+Complete six-test supervisor suite:
+
+```sh
+node --test packages/server/tests/supervisor.node-test.mjs
+```
+
+```text
+tests 6
+pass 6
+fail 0
+```
+
+Before the full suite, isolation was established with no matching process and no repository-root data directory:
+
+```sh
+test ! -e .localapp-server
+if ps -axo pid=,command= | rg '[p]npm -C packages/server test|[v]itest/vitest\\.mjs run|packages/server/dist/(cli|worker)\\.js|supervisor\\.node-test\\.mjs'; then
+  exit 1
+fi
+```
+
+Exactly one isolated full Server suite was then run:
+
+```sh
+pnpm -C packages/server test
+```
+
+```text
+Test Files  123 passed (123)
+Tests  830 passed | 1 skipped (831)
+Duration  135.55s
+```
+
+The same process/data-directory hygiene check passed again after the suite.
+
+## Files changed in Fix Round 4
+
+- `packages/server/src/lib/config.ts`
+- `packages/server/tests/config-store.test.ts`
+- `.superpowers/sdd/2026-08-09-unified-server-and-tray/task-2-report.md`
+
+## Fix Round 4 self-review and concerns
+
+- No code path removes `jwt.key.lock`; therefore an aged live lock cannot be deleted through either stale reclamation or owner cleanup, even if its pathname is replaced externally.
+- The deterministic regression asserts two publishers both fail with the bounded lock error, the held lock retains its original inode and content, no canonical key is published, and both unique temporary files are cleaned.
+- Normal hard-link publication remains unchanged. The unsupported-hard-link fallback still publishes only a fully written/fsynced private key, concurrent readers receive the one canonical secret, and the canonical key remains mode `0600` on Unix.
+- A persistent fallback lock tombstone is the deliberate fail-closed tradeoff required by the lack of an atomic unlink-if-owned filesystem primitive. It is harmless while the valid canonical key exists; deleting the canonical key requires operator handling of the lock rather than unsafe automatic recovery.
+- No Task 2 Fix Round 4 blocker remains. The existing Fastify `FSTDEP021` warning appeared during the full suite and remains unrelated to this task.

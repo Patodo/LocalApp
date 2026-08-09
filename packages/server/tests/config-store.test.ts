@@ -212,7 +212,8 @@ describe("ServerConfigStore", () => {
     try {
       const config = await loadConfig({ DATA_DIR: dataDir });
       expect(config.jwtSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && (name.endsWith(".tmp") || name.endsWith(".lock")))).toEqual([]);
+      expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && name.endsWith(".tmp"))).toEqual([]);
+      expect(fs.existsSync(path.join(dataDir, "jwt.key.lock"))).toBe(true);
       if (process.platform !== "win32") expect(fs.statSync(path.join(dataDir, "jwt.key")).mode & 0o777).toBe(0o600);
     } finally {
       link.mockRestore();
@@ -241,6 +242,53 @@ describe("ServerConfigStore", () => {
 
     expect(new Set(outputs).size).toBe(1);
     expect(outputs[0]).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && (name.endsWith(".tmp") || name.endsWith(".lock")))).toEqual([]);
+    expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && name.endsWith(".tmp"))).toEqual([]);
+    expect(fs.existsSync(path.join(dataDir, "jwt.key.lock"))).toBe(true);
+  });
+
+  it("does not steal an aged live fallback lock or publish competing JWT keys", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    directories.push(dataDir);
+    const jwtKeyPath = path.join(dataDir, "jwt.key");
+    const lockPath = `${jwtKeyPath}.lock`;
+    const lockMarker = "live-lock-owner";
+    const lockDescriptor = fs.openSync(lockPath, "wx", 0o600);
+    fs.writeFileSync(lockDescriptor, lockMarker);
+    const oldTimestamp = new Date(Date.now() - 5_000);
+    fs.futimesSync(lockDescriptor, oldTimestamp, oldTimestamp);
+    const lockInode = fs.fstatSync(lockDescriptor).ino;
+    const moduleUrl = new URL("../src/lib/config.ts", import.meta.url).href;
+    const preload = path.resolve(import.meta.dirname, "fixtures/no-hard-link.cjs");
+    const program = [
+      `import { loadConfig } from ${JSON.stringify(moduleUrl)};`,
+      `loadConfig({ DATA_DIR: ${JSON.stringify(dataDir)} })`,
+      ".then((config) => process.stdout.write(config.jwtSecret))",
+      ".catch((error) => { console.error(error); process.exit(1); });",
+    ].join("");
+
+    try {
+      const results = await Promise.allSettled(Array.from({ length: 2 }, () => execFileAsync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", program],
+        {
+          cwd: path.resolve(import.meta.dirname, ".."),
+          env: { ...process.env, NODE_OPTIONS: `--require ${preload}` },
+        },
+      )));
+
+      expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      for (const result of results) {
+        if (result.status !== "rejected") continue;
+        expect(String((result.reason as { stderr?: string }).stderr ?? result.reason))
+          .toContain(`JWT publication lock at ${lockPath} did not become available`);
+      }
+      expect(fs.statSync(lockPath).ino).toBe(lockInode);
+      expect(fs.readFileSync(lockPath, "utf8")).toBe(lockMarker);
+      expect(fs.existsSync(jwtKeyPath)).toBe(false);
+      expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      fs.closeSync(lockDescriptor);
+      fs.rmSync(lockPath, { force: true });
+    }
   });
 });
