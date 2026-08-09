@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
@@ -125,6 +125,46 @@ describe("ServerConfigStore", () => {
     expect(fs.readdirSync(dataDir).filter((name) => name.includes(".server.json.") && name.endsWith(".tmp"))).toEqual([]);
   });
 
+  it("keeps the pending network configuration staged when directory fsync fails after rename", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    directories.push(dataDir);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const directorySyncError = Object.assign(new Error("injected post-rename directory fsync failure"), { code: "EIO" });
+    const store = createServerConfigStore({
+      env: { DATA_DIR: dataDir, JWT_SECRET: "test-secret" },
+      atomicFileOperations: {
+        mkdir: fsPromises.mkdir,
+        rename: fsPromises.rename,
+        rm: fsPromises.rm,
+        open: async (filePath, flags, mode) => {
+          const handle = await fsPromises.open(filePath, flags, mode);
+          if (String(filePath) === dataDir && flags === "r") {
+            return {
+              close: handle.close.bind(handle),
+              chmod: handle.chmod.bind(handle),
+              writeFile: handle.writeFile.bind(handle),
+              sync: async () => { throw directorySyncError; },
+            } as typeof handle;
+          }
+          return handle;
+        },
+      },
+    });
+    const config = await store.read();
+    const candidate = await store.validate({ ...config, listenPort: 43127 });
+
+    await expect(store.stageNetworkChange(candidate)).resolves.toBeUndefined();
+
+    expect(JSON.parse(fs.readFileSync(path.join(dataDir, "server.pending.json"), "utf8"))).toMatchObject({
+      candidate: { listenPort: 43127 },
+    });
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("directory fsync failed after commit"),
+      directorySyncError,
+    );
+    expect(fs.readdirSync(dataDir).filter((name) => name.includes(".server.pending.json.") && name.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("gives concurrent first-start readers one complete JWT secret", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
     directories.push(dataDir);
@@ -161,5 +201,46 @@ describe("ServerConfigStore", () => {
     } finally {
       await once(writer, "exit");
     }
+  });
+
+  it("publishes a complete JWT key when hard-link publication is unsupported", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    directories.push(dataDir);
+    const unsupported = Object.assign(new Error("hard links unsupported"), { code: "EOPNOTSUPP" });
+    const link = vi.spyOn(fs, "linkSync").mockImplementation(() => { throw unsupported; });
+
+    try {
+      const config = await loadConfig({ DATA_DIR: dataDir });
+      expect(config.jwtSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && (name.endsWith(".tmp") || name.endsWith(".lock")))).toEqual([]);
+      if (process.platform !== "win32") expect(fs.statSync(path.join(dataDir, "jwt.key")).mode & 0o777).toBe(0o600);
+    } finally {
+      link.mockRestore();
+    }
+  });
+
+  it("gives concurrent readers one complete JWT key when hard links are unsupported", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-server-config-"));
+    directories.push(dataDir);
+    const moduleUrl = new URL("../src/lib/config.ts", import.meta.url).href;
+    const preload = path.resolve(import.meta.dirname, "fixtures/no-hard-link.cjs");
+    const program = [
+      `import { loadConfig } from ${JSON.stringify(moduleUrl)};`,
+      `loadConfig({ DATA_DIR: ${JSON.stringify(dataDir)} })`,
+      ".then((config) => process.stdout.write(config.jwtSecret))",
+      ".catch((error) => { console.error(error); process.exit(1); });",
+    ].join("");
+
+    const outputs = await Promise.all(Array.from({ length: 12 }, async () => {
+      const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", program], {
+        cwd: path.resolve(import.meta.dirname, ".."),
+        env: { ...process.env, NODE_OPTIONS: `--require ${preload}` },
+      });
+      return stdout.trim();
+    }));
+
+    expect(new Set(outputs).size).toBe(1);
+    expect(outputs[0]).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(fs.readdirSync(dataDir).filter((name) => name.includes("jwt.key") && (name.endsWith(".tmp") || name.endsWith(".lock")))).toEqual([]);
   });
 });

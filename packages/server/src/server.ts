@@ -47,10 +47,11 @@ export interface BuildServerOptions {
   webRoot?: string;
   setupTokens?: SetupTokenStore;
   restartController?: RestartController;
+  configStore?: ServerConfigStore;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
-  const configStore = createServerConfigStore({ env: options.env ?? process.env });
+  const configStore = options.configStore ?? createServerConfigStore({ env: options.env ?? process.env });
   const config = await configStore.read();
   const app = Fastify({ ignoreTrailingSlash: true });
   app.decorate("config", config);

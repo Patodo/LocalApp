@@ -341,3 +341,144 @@ ps -axo pid=,command= | rg '[p]npm -C packages/server test|[v]itest/vitest\\.mjs
 - Temporary-write cleanup runs from one catch path around open/write/chmod/sync/rename/directory-sync, and the injected tests exercise each requested failure point.
 - Same-port host-only changes do not rely on whether a specific operating system permits a temporary overlapping bind; the real replacement worker remains the authoritative readiness check with rollback.
 - No Task 2 Fix Round 2 blocker remains. The existing Fastify `FSTDEP021` redirect deprecation warning appeared during the full suite and is unrelated to this task.
+
+---
+
+# Task 2 Fix Round 3 Report
+
+## Findings resolved
+
+1. **Post-rename directory-fsync contract.** A successful rename is now treated as the commit point. If the following directory `fsync` fails with an otherwise unsupported error, Server logs a durability warning and continues the already committed transaction rather than reporting a failed staging operation. This rule also applies to the post-commit directory syncs used by finalize/rollback and JWT publication. Pre-rename write/chmod/file-fsync/rename failures still fail and clean the private temporary file.
+
+2. **Portable JWT publication.** The fast path remains private complete-temp → no-overwrite hard link. On filesystems that reject hard links with `EOPNOTSUPP`, `ENOTSUP`, `EPERM`, `EXDEV`, or `EINVAL`, publication uses a bounded exclusive `jwt.key.lock`, checks for an already-published valid key, atomically renames the fully fsynced private temporary key only while it owns the lock, and removes/syncs the lock in `finally`. A stale lock is removed only after 250ms; acquisition/read retries are bounded at 25 × 10ms. Malformed canonical key files still fail closed, per the user ruling.
+
+3. **Route-level transaction consistency.** `BuildServerOptions` now accepts the existing `ServerConfigStore` interface so the normal app config read and `/api/system/settings/network` route share the same injected store. The route-level fault test proves HTTP `202`, restart request, warning, and persisted `server.pending.json` remain aligned after the injected post-rename failure.
+
+## Exact covering test names
+
+Fix Round 3 additions:
+
+- `ServerConfigStore > keeps the pending network configuration staged when directory fsync fails after rename`
+- `system settings > continues a web rebind after the pending-file directory fsync fails post-rename`
+- `ServerConfigStore > publishes a complete JWT key when hard-link publication is unsupported`
+- `ServerConfigStore > gives concurrent readers one complete JWT key when hard links are unsupported`
+
+Previously resolved Task 2 behavior remains covered by these exact tests:
+
+- `ServerConfigStore > recognizes the complete IPv4 loopback range`
+- `ServerConfigStore > cleans the private settings temporary file when write fails`
+- `ServerConfigStore > cleans the private settings temporary file when chmod fails`
+- `ServerConfigStore > cleans the private settings temporary file when fsync fails`
+- `ServerConfigStore > cleans the private settings temporary file when rename fails`
+- `first-run setup > rejects setup initialization requests that do not originate from loopback`
+- `system settings > rejects a web rebind when an environment variable controls network settings`
+- `supervisor replaces the worker after a network rebind`
+- `supervisor recovers after hard death while a replacement worker is starting`
+- `supervisor supports a same-port host-only rebind`
+- `supervisor rolls back a pending candidate that fails to bind before readiness`
+- `pre-setup CLI LAN options remain contained to loopback and the package main supervises setup`
+- `supervisor test cleanup returns when the child has already exited`
+
+## RED evidence
+
+Focused RED before implementation:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts
+```
+
+```text
+Test Files  1 failed (1)
+Tests  3 failed | 10 passed (13)
+```
+
+The named failures were:
+
+```text
+keeps the pending network configuration staged when directory fsync fails after rename
+  promise rejected "injected post-rename directory fsync failure" instead of resolving
+publishes a complete JWT key when hard-link publication is unsupported
+  Error: hard links unsupported
+gives concurrent readers one complete JWT key when hard links are unsupported
+  Error: hard links unsupported for test
+```
+
+The route-level injected-store RED, before `BuildServerOptions.configStore` was added:
+
+```sh
+pnpm -C packages/server exec vitest run tests/integration/system-settings.test.ts
+```
+
+```text
+system settings > continues a web rebind after the pending-file directory fsync fails post-rename
+  expected "warn" to be called with arguments
+  Number of calls: 0
+```
+
+This showed that the app was not using the fault-injected store, so the test could not establish API/staging alignment until the canonical store was injectable.
+
+## GREEN evidence
+
+Focused store/route tests and build:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/integration/system-settings.test.ts && pnpm -C packages/server build
+```
+
+```text
+Test Files  2 passed (2)
+Tests  16 passed (16)
+@localapp/server build: tsc exit 0
+```
+
+Amended focused tests and the complete six-test supervisor suite:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/integration/system-settings.test.ts tests/integration/setup-flow.test.ts tests/config.test.ts && node --test packages/server/tests/supervisor.node-test.mjs
+```
+
+```text
+Test Files  4 passed (4)
+Tests  33 passed (33)
+supervisor.node-test.mjs: 6 passed, 0 failed
+```
+
+Exactly one isolated full Server suite was started only after process hygiene confirmed no competing suite, supervisor, or worker:
+
+```sh
+pnpm -C packages/server test
+```
+
+```text
+Test Files  123 passed (123)
+Tests  829 passed | 1 skipped (830)
+Duration  127.34s
+```
+
+Final hygiene checks passed:
+
+```sh
+git diff --check
+test ! -e .localapp-server
+ps -axo pid=,command= | rg '[p]npm -C packages/server test|[v]itest/vitest\\.mjs run|packages/server/dist/(cli|worker)\\.js|supervisor\\.node-test\\.mjs'
+```
+
+No matching process or root `.localapp-server/` directory remained.
+
+## Files changed in Fix Round 3
+
+- `packages/server/src/lib/config.ts`
+- `packages/server/src/lib/server-config-store.ts`
+- `packages/server/src/server.ts`
+- `packages/server/tests/config-store.test.ts`
+- `packages/server/tests/integration/system-settings.test.ts`
+- `packages/server/tests/fixtures/no-hard-link.cjs`
+- `.superpowers/sdd/2026-08-09-unified-server-and-tray/task-2-report.md`
+
+## Fix Round 3 self-review and concerns
+
+- A write is no longer reported as failed after its canonical filename has been committed solely because a directory durability flush failed. The warning records that the committed state may not yet be crash-durable on that filesystem.
+- The fallback key protocol never renames a private temporary key until it holds the exclusive bounded lock, and every loser, error path, and winner lock cleanup removes its private temp/lock path in `finally` or the caller cleanup path.
+- Concurrent hard-link-disabled child processes all observe a single valid 43-character key; the tests also assert no temporary key or lock remains.
+- Existing malformed generated key files remain fail-closed; this deliberately follows the user ruling and does not add legacy content compatibility.
+- No Task 2 Fix Round 3 blocker remains. The existing Fastify `FSTDEP021` warning still appears during the full suite.

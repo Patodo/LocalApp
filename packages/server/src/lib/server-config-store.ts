@@ -150,7 +150,8 @@ async function syncDirectory(directory: string, fileSystem: AtomicFileOperations
     }
   } catch (error: unknown) {
     const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-    if (!["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) throw error;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    console.warn("LocalApp configuration directory fsync failed after commit; continuing with committed settings", error);
   }
 }
 

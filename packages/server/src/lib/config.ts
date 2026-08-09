@@ -79,6 +79,9 @@ export interface PendingNetworkSettings {
 const warnedDeprecatedConfigDirs = new Set<string>();
 const JWT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const jwtRetryWait = new Int32Array(new SharedArrayBuffer(4));
+const JWT_LOCK_STALE_MS = 250;
+const JWT_PUBLICATION_RETRIES = 25;
+const UNSUPPORTED_HARD_LINK_CODES = new Set(["EOPNOTSUPP", "ENOTSUP", "EPERM", "EXDEV", "EINVAL"]);
 
 async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
   const tomlPath = path.join(dataDir, "config.toml");
@@ -226,19 +229,78 @@ function readOrCreateJwtSecret(jwtKeyFile: string): string {
       fs.closeSync(descriptor);
     }
     if (process.platform !== "win32") fs.chmodSync(temporaryPath, 0o600);
-    fs.linkSync(temporaryPath, jwtKeyFile);
+    try {
+      fs.linkSync(temporaryPath, jwtKeyFile);
+    } catch (error: unknown) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code === "EEXIST") {
+        fs.rmSync(temporaryPath, { force: true });
+        return readCompleteJwtSecret(jwtKeyFile);
+      }
+      if (UNSUPPORTED_HARD_LINK_CODES.has(code ?? "")) {
+        return publishJwtWithRenameFallback(temporaryPath, jwtKeyFile, secret);
+      }
+      throw error;
+    }
     fs.unlinkSync(temporaryPath);
     syncDirectory(directory);
     return secret;
   } catch (error: unknown) {
     fs.rmSync(temporaryPath, { force: true });
-    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    return readCompleteJwtSecret(jwtKeyFile);
+    throw error;
+  }
+}
+
+function publishJwtWithRenameFallback(temporaryPath: string, jwtKeyFile: string, secret: string): string {
+  const directory = path.dirname(jwtKeyFile);
+  const lockPath = `${jwtKeyFile}.lock`;
+  let lockDescriptor: number | undefined;
+  try {
+    for (let attempt = 0; attempt < JWT_PUBLICATION_RETRIES; attempt += 1) {
+      try {
+        lockDescriptor = fs.openSync(lockPath, "wx", 0o600);
+        break;
+      } catch (error: unknown) {
+        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+        if (code !== "EEXIST") throw error;
+        if (fs.existsSync(jwtKeyFile)) {
+          fs.rmSync(temporaryPath, { force: true });
+          return readCompleteJwtSecret(jwtKeyFile);
+        }
+        removeStaleJwtLock(lockPath);
+        Atomics.wait(jwtRetryWait, 0, 0, 10);
+      }
+    }
+    if (lockDescriptor === undefined) throw new Error(`JWT publication lock at ${lockPath} did not become available`);
+    if (fs.existsSync(jwtKeyFile)) {
+      fs.rmSync(temporaryPath, { force: true });
+      return readCompleteJwtSecret(jwtKeyFile);
+    }
+    fs.renameSync(temporaryPath, jwtKeyFile);
+    syncDirectory(directory);
+    return secret;
+  } finally {
+    if (lockDescriptor !== undefined) {
+      try {
+        fs.closeSync(lockDescriptor);
+      } finally {
+        fs.rmSync(lockPath, { force: true });
+        syncDirectory(directory);
+      }
+    }
+  }
+}
+
+function removeStaleJwtLock(lockPath: string): void {
+  try {
+    if (Date.now() - fs.statSync(lockPath).mtimeMs >= JWT_LOCK_STALE_MS) fs.rmSync(lockPath, { force: true });
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
 function readCompleteJwtSecret(jwtKeyFile: string): string {
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  for (let attempt = 0; attempt < JWT_PUBLICATION_RETRIES; attempt += 1) {
     try {
       const secret = fs.readFileSync(jwtKeyFile, "utf8").trim();
       if (JWT_SECRET_PATTERN.test(secret)) {
@@ -263,7 +325,8 @@ function syncDirectory(directory: string): void {
     }
   } catch (error: unknown) {
     const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-    if (!["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) throw error;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    console.warn("LocalApp JWT directory fsync failed after commit; continuing with committed key", error);
   }
 }
 
