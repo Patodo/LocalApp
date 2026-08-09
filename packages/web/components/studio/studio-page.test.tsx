@@ -21,6 +21,9 @@ describe("StudioPage", () => {
       if (url === "/api/workspaces/workspace-1/file" && options?.method === "PUT") {
         return new Response(null, { status: 204 });
       }
+      if (url === "/api/workspaces/workspace-1/file?path=README.md" && !options?.method) {
+        return new Response(JSON.stringify({ success: true, data: { path: "README.md", content: "# Original" } }));
+      }
       return new Response(JSON.stringify({ success: true, data: [] }));
     }));
   });
@@ -36,6 +39,8 @@ describe("StudioPage", () => {
     await screen.findByText("demo");
     fireEvent.click(screen.getByRole("button", { name: "编辑 demo" }));
     fireEvent.change(screen.getByLabelText("文件路径"), { target: { value: "README.md" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取文件" }));
+    await screen.findByDisplayValue("# Original");
     fireEvent.change(screen.getByLabelText("文件内容"), { target: { value: "# Demo" } });
     fireEvent.click(screen.getByRole("button", { name: "保存文件" }));
 
@@ -44,6 +49,65 @@ describe("StudioPage", () => {
       credentials: "include",
       body: JSON.stringify({ path: "README.md", content: "# Demo" }),
     })));
+  });
+
+  it("reads the selected file before editing and saves the edited content", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/workspaces") return new Response(JSON.stringify({ success: true, data: [workspace] }));
+      if (url === "/api/workspaces/workspace-1/file?path=README.md" && !options?.method) {
+        return new Response(JSON.stringify({ success: true, data: { path: "README.md", content: "# Original" } }));
+      }
+      if (url === "/api/workspaces/workspace-1/file" && options?.method === "PUT") return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ success: true, data: [] }));
+    });
+    render(<StudioPage />);
+    await screen.findByText("demo");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 demo" }));
+    fireEvent.change(screen.getByLabelText("文件路径"), { target: { value: "README.md" } });
+    expect(screen.getByRole("button", { name: "保存文件" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "读取文件" }));
+    await waitFor(() => expect(screen.getByLabelText("文件内容")).toHaveValue("# Original"));
+    fireEvent.change(screen.getByLabelText("文件内容"), { target: { value: "# Edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存文件" }));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/workspaces/workspace-1/file", expect.objectContaining({
+      method: "PUT", credentials: "include", body: JSON.stringify({ path: "README.md", content: "# Edited" }),
+    })));
+  });
+
+  it("does not apply a stale file read after selecting another workspace", async () => {
+    const other = { ...workspace, id: "workspace-2", name: "other" };
+    let resolveFirstRead: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/workspaces") return Promise.resolve(new Response(JSON.stringify({ success: true, data: [workspace, other] })));
+      if (url === "/api/workspaces/workspace-1/file?path=README.md" && !options?.method) return new Promise((resolve) => { resolveFirstRead = resolve; });
+      return Promise.resolve(new Response(JSON.stringify({ success: true, data: [] })));
+    });
+    render(<StudioPage />);
+    await screen.findByText("demo");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 demo" }));
+    fireEvent.change(screen.getByLabelText("文件路径"), { target: { value: "README.md" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取文件" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 other" }));
+    resolveFirstRead?.(new Response(JSON.stringify({ success: true, data: { path: "README.md", content: "stale" } })));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "编辑 other" })).toBeInTheDocument());
+    expect(screen.getByLabelText("文件路径")).toHaveValue("");
+    expect(screen.getByLabelText("文件内容")).toHaveValue("");
+  });
+
+  it("surfaces file read failures", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, options?: RequestInit) => {
+      if (String(input) === "/api/workspaces") return new Response(JSON.stringify({ success: true, data: [workspace] }));
+      if (String(input) === "/api/workspaces/workspace-1/file?path=README.md" && !options?.method) return new Response(JSON.stringify({ success: false, error: "文件不存在" }), { status: 404 });
+      return new Response(JSON.stringify({ success: true, data: [] }));
+    });
+    render(<StudioPage />);
+    await screen.findByText("demo");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 demo" }));
+    fireEvent.change(screen.getByLabelText("文件路径"), { target: { value: "README.md" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取文件" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("文件不存在"));
   });
 
   it("imports an archive into an owned workspace", async () => {

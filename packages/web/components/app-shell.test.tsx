@@ -40,6 +40,13 @@ describe("AppShell dashboard content width", () => {
     expect(content.parentElement).toHaveClass("mx-auto", "max-w-[1600px]", "p-4", "md:p-6");
     expect(content.parentElement).not.toHaveClass("max-w-7xl");
   });
+
+  it("shows task history but not system administration to an ordinary user", async () => {
+    render(<AppShell><div>content</div></AppShell>);
+
+    expect(await screen.findByRole("link", { name: "任务" })).toHaveAttribute("href", "/my/tasks");
+    expect(screen.queryByRole("link", { name: "系统设置" })).toBeNull();
+  });
 });
 
 describe("AppShell control-plane navigation", () => {

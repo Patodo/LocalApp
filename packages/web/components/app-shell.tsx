@@ -41,6 +41,7 @@ const homeNavItem = { href: "/", label: "首页", icon: House };
 const profileNavItems = [
   { href: "/my/info", label: "个人资料", icon: UserCircle },
   { href: "/my/studio", label: "Studio", icon: FolderKanban },
+  { href: "/my/tasks", label: "任务", icon: ListChecks },
   { href: "/my/apps", label: "我的应用", icon: Package },
   { href: "/my/keys", label: "API 密钥", icon: Key },
   { href: "/my/groups", label: "我的群组", icon: Group },
@@ -49,7 +50,6 @@ const profileNavItems = [
 ];
 
 const adminNavItems = [
-  { href: "/my/tasks", label: "任务", icon: ListChecks },
   { href: "/my/dashboard", label: "系统概览", icon: LayoutDashboard },
   { href: "/my/analytics", label: "数据分析", icon: BarChart3 },
   { href: "/my/users", label: "用户管理", icon: Users },

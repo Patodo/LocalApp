@@ -32,4 +32,19 @@ describe("SystemPage", () => {
       body: JSON.stringify({ listenHost: "0.0.0.0", listenPort: 43127, allowInsecureLan: true }),
     }));
   });
+
+  it("shows a load error and retries instead of leaving the page loading forever", async () => {
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) return new Response(JSON.stringify({ success: false, error: "网络不可用" }), { status: 503 });
+      return new Response(JSON.stringify({ success: true, data: {
+        listenHost: "127.0.0.1", listenPort: 3000, publicUrl: "", workspaceDir: "workspaces", allowInsecureLan: false,
+      } }));
+    });
+    render(<SystemPage />);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("网络不可用"));
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByLabelText("监听端口")).toHaveValue(3000);
+  });
 });

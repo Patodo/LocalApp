@@ -18,18 +18,24 @@ function serveNextHtml(page: string) {
   };
 }
 
-const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings", "tasks", "system"]);
+const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings", "system"]);
 
-function pageNameForAuth(sub: string): string {
-  return sub.endsWith(".txt") ? sub.slice(0, -".txt".length) : sub;
-}
+type CanonicalMyPage = { page: string; exportedPath: string; flight: boolean };
 
-function exportedMyPage(sub: string): string {
-  const withoutFlight = pageNameForAuth(sub);
-  if (/^apps\/[^/]+\/settings$/.test(withoutFlight)) {
-    return `apps/placeholder/settings${sub.endsWith(".txt") ? ".txt" : ""}`;
-  }
-  return sub;
+function canonicalMyPage(req: FastifyRequest, sub: string): CanonicalMyPage | null {
+  const rawPath = req.raw.url.split("?", 1)[0];
+  if (!rawPath.startsWith("/my/")) return null;
+  const rawSub = rawPath.slice("/my/".length);
+  if (!rawSub || rawSub !== sub || rawSub.includes("%") || rawSub.includes("\\")) return null;
+
+  const flight = rawSub.endsWith(".txt");
+  const page = flight ? rawSub.slice(0, -".txt".length) : rawSub;
+  const isSimplePage = /^[A-Za-z0-9_-]+$/.test(page);
+  const isAppSettings = /^apps\/[A-Za-z0-9_-]+\/settings$/.test(page);
+  if (!isSimplePage && !isAppSettings) return null;
+
+  const exportedPath = isAppSettings ? `apps/placeholder/settings${flight ? ".txt" : ""}` : rawSub;
+  return { page, exportedPath, flight };
 }
 
 export async function myServeRoutes(app: FastifyInstance) {
@@ -41,21 +47,23 @@ export async function myServeRoutes(app: FastifyInstance) {
     const sub = req.params["*"];
     if (!sub) return reply.redirect("/my/info");
 
+    const canonical = canonicalMyPage(req, sub);
+    if (!canonical) return reply.status(404).send("");
+
     if (!req.visitorId) {
       return reply.redirect("/");
     }
 
-    const requestedPage = pageNameForAuth(sub);
-    if (ADMIN_PAGES.has(requestedPage)) {
+    if (ADMIN_PAGES.has(canonical.page)) {
       const role = getUserRole(req.visitorId);
       if (role !== "admin") return reply.redirect("/");
     }
 
     // Next.js App Router prefetch requests /my/<page>.txt?_rsc=...
     // These files are RSC flight payloads emitted to web/out/my/<page>.txt.
-    if (sub.endsWith(".txt")) {
+    if (canonical.flight) {
       const myDir = path.resolve(WEB_OUT_DIR, "my");
-      const target = path.resolve(myDir, exportedMyPage(sub));
+      const target = path.resolve(myDir, canonical.exportedPath);
       if (!target.startsWith(myDir + path.sep)) {
         return reply.status(404).send("");
       }
@@ -67,6 +75,6 @@ export async function myServeRoutes(app: FastifyInstance) {
       }
     }
 
-    return serveNextHtml(`my/${exportedMyPage(sub)}`)(req, reply);
+    return serveNextHtml(`my/${canonical.exportedPath}`)(req, reply);
   });
 }

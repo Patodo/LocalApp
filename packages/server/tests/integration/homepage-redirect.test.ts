@@ -1,7 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import http from "node:http";
 import { createTestServer, getAppUrl } from "./helpers.js";
 import { registerAndLogin } from "../helpers/createUser.js";
 import type { FastifyInstance } from "fastify";
+
+function rawGet(baseUrl: string, path: string, cookie: string): Promise<number> {
+  const target = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host: target.hostname, port: target.port, path, headers: { cookie } }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode ?? 0));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
 
 describe("GET / homepage", () => {
   let app: FastifyInstance;
@@ -48,6 +61,10 @@ describe("GET / homepage", () => {
     expect(userSystem.status).toBe(302);
     expect(userSystem.headers.get("location")).toBe("/");
     expect((await fetch(`${baseUrl}/my/system.txt?_rsc=1`, { redirect: "manual", headers: { cookie: userCookie } })).status).toBe(302);
+    const userTasks = await fetch(`${baseUrl}/my/tasks`, { redirect: "manual", headers: { cookie: userCookie } });
+    expect(userTasks.status).toBe(200);
+    expect(userTasks.headers.get("content-type")).toContain("text/html");
+    expect((await fetch(`${baseUrl}/my/tasks.txt?_rsc=1`, { headers: { cookie: userCookie } })).headers.get("content-type")).toContain("text/plain");
 
     const login = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
@@ -60,6 +77,29 @@ describe("GET / homepage", () => {
     expect(adminSystem.status).toBe(200);
     expect(adminSystem.headers.get("content-type")).toContain("text/html");
     expect((await fetch(`${baseUrl}/my/system.txt?_rsc=1`, { headers: { cookie: adminCookie } })).headers.get("content-type")).toContain("text/plain");
+  });
+
+  it("rejects noncanonical management paths before authorization and file selection", async () => {
+    const userCookie = await registerAndLogin(baseUrl, "path-user", "pass123456");
+    const variants = [
+      "/my/system/%2e%2e/system",
+      "/my/system/%2e%2e/system.txt",
+      "/my/system/",
+      "/my//system",
+      "/my/%73ystem",
+      "/my/system%2f",
+      "/my/system.txt/",
+      "/my/system.txt%2f",
+      "/my/system.txt.bak",
+      "/my/tasks/%2e%2e/tasks",
+      "/my/tasks/%2e%2e/tasks.txt",
+      "/my/tasks/",
+      "/my/tasks.txt/",
+    ];
+
+    for (const url of variants) {
+      expect(await rawGet(baseUrl, url, userCookie), url).toBe(404);
+    }
   });
 });
 

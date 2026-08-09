@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Ban, Hammer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -22,6 +22,7 @@ export function TasksPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState("");
   const [logs, setLogs] = useState<Record<string, string>>({});
+  const streams = useRef(new Map<string, EventSource>());
 
   useEffect(() => {
     void Promise.all([
@@ -30,8 +31,12 @@ export function TasksPage() {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "加载任务失败"));
   }, []);
 
+  const runningTaskIds = tasks.filter((task) => task.status === "running").map((task) => task.id).sort().join("\0");
+
   useEffect(() => {
-    const streams = tasks.filter((task) => task.status === "running").map((task) => {
+    const runningIds = new Set(tasks.filter((task) => task.status === "running").map((task) => task.id));
+    for (const task of tasks) {
+      if (task.status !== "running" || streams.current.has(task.id)) continue;
       const stream = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/events`);
       stream.addEventListener("log", (event) => {
         const data = JSON.parse(event.data) as { content?: string };
@@ -41,10 +46,19 @@ export function TasksPage() {
         const data = JSON.parse(event.data) as Task;
         setTasks((current) => current.map((item) => item.id === task.id ? data : item));
       });
-      return stream;
-    });
-    return () => streams.forEach((stream) => stream.close());
-  }, [tasks]);
+      streams.current.set(task.id, stream);
+    }
+    for (const [taskId, stream] of streams.current) {
+      if (runningIds.has(taskId)) continue;
+      stream.close();
+      streams.current.delete(taskId);
+    }
+  }, [runningTaskIds]);
+
+  useEffect(() => () => {
+    for (const stream of streams.current.values()) stream.close();
+    streams.current.clear();
+  }, []);
 
   const startBuild = async () => {
     try {
