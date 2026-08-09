@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppSyncSource, SyncSourceError } from "../src/lib/app-sync-source.js";
 import { AppSyncTarget } from "../src/lib/app-sync-target.js";
 import { installAppPackage, type InstallOutcome } from "../src/lib/app-installer.js";
@@ -65,6 +65,56 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     }
   });
 
+  it("rejects incomplete existing session metadata instead of adopting it", () => {
+    const dataDir = tempRoot();
+    const store = new SyncSessionStore({ dataDir });
+    const input = sessionInput();
+    store.create(input);
+    const metadataPath = path.join(store.sessionDir(input.id), "session.json");
+    const incomplete = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+    delete incomplete.status;
+    fs.writeFileSync(metadataPath, JSON.stringify(incomplete));
+
+    expect(() => store.create(input)).toThrow(expect.objectContaining({ code: "SYNC_SESSION_CORRUPT" }));
+  });
+
+  it("fsyncs rootDir before returning an existing-id adoption and propagates fsync failure", () => {
+    const dataDir = tempRoot();
+    const store = new SyncSessionStore({ dataDir });
+    const input = sessionInput();
+    store.create(input);
+    const restore = failRootDirectoryFsync(store.rootDir, "existing adoption fsync failed");
+    try {
+      expect(() => store.create(input)).toThrow("existing adoption fsync failed");
+      expect(restore.calls()).toBe(1);
+    } finally { restore.restore(); }
+  });
+
+  it("validates and fsyncs a complete rename-race winner before adoption", () => {
+    const dataDir = tempRoot();
+    const store = new SyncSessionStore({ dataDir });
+    const input = sessionInput();
+    const now = new Date().toISOString();
+    const winner = { ...input, status: "created", outcome: null, error: null, createdAt: now, updatedAt: now };
+    const originalRename = fs.renameSync;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      if (path.resolve(String(target)) === store.sessionDir(input.id) && path.basename(String(source)).endsWith(".partial")) {
+        fs.mkdirSync(String(target));
+        fs.writeFileSync(path.join(String(target), "session.json"), `${JSON.stringify(winner)}\n`);
+        throw Object.assign(new Error("race winner published"), { code: "EEXIST" });
+      }
+      return originalRename(source, target);
+    });
+    const restore = failRootDirectoryFsync(store.rootDir, "race adoption fsync failed");
+    try {
+      expect(() => store.create(input)).toThrow("race adoption fsync failed");
+      expect(restore.calls()).toBe(1);
+    } finally {
+      restore.restore();
+      rename.mockRestore();
+    }
+  });
+
   it("fails a never-resolving upload within its hard deadline and leaves no live run", async () => {
     const harness = await sourceHarness((request, response) => {
       if (request.method === "POST" && request.url === "/api/peer/sync-sessions") return json(response, 201, {});
@@ -113,6 +163,29 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     ])).resolves.toBe("done");
   });
 
+  it("maps a trusted target installer recovery error to a redacted source recovery-required state", async () => {
+    const reflectedCredential = "Bearer secret";
+    const harness = await sourceHarness((request, response) => {
+      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") return json(response, 201, {});
+      if (request.method === "PUT") { request.resume(); request.on("end", () => json(response, 200, {})); return; }
+      if (request.method === "POST" && request.url?.endsWith("/commit")) {
+        return json(response, 503, {
+          success: false,
+          code: "APP_INSTALL_RECOVERY_REQUIRED",
+          error: `operator detail ${request.headers.authorization}`,
+        });
+      }
+      response.writeHead(404).end();
+    }, { uploadTimeoutMs: 200, commitTimeoutMs: 400, commitRetryDelayMs: 5 });
+    const job = await harness.source.start(harness.input);
+    const terminal = await waitForStatus(harness.jobs, job.id, new Set(["failed", "recovery-required"]), 500);
+    expect(terminal).toMatchObject({
+      status: "recovery-required",
+      error: "Peer synchronization failed (503)",
+    });
+    expect(JSON.stringify(terminal)).not.toContain(reflectedCredential);
+  });
+
   it("lets the target arbitrate cancellation at the activating boundary", async () => {
     let deleteCalls = 0;
     let releaseCommit!: () => void;
@@ -158,6 +231,13 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     return root;
   }
 
+  function sessionInput() {
+    return {
+      id: crypto.randomUUID(), ownerId: "owner", mode: "app-only" as const, appName: "sync-app",
+      appVersion: "1.0.0", packageDigest: "a".repeat(64), packageSize: 1,
+    };
+  }
+
   async function sourceHarness(
     handler: http.RequestListener,
     options: { uploadTimeoutMs: number; commitTimeoutMs: number; commitRetryDelayMs?: number },
@@ -178,6 +258,26 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     return { source, jobs, input: { ownerId: "owner", appName: "sync-app", peerId: "peer", withData: false as const } };
   }
 });
+
+function failRootDirectoryFsync(rootDir: string, message: string): { calls: () => number; restore: () => void } {
+  const descriptors = new Map<number, string>();
+  const originalOpen = fs.openSync;
+  const originalFsync = fs.fsyncSync;
+  let calls = 0;
+  const open = vi.spyOn(fs, "openSync").mockImplementation((target, flags, mode) => {
+    const descriptor = originalOpen(target, flags, mode);
+    descriptors.set(descriptor, path.resolve(String(target)));
+    return descriptor;
+  });
+  const fsync = vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+    if (descriptors.get(descriptor) === path.resolve(rootDir)) {
+      calls += 1;
+      throw Object.assign(new Error(message), { code: "EIO" });
+    }
+    return originalFsync(descriptor);
+  });
+  return { calls: () => calls, restore: () => { fsync.mockRestore(); open.mockRestore(); } };
+}
 
 async function packageFixture(dataDir: string): Promise<string> {
   const outputPath = path.join(dataDir, `${crypto.randomUUID()}.localapp`);

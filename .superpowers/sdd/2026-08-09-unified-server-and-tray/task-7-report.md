@@ -357,3 +357,126 @@ Duration    18.02s
 - API keys remain encrypted only in the peer store and ephemeral in active request state; jobs, sessions, public errors, and report output contain no credential. No production `withData: true` path exists, so Task 8 was not implemented.
 - Final changed scope is 12 task files: 6 production files, 5 test files, and this report. `.zcode/`, `tmp/`, and `docs/superpowers/plans/2026-08-09-local-app-install.md` remain untouched and untracked.
 - No unresolved Critical or Important finding remains. The only concern observed during final verification was the transient unrelated Git clone timeout documented above; both isolated and final full-suite reruns passed.
+
+---
+
+# Task 7 review fix round 2/5
+
+## RED evidence
+
+### App-state durability, session adoption, and target recovery mapping
+
+```text
+pnpm -C packages/server exec vitest run tests/app-manifest-durability.test.ts tests/app-sync-hardening.test.ts
+```
+
+Exit code: `1`.
+
+```text
+Test Files  2 failed (2)
+Tests       6 failed | 6 passed (12)
+Duration    1.47s
+```
+
+The six failures directly reproduced three review findings:
+
+- no temporary app-state file or parent directory fsync was observed, and an injected post-meta directory-fsync failure did not throw or retain the recovery journal;
+- incomplete existing session metadata was adopted, while existing-ID and rename-race adoption returned without attempting the required root-directory fsync;
+- a trusted `APP_INSTALL_RECOVERY_REQUIRED` target response persisted the source job as `failed` instead of `recovery-required` (the stored message was already generic and credential-free).
+
+### Exact installer journal identity and symlink rejection
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts -t 'malicious|wrong exact basename|replaced by a symlink'
+```
+
+Exit code: `1`.
+
+```text
+Test Files  1 failed (1)
+Tests       4 failed | 4 skipped (8)
+Duration    3.40s
+```
+
+All four malicious journals allowed Server startup instead of failing closed. The current recovery accepted an upload directory as `versionPath`, another retained package as `packagePath`, a wrong backup basename, and a symlink at the nominal backup path. The tests preserve sentinel upload/package/backup data and fail explicitly with `Server unexpectedly started with an unsafe installer journal`.
+
+A follow-up dangling-link mutation check also produced valid RED:
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts -t 'dangling symlink'
+```
+
+Exit code: `1`; one test failed because Server unexpectedly started after the exact retained package path was replaced by a dangling symlink.
+
+### Installer-journal removal ordering
+
+The full installer recovery focused run also failed the syscall-order assertion:
+
+```text
+expected durableBeforeInstallerJournalRemoval to be true, received false
+app-installer-recovery.test.ts:112
+```
+
+This proves the durable installer journal was removed before a parent-directory fsync made the new `meta.json` rename durable.
+
+## GREEN evidence
+
+### New focused durability/security tests
+
+```text
+pnpm -C packages/server exec vitest run tests/app-manifest-durability.test.ts tests/integration/app-installer-recovery.test.ts tests/app-sync-hardening.test.ts
+```
+
+Exit code: `0`.
+
+```text
+Test Files  3 passed (3)
+Tests       21 passed (21)
+Duration    5.63s
+```
+
+### Task 7 seven-file group
+
+```text
+pnpm -C packages/server exec vitest run tests/meta-sqlite-durability.test.ts tests/app-sync-hardening.test.ts tests/integration/app-installer-recovery.test.ts tests/integration/two-peer-sync.test.ts tests/integration/app-package-install.test.ts tests/integration/peers.test.ts tests/integration/security-boundary.test.ts
+```
+
+Exit code: `0`.
+
+```text
+Test Files  7 passed (7)
+Tests       76 passed (76)
+Duration    17.84s
+```
+
+The first seven-file attempt exposed two existing app-manifest contract regressions: pre-rename metadata failure did not immediately restore the old source manifest, and app-state journal cleanup failure incorrectly made an otherwise durable install return 503. After separating pre-rename rollback, post-rename durability uncertainty, and idempotent cleanup failure, the two existing tests passed and the final seven-file run above was clean.
+
+### Full Server and build
+
+```text
+pnpm -C packages/server test
+```
+
+Exit code: `0`.
+
+```text
+Test Files  139 passed (139)
+Tests       951 passed | 1 skipped (952)
+Duration    171.07s
+```
+
+`pnpm -C packages/server build` exited `0` with no TypeScript errors. The only Server warning was the repository's existing Fastify `reply.redirect` deprecation warning.
+
+No Web/shared response shape changed in round 2, so the round 1 full Web evidence (`45/45` files, `372/372` tests, successful 27-page build) stands as authorized by the review instruction.
+
+## Round 2 self-review
+
+- Shared app-state publication now fsyncs every private temporary file, atomically renames it, and fsyncs its parent directory. The durable intent journal precedes source/meta publication; installer journal removal only occurs after both are durably visible.
+- Publication errors are split by commit point: failures before rename durably publish and apply a rollback intent; failures after rename but before directory fsync preserve the recovery journal; cleanup failure after durable source/meta commit is tolerated because replay is idempotent. Existing activation/rollback atomicity contracts remain green.
+- Installer recovery validates exact owner/app/job identity, UUID, version number/digest, `versions/vN`, `.packages/vN-<digest>.localapp`, and `.staging/apps/<id>/app.db.before-install`. Every existing path component is checked with `lstat`, including dangling symlinks, before recovery can write or delete.
+- Malicious journal tests prove upload directories, unrelated retained packages, alternate backups, valid-target symlinks, and dangling package symlinks are not adopted or removed; Server fails closed before serving.
+- Existing-ID and rename-race session adoption now validate the complete persisted record and fsync the session root before returning. Real fsync errors propagate exactly once; semantic corruption is retained/fails closed while empty or syntactically partial crash residue remains recoverable.
+- `APP_INSTALL_RECOVERY_REQUIRED` is trusted only as a protocol code and maps explicitly to persisted source `recovery-required`. Peer body text is ignored; the stored message stays `Peer synchronization failed (503)` and does not contain the bearer credential.
+- No production `withData: true` path or Task 8 behavior was introduced. No Web production file or API shape changed.
+- Round 2 scope is 8 files: 4 production files, 3 test files, and this report. Preserved untracked `.zcode/`, `tmp/`, and `docs/superpowers/plans/2026-08-09-local-app-install.md` remain untouched.
+- No unresolved Critical or Important defect was found in the final diff review.

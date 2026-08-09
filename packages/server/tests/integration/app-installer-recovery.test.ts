@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import initSqlJs from "sql.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../../src/server.js";
 import { installAppPackage } from "../../src/lib/app-installer.js";
 import { writeAppPackage } from "../../src/lib/app-package.js";
@@ -14,6 +14,7 @@ describe("durable application installer recovery", () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeMetaDb();
     for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   });
@@ -74,6 +75,99 @@ describe("durable application installer recovery", () => {
     expect(readMeta(fixture.dataDir).currentAppVersion).toBe("1.0.0");
   });
 
+  it("does not remove the installer journal before manifest and metadata are durably visible", async () => {
+    const fixture = await installedV1Fixture();
+    const applicationDir = pageDir(fixture.dataDir);
+    const descriptors = new Map<number, string>();
+    const originalOpen = fs.openSync;
+    const originalFsync = fs.fsyncSync;
+    const originalRename = fs.renameSync;
+    const originalRm = fs.rmSync;
+    let metaRenamed = false;
+    let metaDirectorySynced = false;
+    let durableBeforeInstallerJournalRemoval: boolean | null = null;
+    vi.spyOn(fs, "openSync").mockImplementation((target, flags, mode) => {
+      const descriptor = originalOpen(target, flags, mode);
+      descriptors.set(descriptor, path.resolve(String(target)));
+      return descriptor;
+    });
+    vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      const result = originalRename(source, target);
+      if (path.resolve(String(target)) === path.join(applicationDir, "meta.json")) metaRenamed = true;
+      return result;
+    });
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      const result = originalFsync(descriptor);
+      if (metaRenamed && descriptors.get(descriptor) === applicationDir) metaDirectorySynced = true;
+      return result;
+    });
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (path.resolve(String(target)) === path.join(applicationDir, ".app-install-transaction.json")) {
+        durableBeforeInstallerJournalRemoval = metaDirectorySynced;
+      }
+      return originalRm(target, options);
+    });
+
+    await installAppPackage({ dataDir: fixture.dataDir, ownerId: "owner", packagePath: fixture.v2Path });
+    expect(durableBeforeInstallerJournalRemoval).toBe(true);
+  });
+
+  it("fails closed without deleting an upload named by a malicious versionPath", async () => {
+    const fixture = await interruptedV2Fixture();
+    const victim = path.join(pageDir(fixture.dataDir), "uploads", "protected", "keep.txt");
+    fs.mkdirSync(path.dirname(victim), { recursive: true });
+    fs.writeFileSync(victim, "keep-upload");
+    mutateJournal(fixture.dataDir, (journal) => { journal.next.versionPath = "uploads/protected"; });
+
+    await expectServerRecoveryRequired(fixture.dataDir);
+    expect(fs.readFileSync(victim, "utf8")).toBe("keep-upload");
+  });
+
+  it("fails closed without deleting another retained package named by a malicious packagePath", async () => {
+    const fixture = await interruptedV2Fixture();
+    const victim = path.join(pageDir(fixture.dataDir), ".packages", "protected.localapp");
+    fs.writeFileSync(victim, "keep-package");
+    mutateJournal(fixture.dataDir, (journal) => { journal.next.packagePath = ".packages/protected.localapp"; });
+
+    await expectServerRecoveryRequired(fixture.dataDir);
+    expect(fs.readFileSync(victim, "utf8")).toBe("keep-package");
+  });
+
+  it("fails closed when the database backup path has the wrong exact basename", async () => {
+    const fixture = await interruptedV2Fixture();
+    const journal = readJournal(fixture.dataDir);
+    const backup = path.resolve(fixture.dataDir, journal.database.backupPath);
+    const alternate = path.join(path.dirname(backup), "alternate.db");
+    fs.copyFileSync(backup, alternate);
+    mutateJournal(fixture.dataDir, (value) => { value.database.backupPath = path.relative(fixture.dataDir, alternate); });
+
+    await expectServerRecoveryRequired(fixture.dataDir);
+    expect(fs.existsSync(alternate)).toBe(true);
+  });
+
+  it("fails closed when an exact backup path is replaced by a symlink", async () => {
+    const fixture = await interruptedV2Fixture();
+    const journal = readJournal(fixture.dataDir);
+    const backup = path.resolve(fixture.dataDir, journal.database.backupPath);
+    const alternate = path.join(path.dirname(backup), "attacker.db");
+    fs.copyFileSync(backup, alternate);
+    fs.rmSync(backup);
+    fs.symlinkSync(alternate, backup);
+
+    await expectServerRecoveryRequired(fixture.dataDir);
+    expect(fs.existsSync(alternate)).toBe(true);
+  });
+
+  it("fails closed when the exact retained package path is a dangling symlink", async () => {
+    const fixture = await interruptedV2Fixture();
+    const journal = readJournal(fixture.dataDir);
+    const packagePath = path.join(pageDir(fixture.dataDir), journal.next.packagePath);
+    fs.symlinkSync(path.join(pageDir(fixture.dataDir), "uploads", "missing.localapp"), packagePath);
+
+    await expectServerRecoveryRequired(fixture.dataDir);
+    expect(fs.lstatSync(packagePath).isSymbolicLink()).toBe(true);
+  });
+
   async function installedV1Fixture(): Promise<{ dataDir: string; v2Path: string }> {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-installer-recovery-"));
     roots.push(dataDir);
@@ -87,7 +181,28 @@ describe("durable application installer recovery", () => {
     await installAppPackage({ dataDir, ownerId: "owner", packagePath: v1Path });
     return { dataDir, v2Path };
   }
+
+  async function interruptedV2Fixture(): Promise<{ dataDir: string; v2Path: string }> {
+    const fixture = await installedV1Fixture();
+    await crashInstall(fixture.dataDir, fixture.v2Path, "after-migration", 71);
+    return fixture;
+  }
 });
+
+type MutableJournal = {
+  next: { versionPath: string; packagePath: string };
+  database: { backupPath: string };
+};
+
+function readJournal(dataDir: string): MutableJournal {
+  return JSON.parse(fs.readFileSync(path.join(pageDir(dataDir), ".app-install-transaction.json"), "utf8")) as MutableJournal;
+}
+
+function mutateJournal(dataDir: string, mutation: (journal: MutableJournal) => void): void {
+  const journal = readJournal(dataDir);
+  mutation(journal);
+  fs.writeFileSync(path.join(pageDir(dataDir), ".app-install-transaction.json"), `${JSON.stringify(journal, null, 2)}\n`);
+}
 
 async function packageFixture(dataDir: string, version: string, migrations: Array<[string, string]>): Promise<string> {
   const outputPath = path.join(dataDir, `${version}-${crypto.randomUUID()}.localapp`);
@@ -114,6 +229,17 @@ async function crashInstall(dataDir: string, packagePath: string, point: string,
     child.once("exit", (exitCode) => exitCode === expectedCode ? resolve(exitCode) : reject(new Error(`crash worker exited ${exitCode}: ${stderr}`)));
   });
   expect(code).toBe(expectedCode);
+}
+
+async function expectServerRecoveryRequired(dataDir: string): Promise<void> {
+  try {
+    const app = await buildServer({ env: serverEnv(dataDir) });
+    await app.close();
+  } catch (error) {
+    expect(error).toMatchObject({ code: "APP_INSTALL_RECOVERY_REQUIRED" });
+    return;
+  }
+  throw new Error("Server unexpectedly started with an unsafe installer journal");
 }
 
 function pageDir(dataDir: string): string { return path.join(dataDir, "owner", "crash-app"); }

@@ -51,12 +51,14 @@ export class SyncSessionStore {
     let existing: SyncSessionRecord | null = null;
     try { existing = this.get(input.id); }
     catch (error) {
+      if (error instanceof SyncSessionError) throw error;
       if (!isSafeUncommittedResidue(directory)) throw error;
       removeDirRecursive(directory);
       syncDirectory(this.rootDir);
     }
     if (existing) {
       if (!sameIdentity(existing, input)) throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already used for different metadata", 409);
+      syncDirectory(this.rootDir);
       return existing;
     }
     const now = new Date().toISOString();
@@ -71,7 +73,10 @@ export class SyncSessionStore {
         const code = (error as NodeJS.ErrnoException).code;
         if (!["EEXIST", "ENOTEMPTY"].includes(code ?? "")) throw error;
         const raced = this.get(input.id);
-        if (raced && sameIdentity(raced, input)) return raced;
+        if (raced && sameIdentity(raced, input)) {
+          syncDirectory(this.rootDir);
+          return raced;
+        }
         throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already in use", 409);
       }
       syncDirectory(this.rootDir);
@@ -260,7 +265,20 @@ function validateInput(input: { id: string; ownerId: string; mode: string; appNa
 }
 
 function validateStored(value: SyncSessionRecord, id: string): void {
-  if (value.id !== id || typeof value.ownerId !== "string" || !value.ownerId) throw new SyncSessionError("SYNC_SESSION_CORRUPT", "Invalid synchronization session metadata", 500);
+  try {
+    if (value.id !== id) throw new Error("identity mismatch");
+    validateInput(value);
+    if (!["created", "uploaded", "committing", "completed", "failed", "recovery-required"].includes(value.status)) {
+      throw new Error("invalid status");
+    }
+    if (value.outcome !== null && (typeof value.outcome !== "object" || Array.isArray(value.outcome))) throw new Error("invalid outcome");
+    if (value.error !== null && typeof value.error !== "string") throw new Error("invalid error");
+    if (typeof value.createdAt !== "string" || !value.createdAt || typeof value.updatedAt !== "string" || !value.updatedAt) {
+      throw new Error("invalid timestamps");
+    }
+  } catch (error) {
+    throw new SyncSessionError("SYNC_SESSION_CORRUPT", "Invalid synchronization session metadata", 500);
+  }
 }
 
 function sameIdentity(left: SyncSessionRecord, right: Pick<SyncSessionRecord, "ownerId" | "mode" | "appName" | "appVersion" | "packageDigest" | "packageSize">): boolean {

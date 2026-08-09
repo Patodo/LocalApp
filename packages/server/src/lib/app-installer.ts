@@ -562,33 +562,81 @@ function validateInstallTransaction(dataDir: string, pageDir: string, transactio
   if (transaction.schemaVersion !== 1 || !transaction.id || !transaction.ownerId || !transaction.appName) {
     throw new Error("Invalid application installation transaction metadata");
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(transaction.id)) {
+    throw new Error("Invalid application installation transaction ID");
+  }
   if (!["prepared", "rolling-back", "recovery-required"].includes(transaction.state)) throw new Error("Invalid recovery state");
-  if (getPageDir(dataDir, transaction.ownerId, transaction.appName) !== pageDir) throw new Error("Installation transaction identity mismatch");
+  const expectedPageDir = path.resolve(getPageDir(dataDir, transaction.ownerId, transaction.appName));
+  if (expectedPageDir !== path.resolve(pageDir)
+    || transaction.ownerId !== path.basename(path.dirname(pageDir))
+    || transaction.appName !== path.basename(pageDir)) {
+    throw new Error("Installation transaction identity mismatch");
+  }
+  if (!Number.isSafeInteger(transaction.next?.localVersion) || transaction.next.localVersion < 1
+    || typeof transaction.next.appVersion !== "string" || !transaction.next.appVersion
+    || !/^[a-f0-9]{64}$/.test(transaction.next.digest)) {
+    throw new Error("Invalid next application version identity");
+  }
+  const expectedVersionPath = path.join("versions", `v${transaction.next.localVersion}`);
+  const expectedPackagePath = path.posix.join(".packages", `v${transaction.next.localVersion}-${transaction.next.digest}.localapp`);
+  if (transaction.next.versionPath !== expectedVersionPath) throw new Error("Invalid installer version path identity");
+  if (transaction.next.packagePath !== expectedPackagePath) throw new Error("Invalid installer package path identity");
   resolveTransactionJobDir(dataDir, transaction);
   resolvePageRelative(pageDir, transaction.next.versionPath);
   resolvePageRelative(pageDir, transaction.next.packagePath);
-  if (transaction.database.existed) resolveTransactionBackup(dataDir, transaction);
+  if (transaction.database.existed) {
+    if (!/^[a-f0-9]{64}$/.test(transaction.database.backupDigest ?? "")) throw new Error("Invalid installer database backup digest");
+    resolveTransactionBackup(dataDir, transaction);
+  } else if (transaction.database.backupPath !== null || transaction.database.backupDigest !== null) {
+    throw new Error("Unexpected installer database backup identity");
+  }
 }
 
 function resolveTransactionJobDir(dataDir: string, transaction: AppInstallTransaction): string {
   const root = path.resolve(dataDir, ".staging", "apps");
+  const expectedRelative = path.join(".staging", "apps", transaction.id);
+  if (transaction.jobDir !== expectedRelative) throw new Error("Unsafe installer staging path");
   const resolved = path.resolve(dataDir, transaction.jobDir);
   if (path.dirname(resolved) !== root || path.basename(resolved) !== transaction.id) throw new Error("Unsafe installer staging path");
+  assertNoSymlinkComponents(path.resolve(dataDir), transaction.jobDir);
   return resolved;
 }
 
 function resolveTransactionBackup(dataDir: string, transaction: AppInstallTransaction): string | null {
   if (!transaction.database.backupPath) return null;
   const jobDir = resolveTransactionJobDir(dataDir, transaction);
+  const expected = path.relative(dataDir, path.join(jobDir, "app.db.before-install"));
+  if (transaction.database.backupPath !== expected) throw new Error("Unsafe installer database backup path");
   const resolved = path.resolve(dataDir, transaction.database.backupPath);
-  if (path.dirname(resolved) !== jobDir) throw new Error("Unsafe installer database backup path");
+  if (path.dirname(resolved) !== jobDir || path.basename(resolved) !== "app.db.before-install") {
+    throw new Error("Unsafe installer database backup path");
+  }
+  assertNoSymlinkComponents(path.resolve(dataDir), transaction.database.backupPath);
   return resolved;
 }
 
 function resolvePageRelative(pageDir: string, relativePath: string): string {
   const resolved = path.resolve(pageDir, relativePath);
   if (!resolved.startsWith(`${path.resolve(pageDir)}${path.sep}`)) throw new Error("Unsafe application transaction path");
+  assertNoSymlinkComponents(path.resolve(pageDir), relativePath);
   return resolved;
+}
+
+function assertNoSymlinkComponents(baseDir: string, relativePath: string): void {
+  const normalized = path.normalize(relativePath);
+  if (path.isAbsolute(relativePath) || normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error("Unsafe non-canonical application transaction path");
+  }
+  let current = baseDir;
+  for (const segment of normalized.split(path.sep)) {
+    if (!segment || segment === ".") throw new Error("Unsafe non-canonical application transaction path");
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new Error("Symbolic links are not allowed in application transaction paths");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
 }
 
 function isNextInstallMeta(meta: PageMeta | null, transaction: AppInstallTransaction): boolean {

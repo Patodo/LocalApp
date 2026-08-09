@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { AccessLevel, AppLifecycle, ManifestDb, NotifyConfig, PageAccess, ShellConfig } from "../types/models.js";
 import type { PageMeta } from "../plugins/storage.js";
 import { validateNotifyConfig } from "./notify-config.js";
@@ -38,12 +39,45 @@ function readJsonObject(filePath: string): Record<string, unknown> | null {
 
 function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  let renamed = false;
   try {
-    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    const descriptor = fs.openSync(tempPath, "wx", 0o600);
+    try {
+      fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8" });
+      fs.fsyncSync(descriptor);
+    } finally { fs.closeSync(descriptor); }
     fs.renameSync(tempPath, filePath);
+    renamed = true;
+    syncDirectory(path.dirname(filePath));
+  } catch (error) {
+    if (renamed) throw new DurablePublicationError(error);
+    throw error;
   } finally {
     fs.rmSync(tempPath, { force: true });
+  }
+}
+
+class DurablePublicationError extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error), { cause: error });
+    this.name = "DurablePublicationError";
+  }
+}
+
+function durableRemove(filePath: string): void {
+  fs.rmSync(filePath, { force: true });
+  syncDirectory(path.dirname(filePath));
+}
+
+function syncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, "r");
+    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    throw error;
   }
 }
 
@@ -172,23 +206,30 @@ export function commitSourceManifestAndMeta(
   meta: object,
 ): void {
   const sourcePath = path.join(pageDir, SOURCE_MANIFEST_FILE);
-  const previousSource = readJsonObject(sourcePath);
   const transactionPath = path.join(pageDir, APP_STATE_TRANSACTION_FILE);
+  const previousSourceManifest = readJsonObject(sourcePath);
+  const previousMeta = readJsonObject(metaPath);
   atomicWriteJson(transactionPath, { sourceManifest, meta });
   try {
     atomicWriteJson(sourcePath, sourceManifest);
     atomicWriteJson(metaPath, meta as Record<string, unknown>);
   } catch (error) {
-    if (previousSource) atomicWriteJson(sourcePath, previousSource);
-    else fs.rmSync(sourcePath, { force: true });
-    fs.rmSync(transactionPath, { force: true });
+    if (error instanceof DurablePublicationError) throw error;
+    try {
+      atomicWriteJson(transactionPath, { sourceManifest: previousSourceManifest, meta: previousMeta });
+      publishOptionalJson(sourcePath, previousSourceManifest);
+      publishOptionalJson(metaPath, previousMeta);
+      durableRemove(transactionPath);
+    } catch {
+      // The durable journal describes either the new state or the rollback
+      // state. A later read completes whichever intent was published last.
+    }
     throw error;
   }
-  try {
-    fs.rmSync(transactionPath, { force: true });
-  } catch {
-    // The manifest and metadata are the durable commit point. Keep the
-    // journal so a later metadata read can idempotently complete cleanup.
+  try { durableRemove(transactionPath); }
+  catch {
+    // Source manifest and metadata are already durable. Replaying the journal
+    // is idempotent, so cleanup failure must not roll back a committed state.
   }
 }
 
@@ -198,12 +239,17 @@ export function recoverSourceManifestAndMeta(pageDir: string, metaPath: string):
   if (!transaction) return;
   const sourceManifest = transaction.sourceManifest;
   const meta = transaction.meta;
-  if (!isRecord(sourceManifest) || !isRecord(meta)) {
+  if ((sourceManifest !== null && !isRecord(sourceManifest)) || (meta !== null && !isRecord(meta))) {
     throw new Error("Invalid application state transaction");
   }
-  atomicWriteJson(path.join(pageDir, SOURCE_MANIFEST_FILE), sourceManifest);
-  atomicWriteJson(metaPath, meta);
-  fs.rmSync(transactionPath, { force: true });
+  publishOptionalJson(path.join(pageDir, SOURCE_MANIFEST_FILE), sourceManifest);
+  publishOptionalJson(metaPath, meta);
+  durableRemove(transactionPath);
+}
+
+function publishOptionalJson(filePath: string, value: Record<string, unknown> | null): void {
+  if (value) atomicWriteJson(filePath, value);
+  else durableRemove(filePath);
 }
 
 export function writePlatformManifest(pageDir: string, manifest: Record<string, unknown>): void {
@@ -212,7 +258,7 @@ export function writePlatformManifest(pageDir: string, manifest: Record<string, 
 }
 
 export function removePlatformManifest(pageDir: string): void {
-  fs.rmSync(path.join(pageDir, PLATFORM_MANIFEST_FILE), { force: true });
+  durableRemove(path.join(pageDir, PLATFORM_MANIFEST_FILE));
 }
 
 export function materializeManifest(meta: PageMeta, effective: Record<string, unknown>): PageMeta {

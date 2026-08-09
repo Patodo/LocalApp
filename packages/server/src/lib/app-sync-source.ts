@@ -11,6 +11,7 @@ const TERMINAL = new Set<SyncJobStatus>(["completed", "rolled-back", "failed", "
 const CANCELLABLE = new Set<SyncJobStatus>(["queued", "staging", "validating", "backing-up", "installing", "activating"]);
 const PEER_ERROR_CODES = new Set([
   "APP_VERSION_DIGEST_CONFLICT", "APP_MIGRATION_APPLY_FAILED", "APP_MIGRATION_CONFLICT", "APP_BACKEND_INVALID",
+  "APP_INSTALL_RECOVERY_REQUIRED",
   "APP_MANIFEST_INVALID", "APP_HEALTH_CHECK_FAILED", "APP_PLATFORM_VERSION_MISMATCH",
   "SYNC_SESSION_CONFLICT", "SYNC_SESSION_NOT_FOUND", "SYNC_PACKAGE_TOO_LARGE", "SYNC_PACKAGE_SIZE_MISMATCH",
   "SYNC_PACKAGE_DIGEST_MISMATCH", "SYNC_PACKAGE_METADATA_MISMATCH", "SYNC_PACKAGE_REQUIRED", "SYNC_CANNOT_CANCEL",
@@ -166,7 +167,7 @@ export class AppSyncSource {
         }
         const error = await sourceResponseError(response);
         if (error.code !== "SYNC_COMMIT_IN_PROGRESS") {
-          this.change(jobId, "failed", error.message);
+          this.change(jobId, error.code === "APP_INSTALL_RECOVERY_REQUIRED" ? "recovery-required" : "failed", error.message);
           return;
         }
         lastError = error;
