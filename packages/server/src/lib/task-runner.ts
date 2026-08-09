@@ -44,11 +44,13 @@ export interface TaskRunnerOptions {
   allowedExecutables?: Record<string, string>;
   authorizeExecution?: (userId: string) => boolean;
   processController?: ProcessTreeController;
+  platform?: NodeJS.Platform;
 }
 
 interface ActiveTask {
   child: ChildProcess;
-  identityAcknowledgementPath: string;
+  readyPath: string;
+  startPath: string;
   desiredStatus: Exclude<TaskStatus, "running" | "succeeded" | "failed"> | null;
   timer: NodeJS.Timeout | null;
   closed: Promise<void>;
@@ -64,12 +66,14 @@ export class TaskRunner {
   private readonly emitters = new Map<string, EventEmitter>();
   private readonly allowedExecutables = new Map<string, string>();
   private readonly processController: ProcessTreeController;
+  private readonly platform: NodeJS.Platform;
 
   constructor(private readonly options: TaskRunnerOptions) {
+    this.platform = options.platform ?? process.platform;
     this.processController = options.processController ?? new ProcessTreeController();
     fs.mkdirSync(options.taskDir, { recursive: true });
     for (const executable of DEFAULT_EXECUTABLES) {
-      const resolved = executable === "node" ? process.execPath : findExecutable(executable);
+      const resolved = executable === "node" ? process.execPath : findExecutable(executable, { platform: this.platform });
       if (resolved) this.allowedExecutables.set(executable, resolved);
     }
     for (const [name, executablePath] of Object.entries(options.allowedExecutables ?? {})) {
@@ -81,7 +85,9 @@ export class TaskRunner {
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error("Invalid executable allowlist name");
     const resolved = fs.realpathSync(executablePath);
     if (!fs.statSync(resolved).isFile()) throw new Error("Allowlisted executable is not a file");
-    if (process.platform !== "win32") {
+    if (this.platform === "win32") {
+      if (!isDirectWindowsExecutable(resolved)) throw new Error("Allowlisted Windows executable cannot be launched with shell:false");
+    } else {
       try {
         fs.accessSync(resolved, fs.constants.X_OK);
       } catch {
@@ -118,11 +124,13 @@ export class TaskRunner {
     this.emitters.set(record.id, emitter);
     const output = input.logParser ? null : fs.openSync(outputPath, "a");
     const identityToken = randomUUID();
-    const identityAcknowledgementPath = path.join(this.options.taskDir, `${id}.identity-ready`);
+    const readyPath = path.join(this.options.taskDir, `${id}.supervisor-ready`);
+    const startPath = path.join(this.options.taskDir, `${id}.supervisor-start`);
     const supervisorArgs = [
       TASK_SUPERVISOR_PATH,
       identityToken,
-      identityAcknowledgementPath,
+      readyPath,
+      startPath,
       executablePath,
       Buffer.from(JSON.stringify(input.args), "utf8").toString("base64url"),
     ];
@@ -132,7 +140,7 @@ export class TaskRunner {
         cwd: workspacePath,
         env: boundedEnvironment(),
         shell: false,
-        detached: process.platform !== "win32",
+        detached: this.platform !== "win32",
         stdio: input.logParser ? ["ignore", "pipe", "pipe"] : ["ignore", output!, output!],
         windowsHide: true,
       });
@@ -149,12 +157,12 @@ export class TaskRunner {
     }
     let closeActive!: () => void;
     const closed = new Promise<void>((resolve) => { closeActive = resolve; });
-    const active: ActiveTask = { child, identityAcknowledgementPath, desiredStatus: null, timer: null, closed };
+    const active: ActiveTask = { child, readyPath, startPath, desiredStatus: null, timer: null, closed };
     this.active.set(record.id, active);
 
     child.once("close", (code, signal) => {
       if (active.timer) clearTimeout(active.timer);
-      fs.rmSync(active.identityAcknowledgementPath, { force: true });
+      cleanupSupervisorHandshake(active);
       this.active.delete(record.id);
       const current = this.options.taskStore.get(record.id);
       if (current?.status === "running") {
@@ -171,7 +179,7 @@ export class TaskRunner {
     });
     child.once("error", (error) => {
       if (active.timer) clearTimeout(active.timer);
-      fs.rmSync(active.identityAcknowledgementPath, { force: true });
+      cleanupSupervisorHandshake(active);
       this.active.delete(record.id);
       const current = this.options.taskStore.get(record.id);
       if (current?.status === "running") {
@@ -195,15 +203,21 @@ export class TaskRunner {
       this.finishSpawnFailure(record.id, error);
       throw error;
     }
-    const processIdentity = await this.processController.processIdentity(child.pid);
-    if (!processIdentity || !processIdentity.includes(identityToken) || !processIdentity.includes("task-supervisor.mjs")) {
-      await this.processController.terminateAndWait(child.pid);
-      const error = new Error("Unable to establish task process identity");
-      this.finishSpawnFailure(record.id, error);
+    let started: TaskRecord;
+    try {
+      await waitForSupervisorReady(child, readyPath, identityToken);
+      const processIdentity = await this.processController.processIdentity(child.pid);
+      if (!processIdentity || !processIdentity.includes(identityToken) || !processIdentity.includes("task-supervisor.mjs")) {
+        throw new Error("Unable to establish task process identity");
+      }
+      started = this.options.taskStore.setPid(record.id, child.pid, processIdentity);
+      writeDurableExclusive(startPath, identityToken);
+    } catch (error) {
+      await this.processController.terminateAndWait(child.pid).catch(() => undefined);
+      const current = this.options.taskStore.get(record.id);
+      if (current?.status === "running") this.finishSpawnFailure(record.id, error);
       throw error;
     }
-    fs.writeFileSync(identityAcknowledgementPath, "ready", { flag: "wx", mode: 0o600 });
-    const started = this.options.taskStore.setPid(record.id, child.pid, processIdentity);
     active.timer = setTimeout(() => void this.terminate(record.id, "timed_out"), input.timeoutMs);
     active.timer.unref();
 
@@ -379,7 +393,7 @@ export function findExecutable(
   const platform = options.platform ?? process.platform;
   const pathValue = options.pathValue ?? process.env.PATH ?? "";
   const extensions = platform === "win32"
-    ? (options.pathExt ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")
+    ? (options.pathExt ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(isDirectWindowsExtension)
     : [""];
   for (const directory of pathValue.split(path.delimiter)) {
     if (!directory) continue;
@@ -395,6 +409,45 @@ export function findExecutable(
     }
   }
   return null;
+}
+
+function isDirectWindowsExtension(extension: string): boolean {
+  return [".exe", ".com"].includes(extension.toLowerCase());
+}
+
+function isDirectWindowsExecutable(executablePath: string): boolean {
+  return isDirectWindowsExtension(path.extname(executablePath));
+}
+
+function cleanupSupervisorHandshake(active: Pick<ActiveTask, "readyPath" | "startPath">): void {
+  fs.rmSync(active.readyPath, { force: true });
+  fs.rmSync(active.startPath, { force: true });
+}
+
+async function waitForSupervisorReady(child: ChildProcess, readyPath: string, token: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error("Task supervisor exited before becoming ready");
+    try {
+      const ready = JSON.parse(fs.readFileSync(readyPath, "utf8")) as { pid?: unknown; token?: unknown };
+      if (ready.pid !== child.pid || ready.token !== token) throw new Error("Task supervisor ready identity did not match");
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Task supervisor did not become ready");
+}
+
+function writeDurableExclusive(filePath: string, content: string): void {
+  const descriptor = fs.openSync(filePath, "wx", 0o600);
+  try {
+    fs.writeFileSync(descriptor, content);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 async function waitBounded(promise: Promise<void>, milliseconds: number): Promise<boolean> {

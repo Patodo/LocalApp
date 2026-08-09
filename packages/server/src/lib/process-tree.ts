@@ -47,7 +47,7 @@ export class ProcessTreeController {
     if (this.platform === "win32") {
       const args = ["/PID", String(pid), "/T", ...(force ? ["/F"] : [])];
       const result = await this.runCommandImpl("taskkill", args);
-      if (result.code !== 0 && this.isAlive(pid)) throw new Error(`taskkill failed: ${result.stderr.trim()}`);
+      if (force && result.code !== 0 && this.isAlive(pid)) throw new Error(`taskkill failed: ${result.stderr.trim()}`);
       return;
     }
     try {
