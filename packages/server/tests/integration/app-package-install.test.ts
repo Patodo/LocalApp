@@ -355,6 +355,26 @@ describe("atomic application package installation", () => {
     expect(readMeta("localadmin", "api-key-app").userId).toBe("localadmin");
   });
 
+  it("atomically retains the exact inspected package for browser and CLI installs", async () => {
+    const browserBytes = await fixturePackage({ name: "browser-retained-app", version: "1.0.0", html: "browser" });
+    const cliBytes = await fixturePackage({ name: "cli-retained-app", version: "1.0.0", html: "cli" });
+    expect((await installFixturePackage(browserBytes, ownerCookie)).status).toBe(201);
+    expect((await installFixturePackage(cliBytes, undefined, undefined, getTestApiKey())).status).toBe(201);
+
+    for (const [owner, name, bytes] of [
+      ["packageowner", "browser-retained-app", browserBytes],
+      ["localadmin", "cli-retained-app", cliBytes],
+    ] as const) {
+      const version = readMeta(owner, name).versions[0];
+      expect(version.packagePath).toMatch(/^\.packages\/v1-[a-f0-9]{64}\.localapp$/);
+      const retainedPath = path.join(dataDir, owner, name, version.packagePath);
+      expect(fs.readFileSync(retainedPath)).toEqual(bytes);
+      expect(sha256(fs.readFileSync(retainedPath))).toBe(version.digest);
+      const hidden = await fetch(`${baseUrl}/serve/${owner}/${name}/${version.packagePath}`);
+      expect(hidden.status).toBe(404);
+    }
+  });
+
   it("rejects a version route name that escapes the authenticated owner's app directory", async () => {
     await registerUser(baseUrl, "packagevictim", "victim-password");
     const victimCookie = await login("packagevictim", "victim-password");

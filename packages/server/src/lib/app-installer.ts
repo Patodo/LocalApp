@@ -48,6 +48,7 @@ export interface InstallAppPackageInput {
   packagePath: string;
   uploaderDisplayName?: string;
   requireExisting?: boolean;
+  preserveTargetAccess?: boolean;
 }
 
 export interface InstallOutcome {
@@ -151,6 +152,23 @@ async function installInspectedPackage(
   }
   if (knownDigest === inspected.digest && matchingVersion
     && fs.existsSync(path.join(pageDir, "versions", `v${matchingVersion.version}`))) {
+    const retained = await retainExactPackage(pageDir, matchingVersion.version, inspected);
+    if (matchingVersion.packagePath !== retained.relativePath) {
+      const updated = JSON.parse(JSON.stringify(existing)) as PageMeta;
+      const version = updated.versions.find((entry) => entry.version === matchingVersion.version)!;
+      version.packagePath = retained.relativePath;
+      try {
+        commitSourceManifestAndMeta(
+          pageDir,
+          getPageMetaPath(input.dataDir, input.ownerId, inspected.name),
+          readManifestState(pageDir, updated).sourceManifest,
+          updated,
+        );
+      } catch (error) {
+        if (retained.created) removeRetainedPackage(pageDir, retained.relativePath);
+        throw error;
+      }
+    }
     return {
       name: inspected.name,
       ownerId: input.ownerId,
@@ -165,6 +183,7 @@ async function installInspectedPackage(
 
   const jobDir = path.join(input.dataDir, ".staging", "apps", crypto.randomUUID());
   const sourceManifest = ownerIndependentManifest(inspected.manifest);
+  if (input.preserveTargetAccess) sourceManifest.pageAccess = existing?.pageAccess ?? { level: "owner" };
   const extractedDir = path.join(jobDir, "package");
   const stagedVersionDir = path.join(jobDir, "version");
   fs.mkdirSync(jobDir, { recursive: true });
@@ -175,6 +194,7 @@ async function installInspectedPackage(
   const previousManifestPath = path.join(pageDir, "manifest.json");
   const previousManifest = fs.existsSync(previousManifestPath) ? fs.readFileSync(previousManifestPath) : null;
   let finalVersionDir: string | undefined;
+  let retainedPackage: { relativePath: string; created: boolean } | undefined;
   try {
     await extractAppPackage(inspected, extractedDir);
     materializeStagedVersion(extractedDir, stagedVersionDir, sourceManifest);
@@ -227,12 +247,14 @@ async function installInspectedPackage(
     fs.mkdirSync(path.dirname(finalVersionDir), { recursive: true });
     fs.renameSync(stagedVersionDir, finalVersionDir);
     assertVersionHealthy(finalVersionDir);
+    retainedPackage = await retainExactPackage(pageDir, newVersion, inspected);
 
     const now = new Date().toISOString();
     const versionEntry: PageVersionMeta = {
       version: newVersion,
       appVersion: inspected.version,
       digest: inspected.digest,
+      packagePath: retainedPackage.relativePath,
       createdAt: now,
       fileCount: countFiles(finalVersionDir),
       totalSize: getDirectorySize(finalVersionDir),
@@ -278,6 +300,7 @@ async function installInspectedPackage(
     closeConnectionsForPage(pageDir);
     restoreDatabase(dbPath, dbBackupPath, dbExisted);
     if (finalVersionDir) removeDirRecursive(finalVersionDir);
+    if (retainedPackage?.created) removeRetainedPackage(pageDir, retainedPackage.relativePath);
     if (existing) {
       if (previousManifest) fs.writeFileSync(previousManifestPath, previousManifest);
       else fs.rmSync(previousManifestPath, { force: true });
@@ -459,6 +482,65 @@ function cleanupOldVersions(
   const retainedNumbers = new Set(retained.map((entry) => entry.version));
   for (const entry of allVersions) {
     if (!retainedNumbers.has(entry.version)) removeDirRecursive(path.join(pageDir, "versions", `v${entry.version}`));
+  }
+  const retainedPackages = new Set(retained.map((entry) => entry.packagePath).filter((value): value is string => Boolean(value)));
+  const packageDir = path.join(pageDir, ".packages");
+  if (!fs.existsSync(packageDir)) return;
+  for (const entry of fs.readdirSync(packageDir, { withFileTypes: true })) {
+    const relativePath = `.packages/${entry.name}`;
+    if (entry.isFile() && !retainedPackages.has(relativePath)) fs.rmSync(path.join(packageDir, entry.name), { force: true });
+  }
+  syncDirectory(packageDir);
+}
+
+async function retainExactPackage(
+  pageDir: string,
+  localVersion: number,
+  inspected: InspectedAppPackage,
+): Promise<{ relativePath: string; created: boolean }> {
+  const relativePath = `.packages/v${localVersion}-${inspected.digest}.localapp`;
+  const finalPath = path.join(pageDir, relativePath);
+  if (fs.existsSync(finalPath)) {
+    const retained = await inspectAppPackage(finalPath);
+    if (retained.digest !== inspected.digest) throw new AppInstallError("APP_PACKAGE_STORAGE_CONFLICT", "Retained package digest mismatch", 409);
+    return { relativePath, created: false };
+  }
+  const directory = path.dirname(finalPath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  syncDirectory(pageDir);
+  const tempPath = path.join(directory, `.${path.basename(finalPath)}.${process.pid}.${crypto.randomUUID()}.partial`);
+  try {
+    await fs.promises.copyFile(inspected.packagePath, tempPath, fs.constants.COPYFILE_EXCL);
+    await fs.promises.chmod(tempPath, 0o600);
+    const copied = await inspectAppPackage(tempPath);
+    if (copied.digest !== inspected.digest) throw new AppInstallError("APP_PACKAGE_STORAGE_CORRUPT", "Retained package digest mismatch", 500);
+    const handle = await fs.promises.open(tempPath, "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+    fs.renameSync(tempPath, finalPath);
+    syncDirectory(directory);
+    syncDirectory(pageDir);
+    return { relativePath, created: true };
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
+function removeRetainedPackage(pageDir: string, relativePath: string): void {
+  const packagePath = path.resolve(pageDir, relativePath);
+  const packageRoot = path.resolve(pageDir, ".packages");
+  if (path.dirname(packagePath) !== packageRoot) return;
+  fs.rmSync(packagePath, { force: true });
+  if (fs.existsSync(packageRoot)) syncDirectory(packageRoot);
+}
+
+function syncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, "r");
+    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    throw error;
   }
 }
 

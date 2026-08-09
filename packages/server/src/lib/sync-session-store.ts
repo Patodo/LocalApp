@@ -1,0 +1,245 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import type { Readable } from "node:stream";
+import { MAX_APP_PACKAGE_BYTES } from "./app-package.js";
+import { removeDirRecursive } from "./file-utils.js";
+
+export type SyncSessionStatus = "created" | "uploaded" | "committing" | "completed" | "failed";
+export interface SyncSessionRecord {
+  id: string;
+  ownerId: string;
+  mode: "app-only";
+  appName: string;
+  appVersion: string;
+  packageDigest: string;
+  packageSize: number;
+  status: SyncSessionStatus;
+  outcome: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export class SyncSessionError extends Error {
+  constructor(public readonly code: string, message: string, public readonly statusCode: number) {
+    super(message);
+    this.name = "SyncSessionError";
+  }
+}
+
+export class SyncSessionStore {
+  readonly rootDir: string;
+  private readonly retentionMs: number;
+
+  constructor(options: { dataDir: string; rootDir?: string; retentionMs?: number }) {
+    this.rootDir = path.resolve(options.rootDir ?? path.join(options.dataDir, ".staging", "sync"));
+    this.retentionMs = options.retentionMs ?? 24 * 60 * 60 * 1000;
+    fs.mkdirSync(this.rootDir, { recursive: true, mode: 0o700 });
+  }
+
+  sessionDir(id: string): string {
+    assertSessionId(id);
+    const directory = path.resolve(this.rootDir, id);
+    if (path.dirname(directory) !== this.rootDir) throw new SyncSessionError("SYNC_ID_INVALID", "Invalid synchronization ID", 400);
+    return directory;
+  }
+
+  create(input: Omit<SyncSessionRecord, "status" | "outcome" | "error" | "createdAt" | "updatedAt">): SyncSessionRecord {
+    validateInput(input);
+    const directory = this.sessionDir(input.id);
+    const existing = this.get(input.id);
+    if (existing) {
+      if (!sameIdentity(existing, input)) throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already used for different metadata", 409);
+      return existing;
+    }
+    try { fs.mkdirSync(directory, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        const raced = this.get(input.id);
+        if (raced && sameIdentity(raced, input)) return raced;
+        throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already in use", 409);
+      }
+      throw error;
+    }
+    const now = new Date().toISOString();
+    const session: SyncSessionRecord = { ...input, status: "created", outcome: null, error: null, createdAt: now, updatedAt: now };
+    this.write(session);
+    return session;
+  }
+
+  get(id: string): SyncSessionRecord | null {
+    const metadataPath = path.join(this.sessionDir(id), "session.json");
+    if (!fs.existsSync(metadataPath)) return null;
+    const value = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as SyncSessionRecord;
+    validateStored(value, id);
+    return value;
+  }
+
+  getOwned(id: string, ownerId: string): SyncSessionRecord | null {
+    const session = this.get(id);
+    return session?.ownerId === ownerId ? session : null;
+  }
+
+  list(): SyncSessionRecord[] {
+    const sessions: SyncSessionRecord[] = [];
+    for (const entry of fs.readdirSync(this.rootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const session = this.get(entry.name);
+        if (session) sessions.push(session);
+      } catch { /* corrupt entries are retained for operator recovery */ }
+    }
+    return sessions;
+  }
+
+  packagePath(id: string): string {
+    return path.join(this.sessionDir(id), "package.localapp");
+  }
+
+  async receivePackage(input: {
+    id: string;
+    ownerId: string;
+    stream: Readable;
+    contentLength: number;
+    signal?: AbortSignal;
+  }): Promise<SyncSessionRecord> {
+    const session = this.getOwned(input.id, input.ownerId);
+    if (!session) throw new SyncSessionError("SYNC_SESSION_NOT_FOUND", "Synchronization session not found", 404);
+    if (input.contentLength !== session.packageSize) throw new SyncSessionError("SYNC_PACKAGE_SIZE_MISMATCH", "Package size does not match session metadata", 400);
+    if (input.contentLength > MAX_APP_PACKAGE_BYTES) throw new SyncSessionError("SYNC_PACKAGE_TOO_LARGE", "Package exceeds transfer limit", 413);
+    const finalPath = this.packagePath(input.id);
+    if ((session.status === "uploaded" || session.status === "completed") && fs.existsSync(finalPath)) {
+      const stat = fs.statSync(finalPath);
+      if (stat.size === session.packageSize && await sha256File(finalPath) === session.packageDigest) return session;
+      throw new SyncSessionError("SYNC_PACKAGE_CONFLICT", "Staged package does not match session metadata", 409);
+    }
+    if (session.status === "committing") throw new SyncSessionError("SYNC_COMMIT_IN_PROGRESS", "Synchronization commit is in progress", 409);
+    const partialPath = path.join(this.sessionDir(input.id), `package.${process.pid}.${crypto.randomUUID()}.partial`);
+    const handle = await fs.promises.open(partialPath, "wx", 0o600);
+    const hash = crypto.createHash("sha256");
+    let size = 0;
+    try {
+      for await (const value of input.stream) {
+        if (input.signal?.aborted) throw new SyncSessionError("SYNC_CANCELLED", "Synchronization upload cancelled", 409);
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        size += chunk.length;
+        if (size > session.packageSize || size > MAX_APP_PACKAGE_BYTES) {
+          throw new SyncSessionError("SYNC_PACKAGE_TOO_LARGE", "Package exceeds declared or configured limit", 413);
+        }
+        hash.update(chunk);
+        await handle.write(chunk);
+      }
+      if (size !== session.packageSize) throw new SyncSessionError("SYNC_PACKAGE_SIZE_MISMATCH", "Uploaded package size mismatch", 400);
+      if (hash.digest("hex") !== session.packageDigest) throw new SyncSessionError("SYNC_PACKAGE_DIGEST_MISMATCH", "Uploaded package digest mismatch", 400);
+      await handle.sync();
+      await handle.close();
+      fs.renameSync(partialPath, finalPath);
+      syncDirectory(this.sessionDir(input.id));
+      return this.transition(input.id, input.ownerId, "uploaded");
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      fs.rmSync(partialPath, { force: true });
+      throw error;
+    }
+  }
+
+  transition(id: string, ownerId: string, status: SyncSessionStatus, input?: { outcome?: Record<string, unknown>; error?: string }): SyncSessionRecord {
+    const session = this.getOwned(id, ownerId);
+    if (!session) throw new SyncSessionError("SYNC_SESSION_NOT_FOUND", "Synchronization session not found", 404);
+    if (session.status === "completed") return session;
+    const next: SyncSessionRecord = {
+      ...session,
+      status,
+      outcome: input?.outcome ?? session.outcome,
+      error: input?.error ?? (status === "failed" ? session.error : null),
+      updatedAt: new Date().toISOString(),
+    };
+    this.write(next);
+    return next;
+  }
+
+  remove(id: string, ownerId: string): boolean {
+    const session = this.getOwned(id, ownerId);
+    if (!session) return false;
+    if (session.status === "committing" || session.status === "completed") {
+      throw new SyncSessionError("SYNC_CANNOT_CANCEL", "Synchronization can no longer be cancelled", 409);
+    }
+    removeDirRecursive(this.sessionDir(id));
+    syncDirectory(this.rootDir);
+    return true;
+  }
+
+  prune(now = Date.now()): number {
+    let removed = 0;
+    for (const entry of fs.readdirSync(this.rootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      let session: SyncSessionRecord | null;
+      try { session = this.get(entry.name); } catch { continue; }
+      if (!session || session.status === "committing" || session.status === "completed") continue;
+      const age = now - fs.statSync(this.sessionDir(entry.name)).mtimeMs;
+      if (age <= this.retentionMs) continue;
+      removeDirRecursive(this.sessionDir(entry.name));
+      removed += 1;
+    }
+    if (removed > 0) syncDirectory(this.rootDir);
+    return removed;
+  }
+
+  private write(session: SyncSessionRecord): void {
+    const directory = this.sessionDir(session.id);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const finalPath = path.join(directory, "session.json");
+    const tempPath = path.join(directory, `.session.${process.pid}.${crypto.randomUUID()}.partial`);
+    try {
+      const descriptor = fs.openSync(tempPath, "wx", 0o600);
+      try {
+        fs.writeFileSync(descriptor, `${JSON.stringify(session)}\n`);
+        fs.fsyncSync(descriptor);
+      } finally { fs.closeSync(descriptor); }
+      fs.renameSync(tempPath, finalPath);
+      syncDirectory(directory);
+    } finally { fs.rmSync(tempPath, { force: true }); }
+  }
+}
+
+function validateInput(input: { id: string; ownerId: string; mode: string; appName: string; appVersion: string; packageDigest: string; packageSize: number }): void {
+  assertSessionId(input.id);
+  if (!input.ownerId || !input.appName || !input.appVersion) throw new SyncSessionError("SYNC_METADATA_INVALID", "Synchronization metadata is incomplete", 400);
+  if (input.mode !== "app-only") throw new SyncSessionError("SYNC_MODE_UNSUPPORTED", "Only application-only synchronization is supported", 400);
+  if (!/^[a-f0-9]{64}$/.test(input.packageDigest)) throw new SyncSessionError("SYNC_DIGEST_INVALID", "Package digest must be lowercase SHA-256", 400);
+  if (!Number.isSafeInteger(input.packageSize) || input.packageSize < 1) throw new SyncSessionError("SYNC_SIZE_INVALID", "Package size must be a positive integer", 400);
+  if (input.packageSize > MAX_APP_PACKAGE_BYTES) throw new SyncSessionError("SYNC_PACKAGE_TOO_LARGE", "Package exceeds transfer limit", 413);
+}
+
+function validateStored(value: SyncSessionRecord, id: string): void {
+  if (value.id !== id || typeof value.ownerId !== "string" || !value.ownerId) throw new SyncSessionError("SYNC_SESSION_CORRUPT", "Invalid synchronization session metadata", 500);
+}
+
+function sameIdentity(left: SyncSessionRecord, right: Pick<SyncSessionRecord, "ownerId" | "mode" | "appName" | "appVersion" | "packageDigest" | "packageSize">): boolean {
+  return left.ownerId === right.ownerId && left.mode === right.mode && left.appName === right.appName
+    && left.appVersion === right.appVersion && left.packageDigest === right.packageDigest && left.packageSize === right.packageSize;
+}
+
+function assertSessionId(id: string): void {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    throw new SyncSessionError("SYNC_ID_INVALID", "Invalid synchronization ID", 400);
+  }
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+function syncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, "r");
+    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    throw error;
+  }
+}

@@ -48,6 +48,7 @@ export interface PageVersionMeta {
   version: number;
   appVersion?: string;
   digest?: string;
+  packagePath?: string;
   createdAt: string;
   fileCount: number;
   totalSize: number;

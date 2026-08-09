@@ -53,6 +53,11 @@ import { SecretBox } from "./lib/secret-box.js";
 import { PeerStore } from "./lib/peer-store.js";
 import { peersRoutes } from "./routes/peers.js";
 import { peerProtocolRoutes } from "./routes/peer-protocol.js";
+import { SyncSessionStore } from "./lib/sync-session-store.js";
+import { SyncJobStore } from "./lib/sync-job-store.js";
+import { AppSyncTarget } from "./lib/app-sync-target.js";
+import { AppSyncSource } from "./lib/app-sync-source.js";
+import { syncSourceRoutes, syncTargetRoutes } from "./routes/sync.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -109,15 +114,24 @@ async function registerServerPluginsAndRoutes(
   });
   const agentRunner = new AgentRunner({ taskRunner });
   const peerStore = new PeerStore(new SecretBox(app.config.masterKeyFile));
+  const syncSessions = new SyncSessionStore({ dataDir: app.config.dataDir });
+  syncSessions.prune();
+  const syncJobs = new SyncJobStore();
+  syncJobs.reconcileInterrupted();
+  const syncTarget = new AppSyncTarget(app.config.dataDir, syncSessions);
+  syncTarget.reconcileInterrupted();
+  const syncSource = new AppSyncSource(app.config.dataDir, syncJobs, peerStore);
   await taskRunner.reconcileRunning();
   workspaceStore.setTaskRunner(taskRunner);
   app.addHook("onClose", async () => {
+    await syncSource.shutdown();
     await Promise.all([taskRunner.shutdown(), workspaceStore.shutdown()]);
   });
   app.register(verificationRoutes);
   await setupRoutes(app, options.setupTokens);
   await systemRoutes(app, { configStore: options.configStore, restartController: options.restartController });
   await peerProtocolRoutes(app);
+  await syncTargetRoutes(app, syncTarget);
   app.get("/health", async () => ({ status: "ok" }));
 
   const webRoot = options.webRoot ?? path.resolve(__dirname, "../../web/out");
@@ -156,6 +170,7 @@ async function registerServerPluginsAndRoutes(
     authScope.register(schemasRoutes);
     authScope.register(async (workspaceScope) => workspacesRoutes(workspaceScope, workspaceStore));
     authScope.register(async (taskScope) => tasksRoutes(taskScope, { taskStore, taskRunner, agentRunner }));
+    authScope.register(async (syncScope) => syncSourceRoutes(syncScope, syncSource));
   });
   app.register(adminRoutes);
 

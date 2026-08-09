@@ -414,6 +414,28 @@ export async function initMetaDb(dataDir: string): Promise<void> {
   if (!taskColumns.includes("process_identity")) db.run("ALTER TABLE tasks ADD COLUMN process_identity TEXT");
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS sync_jobs (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      app_name TEXT NOT NULL,
+      peer_id TEXT NOT NULL,
+      sync_id TEXT NOT NULL,
+      with_data INTEGER NOT NULL DEFAULT 0,
+      app_version TEXT,
+      package_digest TEXT,
+      package_size INTEGER,
+      status TEXT NOT NULL,
+      history_json TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_sync_jobs_owner ON sync_jobs(owner_id, created_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status)`);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
