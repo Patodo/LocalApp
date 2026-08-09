@@ -25,13 +25,14 @@ import {
   materializeManifest,
   mergeManifests,
   PlatformManifestValidationError,
+  commitSourceManifestAndMeta,
   readManifestState,
-  writeSourceManifest,
 } from "./app-manifest.js";
 import { CURRENT_PLATFORM_VERSION } from "./platform-version.js";
 import { countFiles, getDirectorySize, removeDirRecursive } from "./file-utils.js";
 import {
   getPageDir,
+  getPageMetaPath,
   readPageMeta,
   writePageMeta,
   type PageMeta,
@@ -148,11 +149,12 @@ async function installInspectedPackage(
       409,
     );
   }
-  if (knownDigest === inspected.digest) {
+  if (knownDigest === inspected.digest && matchingVersion
+    && fs.existsSync(path.join(pageDir, "versions", `v${matchingVersion.version}`))) {
     return {
       name: inspected.name,
       ownerId: input.ownerId,
-      localVersion: matchingVersion?.version ?? knownIdentity!.version,
+      localVersion: matchingVersion.version,
       appVersion: inspected.version,
       digest: inspected.digest,
       created: false,
@@ -248,9 +250,20 @@ async function installInspectedPackage(
       ...(baseMeta.packageIdentities ?? {}),
       [inspected.version]: { digest: inspected.digest, version: newVersion },
     };
-    writeSourceManifest(pageDir, sourceManifest);
-    writePageMeta(input.dataDir, input.ownerId, inspected.name, updatedMeta);
-    cleanupOldVersions(pageDir, updatedMeta, input.dataDir);
+    const allVersions = updatedMeta.versions;
+    updatedMeta.versions = retainedVersions(updatedMeta);
+    commitSourceManifestAndMeta(
+      pageDir,
+      getPageMetaPath(input.dataDir, input.ownerId, inspected.name),
+      sourceManifest,
+      updatedMeta,
+    );
+    try {
+      cleanupOldVersions(pageDir, allVersions, updatedMeta.versions);
+    } catch {
+      // Metadata is already durable and references only retained directories.
+      // A later maintenance pass can reclaim an obsolete directory safely.
+    }
     return {
       name: inspected.name,
       ownerId: input.ownerId,
@@ -298,8 +311,12 @@ function activateVersionLocked(
   updated.currentAppVersion = target.appVersion;
   updated.previousVersion = recordPrevious && meta.currentVersion !== localVersion ? meta.currentVersion : undefined;
   updated.updatedAt = new Date().toISOString();
-  writeSourceManifest(pageDir, sourceManifest);
-  writePageMeta(dataDir, meta.userId, meta.name, updated);
+  commitSourceManifestAndMeta(
+    pageDir,
+    getPageMetaPath(dataDir, meta.userId, meta.name),
+    sourceManifest,
+    updated,
+  );
   return {
     name: meta.name,
     ownerId: meta.userId,
@@ -421,23 +438,28 @@ function rotateAppDbBackups(pageDir: string): void {
   fs.copyFileSync(appDb, backupV1);
 }
 
-function cleanupOldVersions(pageDir: string, meta: PageMeta, dataDir: string): void {
-  if (meta.versions.length <= MAX_RETAINED_VERSIONS) return;
+function retainedVersions(meta: PageMeta): PageVersionMeta[] {
+  if (meta.versions.length <= MAX_RETAINED_VERSIONS) return meta.versions;
   const protectedVersions = new Set(
     [meta.currentVersion, meta.previousVersion].filter((version): version is number => Boolean(version)),
   );
-  const retained = meta.versions
+  return meta.versions
     .filter((entry) => protectedVersions.has(entry.version))
     .concat(meta.versions
       .filter((entry) => !protectedVersions.has(entry.version))
       .slice(-(MAX_RETAINED_VERSIONS - protectedVersions.size)))
     .sort((left, right) => left.version - right.version);
+}
+
+function cleanupOldVersions(
+  pageDir: string,
+  allVersions: readonly PageVersionMeta[],
+  retained: readonly PageVersionMeta[],
+): void {
   const retainedNumbers = new Set(retained.map((entry) => entry.version));
-  for (const entry of meta.versions) {
+  for (const entry of allVersions) {
     if (!retainedNumbers.has(entry.version)) removeDirRecursive(path.join(pageDir, "versions", `v${entry.version}`));
   }
-  meta.versions = retained;
-  writePageMeta(dataDir, meta.userId, meta.name, meta);
 }
 
 function assertVersionHealthy(versionDir: string): void {

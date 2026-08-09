@@ -6,6 +6,7 @@ import { validateNotifyConfig } from "./notify-config.js";
 
 const SOURCE_MANIFEST_FILE = "manifest.json";
 const PLATFORM_MANIFEST_FILE = "manifest.platform.json";
+const APP_STATE_TRANSACTION_FILE = ".app-state-transaction.json";
 const PLATFORM_MANIFEST_KEYS = new Set(["description", "pageAccess", "shell", "db", "notify", "lifecycle"]);
 const ACCESS_LEVELS = new Set<AccessLevel>(["public", "authenticated", "owner", "acl"]);
 const DB_MODES = new Set(["crud", "sql"]);
@@ -162,6 +163,42 @@ export function validatePlatformManifest(value: unknown): asserts value is Recor
 
 export function writeSourceManifest(pageDir: string, manifest: Record<string, unknown>): void {
   atomicWriteJson(path.join(pageDir, SOURCE_MANIFEST_FILE), manifest);
+}
+
+export function commitSourceManifestAndMeta(
+  pageDir: string,
+  metaPath: string,
+  sourceManifest: Record<string, unknown>,
+  meta: object,
+): void {
+  const sourcePath = path.join(pageDir, SOURCE_MANIFEST_FILE);
+  const previousSource = readJsonObject(sourcePath);
+  const transactionPath = path.join(pageDir, APP_STATE_TRANSACTION_FILE);
+  atomicWriteJson(transactionPath, { sourceManifest, meta });
+  try {
+    atomicWriteJson(sourcePath, sourceManifest);
+    atomicWriteJson(metaPath, meta as Record<string, unknown>);
+    fs.rmSync(transactionPath, { force: true });
+  } catch (error) {
+    if (previousSource) atomicWriteJson(sourcePath, previousSource);
+    else fs.rmSync(sourcePath, { force: true });
+    fs.rmSync(transactionPath, { force: true });
+    throw error;
+  }
+}
+
+export function recoverSourceManifestAndMeta(pageDir: string, metaPath: string): void {
+  const transactionPath = path.join(pageDir, APP_STATE_TRANSACTION_FILE);
+  const transaction = readJsonObject(transactionPath);
+  if (!transaction) return;
+  const sourceManifest = transaction.sourceManifest;
+  const meta = transaction.meta;
+  if (!isRecord(sourceManifest) || !isRecord(meta)) {
+    throw new Error("Invalid application state transaction");
+  }
+  atomicWriteJson(path.join(pageDir, SOURCE_MANIFEST_FILE), sourceManifest);
+  atomicWriteJson(metaPath, meta);
+  fs.rmSync(transactionPath, { force: true });
 }
 
 export function writePlatformManifest(pageDir: string, manifest: Record<string, unknown>): void {

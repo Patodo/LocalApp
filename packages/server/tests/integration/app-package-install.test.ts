@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ZipArchive } from "archiver";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -139,6 +139,82 @@ describe("atomic application package installation", () => {
     expect(await (await fetch(`${baseUrl}/serve/packageowner/activation-app/index.html`)).text()).toBe("version-two");
   });
 
+  it("backfills stable identities for a retained legacy deployment before listing or activating it", async () => {
+    const name = "legacy-identity-app";
+    const pageDir = path.join(dataDir, "packageowner", name);
+    const versionDir = path.join(pageDir, "versions", "v1");
+    fs.mkdirSync(versionDir, { recursive: true });
+    fs.writeFileSync(path.join(versionDir, "index.html"), "legacy-version");
+    fs.writeFileSync(path.join(pageDir, "meta.json"), `${JSON.stringify({
+      name,
+      userId: "packageowner",
+      description: "",
+      currentVersion: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      versions: [{ version: 1, createdAt: "2026-01-01T00:00:00.000Z", fileCount: 1, totalSize: 14 }],
+      metadata: {},
+    }, null, 2)}\n`);
+
+    const versions = await fetch(`${baseUrl}/api/me/apps/${name}/versions`, { headers: { Cookie: ownerCookie } });
+    expect(versions.status).toBe(200);
+    expect((await versions.json()).data.versions).toEqual([
+      expect.objectContaining({ version: 1, appVersion: "legacy-1", digest: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    ]);
+
+    const activation = await fetch(`${baseUrl}/api/me/apps/${name}/versions/1/activate`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie },
+    });
+    expect(activation.status).toBe(200);
+    expect((await activation.json()).data).toMatchObject({ localVersion: 1, appVersion: "legacy-1" });
+    expect(readMeta("packageowner", name).versions[0]).toMatchObject({ appVersion: "legacy-1", digest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("keeps manifest and metadata paired when activation or rollback metadata writes fail", async () => {
+    const v1 = await fixturePackage({ name: "atomic-activation-app", version: "1.0.0", html: "version-one", manifest: { description: "one" } });
+    const v2 = await fixturePackage({ name: "atomic-activation-app", version: "2.0.0", html: "version-two", manifest: { description: "two" } });
+    expect((await installFixturePackage(v1, ownerCookie)).status).toBe(201);
+    expect((await installFixturePackage(v2, ownerCookie)).status).toBe(201);
+
+    const pageDir = path.join(dataDir, "packageowner", "atomic-activation-app");
+    const assertUnchanged = () => {
+      expect(readMeta("packageowner", "atomic-activation-app")).toMatchObject({ currentVersion: 2, currentAppVersion: "2.0.0" });
+      expect(JSON.parse(fs.readFileSync(path.join(pageDir, "manifest.json"), "utf8"))).toMatchObject({ description: "two" });
+    };
+    const originalRename = fs.renameSync;
+    const rejectOneMetaWrite = () => vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to).endsWith(`${path.sep}meta.json`)) {
+        throw new Error("injected meta write failure");
+      }
+      return originalRename(from, to);
+    });
+
+    const activationRename = rejectOneMetaWrite();
+    try {
+      const response = await fetch(`${baseUrl}/api/me/apps/atomic-activation-app/versions/1/activate`, {
+        method: "POST",
+        headers: { Cookie: ownerCookie },
+      });
+      expect(response.status).toBe(400);
+      assertUnchanged();
+    } finally {
+      activationRename.mockRestore();
+    }
+
+    const rollbackRename = rejectOneMetaWrite();
+    try {
+      const response = await fetch(`${baseUrl}/api/me/apps/atomic-activation-app/rollback`, {
+        method: "POST",
+        headers: { Cookie: ownerCookie },
+      });
+      expect(response.status).toBe(400);
+      assertUnchanged();
+    } finally {
+      rollbackRename.mockRestore();
+    }
+  });
+
   it("retains the previous active deployment when pruning version history so rollback remains available", async () => {
     for (let version = 1; version <= 10; version += 1) {
       const packageBytes = await fixturePackage({
@@ -169,6 +245,76 @@ describe("atomic application package installation", () => {
     expect(rolledBack.status).toBe(200);
     expect((await rolledBack.json()).data).toMatchObject({ localVersion: 1, appVersion: "1.0.0" });
     expect(await (await fetch(`${baseUrl}/serve/packageowner/retention-app/index.html`)).text()).toBe("version-1");
+  });
+
+  it("commits pruned metadata before removing obsolete deployment directories", async () => {
+    for (let version = 1; version <= 10; version += 1) {
+      expect((await installFixturePackage(
+        await fixturePackage({ name: "prune-atomic-app", version: `${version}.0.0`, html: `version-${version}` }),
+        ownerCookie,
+      )).status).toBe(201);
+    }
+    expect((await fetch(`${baseUrl}/api/me/apps/prune-atomic-app/versions/1/activate`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie },
+    })).status).toBe(200);
+
+    const originalRename = fs.renameSync;
+    let metaRenames = 0;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to).endsWith(`${path.sep}meta.json`) && ++metaRenames === 2) {
+        throw new Error("injected prune metadata failure");
+      }
+      return originalRename(from, to);
+    });
+    try {
+      const response = await installFixturePackage(
+        await fixturePackage({ name: "prune-atomic-app", version: "11.0.0", html: "version-11" }),
+        ownerCookie,
+      );
+      expect(response.status).toBe(201);
+    } finally {
+      rename.mockRestore();
+    }
+
+    const pageDir = path.join(dataDir, "packageowner", "prune-atomic-app");
+    const meta = readMeta("packageowner", "prune-atomic-app");
+    expect(meta.currentVersion).toBe(11);
+    for (const version of meta.versions as Array<{ version: number }>) {
+      expect(fs.existsSync(path.join(pageDir, "versions", `v${version.version}`))).toBe(true);
+    }
+  });
+
+  it("reinstalls an identical package when its previous deployment was pruned", async () => {
+    expect((await installFixturePackage(
+      await fixturePackage({ name: "pruned-identity-app", version: "1.0.0", html: "version-1" }),
+      ownerCookie,
+    )).status).toBe(201);
+    const prunedPackage = await fixturePackage({ name: "pruned-identity-app", version: "2.0.0", html: "version-2" });
+    expect((await installFixturePackage(prunedPackage, ownerCookie)).status).toBe(201);
+    for (let version = 3; version <= 10; version += 1) {
+      expect((await installFixturePackage(
+        await fixturePackage({ name: "pruned-identity-app", version: `${version}.0.0`, html: `version-${version}` }),
+        ownerCookie,
+      )).status).toBe(201);
+    }
+    expect((await fetch(`${baseUrl}/api/me/apps/pruned-identity-app/versions/1/activate`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie },
+    })).status).toBe(200);
+    expect((await installFixturePackage(
+      await fixturePackage({ name: "pruned-identity-app", version: "11.0.0", html: "version-11" }),
+      ownerCookie,
+    )).status).toBe(201);
+
+    const reinstalled = await installFixturePackage(prunedPackage, ownerCookie);
+    expect(reinstalled.status).toBe(201);
+    expect((await reinstalled.json()).data).toMatchObject({ localVersion: 12, appVersion: "2.0.0", idempotent: false });
+    const pageDir = path.join(dataDir, "packageowner", "pruned-identity-app");
+    expect(fs.existsSync(path.join(pageDir, "versions", "v12"))).toBe(true);
+    expect(readMeta("packageowner", "pruned-identity-app").versions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ version: 12, appVersion: "2.0.0" })]),
+    );
   });
 
   it("accepts an API key and binds a new application to that key's user", async () => {

@@ -7,6 +7,7 @@ import { BusinessMetadata, DataSchema, PageAccess, ManifestDb, RouteAccess, Shel
 import { getDirectorySize } from "../lib/file-utils.js";
 import { initMetaDb } from "../lib/meta-sqlite.js";
 import { loadConfig, type ServerConfig } from "../lib/config.js";
+import { recoverSourceManifestAndMeta } from "../lib/app-manifest.js";
 import type { IssueTemplateConfig } from "@localapp/server-core";
 
 declare module "fastify" {
@@ -75,8 +76,13 @@ export function getPageMetaPath(dataDir: string, userId: string, name: string): 
 
 export function readPageMeta(dataDir: string, userId: string, name: string): PageMeta | null {
   const metaPath = getPageMetaPath(dataDir, userId, name);
+  recoverSourceManifestAndMeta(path.dirname(metaPath), metaPath);
   if (!fs.existsSync(metaPath)) return null;
-  return JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as PageMeta;
+  if (backfillLegacyVersionIdentities(path.dirname(metaPath), meta)) {
+    writePageMeta(dataDir, userId, name, meta);
+  }
+  return meta;
 }
 
 export function writePageMeta(dataDir: string, userId: string, name: string, meta: PageMeta): void {
@@ -113,4 +119,56 @@ export function getUserTotalSize(dataDir: string, userId: string): number {
 export function readDbConfig(dataDir: string, userId: string, name: string): ManifestDb {
   const meta = readPageMeta(dataDir, userId, name);
   return meta?.db ?? { mode: "crud", sqlAccess: "owner", defaultAccess: { read: "public", create: "public", update: "public", delete: "public" } };
+}
+
+function backfillLegacyVersionIdentities(pageDir: string, meta: PageMeta): boolean {
+  let changed = false;
+  const identities = { ...(meta.packageIdentities ?? {}) };
+  for (const version of meta.versions) {
+    if (!version.appVersion) {
+      version.appVersion = `legacy-${version.version}`;
+      changed = true;
+    }
+    if (!version.digest) {
+      version.digest = digestDeploymentDirectory(path.join(pageDir, "versions", `v${version.version}`));
+      changed = true;
+    }
+    if (!identities[version.appVersion]) {
+      identities[version.appVersion] = { digest: version.digest, version: version.version };
+      changed = true;
+    }
+  }
+  if (Object.keys(identities).length > 0 && JSON.stringify(meta.packageIdentities) !== JSON.stringify(identities)) {
+    meta.packageIdentities = identities;
+    changed = true;
+  }
+  if (!meta.currentAppVersion) {
+    const current = meta.versions.find((version) => version.version === meta.currentVersion);
+    if (current?.appVersion) {
+      meta.currentAppVersion = current.appVersion;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function digestDeploymentDirectory(directory: string): string {
+  const hash = crypto.createHash("sha256");
+  const visit = (current: string, relative = ""): void => {
+    const entries = fs.readdirSync(current, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const entryRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(entryPath, entryRelative);
+      else if (entry.isFile()) {
+        hash.update(entryRelative);
+        hash.update("\0");
+        hash.update(fs.readFileSync(entryPath));
+        hash.update("\0");
+      }
+    }
+  };
+  if (fs.existsSync(directory)) visit(directory);
+  else hash.update(`missing:${directory}`);
+  return hash.digest("hex");
 }
