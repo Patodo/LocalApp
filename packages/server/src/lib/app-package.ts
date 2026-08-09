@@ -332,7 +332,13 @@ function validatePublishablePath(entryPath: string, manifest: Record<string, unk
   if (isRecord(backend)) {
     const root = typeof backend.root === "string" && backend.root ? backend.root : "backend";
     assertSafeArchivePath(root, false);
-    if (entryPath.startsWith(`${root}/`) && entryPath.endsWith(".json") && !entryPath.endsWith("/actions.manifest.json")) return;
+    if (entryPath.startsWith(`${root}/`) && entryPath.endsWith("/actions.manifest.json")) {
+      throw new AppPackageValidationError(
+        "Hosted actions are disabled; application packages support named SQL backend contracts only",
+        entryPath,
+      );
+    }
+    if (entryPath.startsWith(`${root}/`) && entryPath.endsWith(".json")) return;
   }
   throw new AppPackageValidationError(`Unsupported package file or backend file outside declared root: ${entryPath}`, entryPath);
 }

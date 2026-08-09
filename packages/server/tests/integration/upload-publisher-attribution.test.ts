@@ -67,7 +67,13 @@ describe("release publisher attribution", () => {
     expect(uploadResponse.status).toBe(200);
 
     const updated = readPageMeta(dataDir, "releasepublisher", "publisher-app");
-    expect(updated?.versions[0]).toEqual(legacyVersion);
+    expect(updated?.versions[0]).toMatchObject({
+      ...legacyVersion,
+      appVersion: "legacy-1",
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(updated?.versions[0]).not.toHaveProperty("uploaderId");
+    expect(updated?.versions[0]).not.toHaveProperty("uploaderDisplayName");
     expect(updated?.versions[1]).toMatchObject({
       version: 2,
       uploaderId: "releasepublisher",
