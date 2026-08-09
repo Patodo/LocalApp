@@ -49,6 +49,10 @@ import { TaskRunner } from "./lib/task-runner.js";
 import { AgentRunner } from "./lib/agent-runner.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { tasksRoutes } from "./routes/tasks.js";
+import { SecretBox } from "./lib/secret-box.js";
+import { PeerStore } from "./lib/peer-store.js";
+import { peersRoutes } from "./routes/peers.js";
+import { peerProtocolRoutes } from "./routes/peer-protocol.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -104,6 +108,7 @@ async function registerServerPluginsAndRoutes(
     taskDir: path.join(app.config.dataDir, "tasks"),
   });
   const agentRunner = new AgentRunner({ taskRunner });
+  const peerStore = new PeerStore(new SecretBox(app.config.masterKeyFile));
   await taskRunner.reconcileRunning();
   workspaceStore.setTaskRunner(taskRunner);
   app.addHook("onClose", async () => {
@@ -112,6 +117,7 @@ async function registerServerPluginsAndRoutes(
   app.register(verificationRoutes);
   await setupRoutes(app, options.setupTokens);
   await systemRoutes(app, { configStore: options.configStore, restartController: options.restartController });
+  await peerProtocolRoutes(app);
   app.get("/health", async () => ({ status: "ok" }));
 
   const webRoot = options.webRoot ?? path.resolve(__dirname, "../../web/out");
@@ -134,6 +140,7 @@ async function registerServerPluginsAndRoutes(
   app.register(wsRoutes);
   app.register(desktopActionsRoutes);
   app.register(myServeRoutes);
+  app.register(async (peerScope) => peersRoutes(peerScope, peerStore));
   app.register(serveRoutes);
   app.register(authenticatedCliRoutes);
   app.register(depsRoutes);

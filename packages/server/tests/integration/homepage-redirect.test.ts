@@ -79,6 +79,14 @@ describe("GET / homepage", () => {
     expect((await fetch(`${baseUrl}/my/system.txt?_rsc=1`, { headers: { cookie: adminCookie } })).headers.get("content-type")).toContain("text/plain");
   });
 
+  it("restricts the peer settings page and its flight payload to administrators", async () => {
+    const userCookie = await registerAndLogin(baseUrl, "peer-page-user", "pass123456");
+    const userPage = await fetch(`${baseUrl}/my/peers`, { redirect: "manual", headers: { cookie: userCookie } });
+    expect(userPage.status).toBe(302);
+    expect(userPage.headers.get("location")).toBe("/");
+    expect((await fetch(`${baseUrl}/my/peers.txt?_rsc=1`, { redirect: "manual", headers: { cookie: userCookie } })).status).toBe(302);
+  });
+
   it("rejects noncanonical management paths before authorization and file selection", async () => {
     const userCookie = await registerAndLogin(baseUrl, "path-user", "pass123456");
     const variants = [

@@ -18,6 +18,22 @@ export interface ApiKeyRecord {
   createdAt: string;
 }
 
+export interface PeerRow {
+  id: string;
+  name: string;
+  baseUrl: string;
+  credential: string;
+  acceptInsecureHttp: boolean;
+  verifiedUserId: string | null;
+  verifiedUserName: string | null;
+  verifiedUserDisplayName: string | null;
+  protocolVersion: number | null;
+  transferLimits: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 const API_KEY_HASH_PREFIX = "sha256:";
 
 function apiKeyStorageValue(key: string): string {
@@ -181,6 +197,24 @@ export async function initMetaDb(dataDir: string): Promise<void> {
     )
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS peers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      base_url TEXT NOT NULL,
+      credential TEXT NOT NULL,
+      accept_insecure_http INTEGER NOT NULL DEFAULT 0,
+      verified_user_id TEXT,
+      verified_user_name TEXT,
+      verified_user_display_name TEXT,
+      protocol_version INTEGER,
+      transfer_limits TEXT,
+      verified_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS request_logs (
@@ -562,6 +596,70 @@ export function listApiKeysByUser(userId: string): Array<{ key: string; createdA
   }
   stmt.free();
   return results;
+}
+
+function peerFromRow(row: Record<string, unknown>): PeerRow {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    baseUrl: String(row.base_url),
+    credential: String(row.credential),
+    acceptInsecureHttp: Number(row.accept_insecure_http) === 1,
+    verifiedUserId: row.verified_user_id == null ? null : String(row.verified_user_id),
+    verifiedUserName: row.verified_user_name == null ? null : String(row.verified_user_name),
+    verifiedUserDisplayName: row.verified_user_display_name == null ? null : String(row.verified_user_display_name),
+    protocolVersion: row.protocol_version == null ? null : Number(row.protocol_version),
+    transferLimits: row.transfer_limits == null ? null : String(row.transfer_limits),
+    verifiedAt: row.verified_at == null ? null : String(row.verified_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function createPeerRecord(peer: PeerRow): PeerRow {
+  const d = getDb();
+  d.run(
+    `INSERT INTO peers (id, name, base_url, credential, accept_insecure_http, verified_user_id, verified_user_name, verified_user_display_name, protocol_version, transfer_limits, verified_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [peer.id, peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.createdAt, peer.updatedAt],
+  );
+  saveDb();
+  return peer;
+}
+
+export function getPeerRecord(id: string): PeerRow | null {
+  const stmt = getDb().prepare("SELECT * FROM peers WHERE id = ?");
+  stmt.bind([id]);
+  const peer = stmt.step() ? peerFromRow(stmt.getAsObject() as Record<string, unknown>) : null;
+  stmt.free();
+  return peer;
+}
+
+export function listPeerRecords(): PeerRow[] {
+  const stmt = getDb().prepare("SELECT * FROM peers ORDER BY created_at ASC, id ASC");
+  const peers: PeerRow[] = [];
+  while (stmt.step()) peers.push(peerFromRow(stmt.getAsObject() as Record<string, unknown>));
+  stmt.free();
+  return peers;
+}
+
+export function updatePeerRecord(peer: PeerRow): PeerRow | null {
+  const d = getDb();
+  d.run(
+    `UPDATE peers SET name = ?, base_url = ?, credential = ?, accept_insecure_http = ?, verified_user_id = ?, verified_user_name = ?, verified_user_display_name = ?, protocol_version = ?, transfer_limits = ?, verified_at = ?, updated_at = ? WHERE id = ?`,
+    [peer.name, peer.baseUrl, peer.credential, peer.acceptInsecureHttp ? 1 : 0, peer.verifiedUserId, peer.verifiedUserName, peer.verifiedUserDisplayName, peer.protocolVersion, peer.transferLimits, peer.verifiedAt, peer.updatedAt, peer.id],
+  );
+  if (d.getRowsModified() === 0) return null;
+  saveDb();
+  return peer;
+}
+
+export function deletePeerRecord(id: string): boolean {
+  const d = getDb();
+  d.run("DELETE FROM peers WHERE id = ?", [id]);
+  const deleted = d.getRowsModified() > 0;
+  if (deleted) saveDb();
+  return deleted;
 }
 
 function toUserRecord(row: UserRow): UserRecord {

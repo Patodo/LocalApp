@@ -18,12 +18,12 @@ function serveNextHtml(page: string) {
   };
 }
 
-const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings", "system"]);
+const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings", "system", "peers"]);
 
 type CanonicalMyPage = { page: string; exportedPath: string; flight: boolean };
 
 function canonicalMyPage(req: FastifyRequest, sub: string): CanonicalMyPage | null {
-  const rawPath = req.raw.url.split("?", 1)[0];
+  const rawPath = (req.raw.url ?? "").split("?", 1)[0];
   if (!rawPath.startsWith("/my/")) return null;
   const rawSub = rawPath.slice("/my/".length);
   if (!rawSub || rawSub !== sub || rawSub.includes("%") || rawSub.includes("\\")) return null;

@@ -11,6 +11,7 @@ import {
   Globe,
   Users2,
   Settings,
+  Cable,
   UserCircle,
   Package,
   Key,
@@ -57,6 +58,7 @@ const adminNavItems = [
   { href: "/my/orgs", label: "组织管理", icon: Users2 },
   { href: "/my/settings", label: "系统配置", icon: Settings },
   { href: "/my/system", label: "系统设置", icon: Settings },
+  { href: "/my/peers", label: "对端连接", icon: Cable },
 ];
 
 function NavItem({ item, pathname, collapsed, onClose }: { item: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }; pathname: string; collapsed: boolean; onClose: () => void }) {
