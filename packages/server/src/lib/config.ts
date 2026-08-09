@@ -77,6 +77,8 @@ export interface PendingNetworkSettings {
 }
 
 const warnedDeprecatedConfigDirs = new Set<string>();
+const JWT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const jwtRetryWait = new Int32Array(new SharedArrayBuffer(4));
 
 async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
   const tomlPath = path.join(dataDir, "config.toml");
@@ -211,23 +213,57 @@ function resolveDataPath(dataDir: string, candidate: string): string {
 }
 
 function readOrCreateJwtSecret(jwtKeyFile: string): string {
-  fs.mkdirSync(path.dirname(jwtKeyFile), { recursive: true, mode: 0o700 });
+  const directory = path.dirname(jwtKeyFile);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const temporaryPath = path.join(directory, `.${path.basename(jwtKeyFile)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
   try {
     const secret = randomBytes(32).toString("base64url");
-    const descriptor = fs.openSync(jwtKeyFile, "wx", 0o600);
+    const descriptor = fs.openSync(temporaryPath, "wx", 0o600);
     try {
       fs.writeFileSync(descriptor, secret);
       fs.fsyncSync(descriptor);
     } finally {
       fs.closeSync(descriptor);
     }
-    if (process.platform !== "win32") fs.chmodSync(jwtKeyFile, 0o600);
+    if (process.platform !== "win32") fs.chmodSync(temporaryPath, 0o600);
+    fs.linkSync(temporaryPath, jwtKeyFile);
+    fs.unlinkSync(temporaryPath);
+    syncDirectory(directory);
     return secret;
   } catch (error: unknown) {
+    fs.rmSync(temporaryPath, { force: true });
     if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const secret = fs.readFileSync(jwtKeyFile, "utf8").trim();
-    if (process.platform !== "win32") fs.chmodSync(jwtKeyFile, 0o600);
-    return secret;
+    return readCompleteJwtSecret(jwtKeyFile);
+  }
+}
+
+function readCompleteJwtSecret(jwtKeyFile: string): string {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try {
+      const secret = fs.readFileSync(jwtKeyFile, "utf8").trim();
+      if (JWT_SECRET_PATTERN.test(secret)) {
+        if (process.platform !== "win32") fs.chmodSync(jwtKeyFile, 0o600);
+        return secret;
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    Atomics.wait(jwtRetryWait, 0, 0, 10);
+  }
+  throw new Error(`JWT key at ${jwtKeyFile} was not published completely`);
+}
+
+function syncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, "r");
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch (error: unknown) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (!["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) throw error;
   }
 }
 

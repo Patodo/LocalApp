@@ -221,3 +221,123 @@ Final hygiene checks confirmed `git diff --check` was clean, repository-root `.l
 - Atomic writes set permissions at creation and before rename; the platform-specific directory sync deliberately ignores only unsupported directory-sync errors (`EINVAL`, `EPERM`, `EISDIR`).
 - The `127.0.0.2` regression is a helper-level assertion because the current test host cannot bind that loopback alias; the helper accepts the full `127/8` range by construction.
 - No Task 2 Fix Round 1 blocker remains. The existing Fastify `FSTDEP021` redirect deprecation warning continues to appear in the full suite.
+
+---
+
+# Task 2 Fix Round 2 Report
+
+## Findings resolved
+
+1. **Supervisor crash orphan.** Workers now install a `disconnect` handler before server construction, alongside guarded SIGINT/SIGTERM shutdown. The worker emits a `starting` lifecycle message with its PID before readiness, which the supervisor relays. The live test starts a candidate, SIGKILLs its supervisor while that candidate is pre-ready, proves the candidate PID exits, then starts a fresh supervisor which deterministically promotes the pending candidate and serves health traffic.
+
+2. **JWT first-create race.** JWT creation writes and fsyncs a private `0600` temporary key, publishes it with a no-overwrite hard link, unlinks the temporary path, and directory-syncs where supported. Losing readers require a valid 43-character base64url secret and use a bounded 25 × 10ms retry only when an incomplete key is observed. Concurrent child-process first starts receive one identical valid secret and Unix permissions remain `0600`.
+
+3. **Exact replacement lifecycle observation.** The original rebind test now waits 500ms and counts only readiness events. The hard-death/recovery test asserts the three distinct lifecycle PIDs (original, orphaned candidate, recovered worker) and observes another 500ms stable interval with no extra readiness/replacement.
+
+4. **Environment/pending conflict.** Web rebinding now returns HTTP `409` before validation or staging when any of `LISTEN_HOST`, `LISTEN_PORT`, `PORT`, `PUBLIC_URL`, or `ALLOW_INSECURE_LAN` controls the effective network configuration. The response names the controlling variables, no restart is requested, and no pending file is created. A worker also consumes `LOCALAPP_USE_PENDING_CONFIG` only during its initial load, so a promoted candidate can make later rebind requests normally.
+
+5. **Atomic temporary cleanup.** Atomic settings writes now remove their uniquely named temporary file on write, chmod, fsync, rename, and directory-sync failure paths. Focused injected failures cover write/chmod/fsync/rename and assert that no temporary settings file remains.
+
+6. **Same-port host-only rebind.** Candidate host strings receive non-binding IP-address validation. If only the host changes while a nonzero port remains the same as the current effective configuration, temporary binding is skipped; candidate worker readiness remains the transactional bind/rollback authority. The live supervisor regression performs a loopback → wildcard (new port) → loopback (same port) sequence and reaches `/health` on the final listener.
+
+The Fix Round 1 setup protections remain intact: no-user workers force loopback, token URLs are loopback, direct non-loopback setup initialization is rejected, `127.0.0.0/8` plus `::1` remain accepted, and package main/bin both use the canonical supervisor.
+
+## RED evidence
+
+Initial focused RED tests, before implementation:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/integration/system-settings.test.ts
+```
+
+```text
+2 failed, 6 passed
+promise resolved "undefined" instead of rejecting     # injected settings write was ignored
+expected 202 to be 409                                 # LISTEN_PORT-controlled web rebind was staged
+```
+
+The controlled incomplete-key reader RED:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts
+```
+
+```text
+expected '' to be 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+```
+
+The real supervisor lifecycle RED:
+
+```sh
+node --test packages/server/tests/supervisor.node-test.mjs
+```
+
+```text
+Timed out waiting for the candidate worker to start
+```
+
+This established that the prior supervisor had no observable pre-ready lifecycle boundary and could not prove hard-death orphan cleanup. During GREEN development, the expanded same-port regression also exposed a real candidate-lifecycle defect:
+
+```text
+{"statusCode":500,"error":"Internal Server Error","message":"Pending network configuration is missing"}
+```
+
+The cause was a promoted worker retaining `LOCALAPP_USE_PENDING_CONFIG` after the supervisor removed `server.pending.json`; the worker now clears that flag immediately after its initial build.
+
+## GREEN evidence
+
+Focused tests, live supervisor tests, and build:
+
+```sh
+pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/integration/system-settings.test.ts tests/integration/setup-flow.test.ts tests/config.test.ts && node --test packages/server/tests/supervisor.node-test.mjs && pnpm -C packages/server build
+```
+
+```text
+Test Files  4 passed (4)
+Tests  29 passed (29)
+supervisor.node-test.mjs: 6 passed, 0 failed
+@localapp/server build: tsc exit 0
+```
+
+After the controller identified overlapping full-suite processes, the duplicate `pnpm -C packages/server test` parents and their Vitest descendants were terminated and verified absent. Exactly one clean isolated full suite was then run and retained through completion:
+
+```sh
+pnpm -C packages/server test
+```
+
+```text
+Test Files  123 passed (123)
+Tests  825 passed | 1 skipped (826)
+Duration  134.00s
+```
+
+Final checks:
+
+```sh
+git diff --check
+test ! -e .localapp-server
+ps -axo pid=,command= | rg '[p]npm -C packages/server test|[v]itest/vitest\\.mjs run|packages/server/dist/(cli|worker)\\.js|supervisor\\.node-test\\.mjs'
+```
+
+`git diff --check` passed; the canonical repository-root data directory was absent; the process check found no test, supervisor, or worker descendant.
+
+## Files changed in Fix Round 2
+
+- `packages/server/src/cli.ts`
+- `packages/server/src/lib/config.ts`
+- `packages/server/src/lib/server-config-store.ts`
+- `packages/server/src/routes/system.ts`
+- `packages/server/src/worker.ts`
+- `packages/server/tests/config-store.test.ts`
+- `packages/server/tests/integration/system-settings.test.ts`
+- `packages/server/tests/supervisor.node-test.mjs`
+- `.superpowers/sdd/2026-08-09-unified-server-and-tray/task-2-report.md`
+
+## Fix Round 2 self-review and concerns
+
+- The IPC disconnect handler is registered before any asynchronous worker initialization and is idempotent with signal/restart shutdown, so a hard parent death cannot retain a pre-ready listener.
+- A JWT key is never linked into its public canonical name until content is fully written and file-synced. Readers reject malformed/partial content rather than authenticating with it.
+- `server.pending.json` cannot now be finalized through an environment-controlled effective configuration; environment precedence is explicit and observable as a conflict response.
+- Temporary-write cleanup runs from one catch path around open/write/chmod/sync/rename/directory-sync, and the injected tests exercise each requested failure point.
+- Same-port host-only changes do not rely on whether a specific operating system permits a temporary overlapping bind; the real replacement worker remains the authoritative readiness check with rollback.
+- No Task 2 Fix Round 2 blocker remains. The existing Fastify `FSTDEP021` redirect deprecation warning appeared during the full suite and is unrelated to this task.

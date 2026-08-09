@@ -8,6 +8,16 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 
+async function waitFor(condition, message, timeout = 3_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const value = await condition();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
+
 async function availablePort() {
   const server = createServer();
   server.listen(0, "127.0.0.1");
@@ -130,8 +140,140 @@ test("supervisor replaces the worker after a network rebind", async () => {
     assert.notEqual(second.workerPid, first.workerPid);
     assert.equal(JSON.parse(await readFile(path.join(dataDir, "server.json"), "utf8")).listenPort, replacementPort);
     assert.equal((await fetch(`${second.url}/health`)).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(messages.length, 0, "supervisor emitted an unexpected additional worker readiness message");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(messages.filter((message) => message.type === "ready").length, 0, "supervisor emitted an unexpected additional worker readiness message");
+  } finally {
+    output.close();
+    await terminateProcessGroup(child);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("supervisor recovers after hard death while a replacement worker is starting", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "localapp-supervisor-orphan-"));
+  const initialPort = await availablePort();
+  const replacementPort = await availablePort();
+  const messages = [];
+  const child = spawn(process.execPath, ["packages/server/dist/cli.js", "start", "--data-dir", dataDir, "--host", "127.0.0.1", "--port", String(initialPort)], {
+    cwd: path.resolve(import.meta.dirname, "../../.."),
+    env: { ...process.env, BOOTSTRAP_API_KEY: "supervisor-test-api-key" },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  const output = createInterface({ input: child.stdout });
+  output.on("line", (line) => {
+    try {
+      const message = JSON.parse(line);
+      if (child.listenerCount("ready") > 0) child.emit("ready", message);
+      else messages.push(message);
+    } catch {}
+  });
+  let recovery;
+  let recoveryOutput;
+  try {
+    const first = await nextReady(child, messages);
+    const setup = new URL(first.setupUrl);
+    assert.equal((await fetch(`${first.url}/api/setup/initialize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: setup.searchParams.get("token"), username: "owner", password: "correct-horse-battery" }),
+    })).status, 201);
+    assert.equal((await fetch(`${first.url}/api/system/settings/network`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Key": "supervisor-test-api-key" },
+      body: JSON.stringify({ listenHost: "127.0.0.1", listenPort: replacementPort, allowInsecureLan: false }),
+    })).status, 202);
+
+    const starting = await waitFor(
+      () => messages.find((message) => message.type === "starting" && message.workerPid !== first.workerPid),
+      "Timed out waiting for the candidate worker to start",
+    );
+    process.kill(child.pid, "SIGKILL");
+    await once(child, "exit");
+    await waitFor(() => {
+      try {
+        process.kill(starting.workerPid, 0);
+        return false;
+      } catch (error) {
+        return error?.code === "ESRCH";
+      }
+    }, "Candidate worker survived a hard supervisor death");
+
+    const recoveryMessages = [];
+    recovery = spawn(process.execPath, ["packages/server/dist/cli.js", "start", "--data-dir", dataDir], {
+      cwd: path.resolve(import.meta.dirname, "../../.."),
+      env: { ...process.env, BOOTSTRAP_API_KEY: "supervisor-test-api-key" },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    recoveryOutput = createInterface({ input: recovery.stdout });
+    recoveryOutput.on("line", (line) => {
+      try {
+        const message = JSON.parse(line);
+        if (recovery.listenerCount("ready") > 0) recovery.emit("ready", message);
+        else recoveryMessages.push(message);
+      } catch {}
+    });
+    const recovered = await nextReady(recovery, recoveryMessages);
+    assert.equal(recovered.url, `http://127.0.0.1:${replacementPort}`);
+    assert.notEqual(recovered.workerPid, first.workerPid);
+    assert.notEqual(recovered.workerPid, starting.workerPid);
+    assert.equal((await fetch(`${recovered.url}/health`)).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(recoveryMessages.filter((message) => message.type === "ready").length, 0, "recovery supervisor replaced its worker unexpectedly");
+  } finally {
+    output.close();
+    recoveryOutput?.close();
+    await terminateProcessGroup(child);
+    if (recovery) await terminateProcessGroup(recovery);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("supervisor supports a same-port host-only rebind", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "localapp-supervisor-same-port-"));
+  const initialPort = await availablePort();
+  const sharedPort = await availablePort();
+  const messages = [];
+  const child = spawn(process.execPath, ["packages/server/dist/cli.js", "start", "--data-dir", dataDir, "--host", "127.0.0.1", "--port", String(initialPort)], {
+    cwd: path.resolve(import.meta.dirname, "../../.."),
+    env: { ...process.env, BOOTSTRAP_API_KEY: "supervisor-test-api-key" },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  const output = createInterface({ input: child.stdout });
+  output.on("line", (line) => {
+    try {
+      const message = JSON.parse(line);
+      if (child.listenerCount("ready") > 0) child.emit("ready", message);
+      else messages.push(message);
+    } catch {}
+  });
+  try {
+    const first = await nextReady(child, messages);
+    const setup = new URL(first.setupUrl);
+    assert.equal((await fetch(`${first.url}/api/setup/initialize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: setup.searchParams.get("token"), username: "owner", password: "correct-horse-battery" }),
+    })).status, 201);
+    const wildcardRebind = await fetch(`${first.url}/api/system/settings/network`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Key": "supervisor-test-api-key" },
+      body: JSON.stringify({ listenHost: "0.0.0.0", listenPort: sharedPort, allowInsecureLan: true }),
+    });
+    assert.equal(wildcardRebind.status, 202);
+    const second = await nextReady(child, messages);
+    assert.notEqual(second.workerPid, first.workerPid);
+    const loopbackRebind = await fetch(`${second.url}/api/system/settings/network`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Key": "supervisor-test-api-key" },
+      body: JSON.stringify({ listenHost: "127.0.0.1", listenPort: sharedPort, allowInsecureLan: false }),
+    });
+    assert.equal(loopbackRebind.status, 202, await loopbackRebind.text());
+    const third = await nextReady(child, messages);
+    assert.notEqual(third.workerPid, second.workerPid);
+    assert.equal((await fetch(`http://127.0.0.1:${sharedPort}/health`)).status, 200);
   } finally {
     output.close();
     await terminateProcessGroup(child);

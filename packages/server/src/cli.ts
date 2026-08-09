@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createServerConfigStore } from "./lib/server-config-store.js";
-import type { WorkerReadyMessage } from "./worker.js";
+import type { WorkerMessage } from "./worker.js";
 import { closeMetaDb, initMetaDb, listUsers } from "./lib/meta-sqlite.js";
 
 interface StartOptions {
@@ -47,18 +47,24 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   let stopping = false;
   let child: ChildProcess;
-  const spawnWorker = (usePendingConfig: boolean) => spawn(process.execPath, [path.join(__dirname, "worker.js")], {
-    env: {
-      ...env,
-      ...(usePendingConfig ? { LOCALAPP_USE_PENDING_CONFIG: "1" } : {}),
-    },
-    stdio: ["inherit", "inherit", "inherit", "ipc"],
-  });
+  const spawnWorker = (usePendingConfig: boolean) => {
+    const workerEnv: NodeJS.ProcessEnv = { ...env };
+    delete workerEnv.LOCALAPP_USE_PENDING_CONFIG;
+    if (usePendingConfig) workerEnv.LOCALAPP_USE_PENDING_CONFIG = "1";
+    return spawn(process.execPath, [path.join(__dirname, "worker.js")], {
+      env: workerEnv,
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+    });
+  };
   const attachWorker = async (pendingConfig?: boolean) => {
     const usePendingConfig = pendingConfig ?? await configStore.hasPendingNetworkChange();
     child = spawnWorker(usePendingConfig);
     let ready = false;
-    child.on("message", async (message: WorkerReadyMessage) => {
+    child.on("message", async (message: WorkerMessage) => {
+      if (message.type === "starting") {
+        process.stdout.write(`${JSON.stringify(message)}\n`);
+        return;
+      }
       if (message.type !== "ready") return;
       try {
         if (usePendingConfig) await configStore.finalizePendingNetworkChange();

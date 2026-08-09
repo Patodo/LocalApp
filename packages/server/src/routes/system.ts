@@ -41,6 +41,13 @@ export async function systemRoutes(
     adminScope.put<{ Body: Partial<Pick<PublicSystemSettings, "listenHost" | "listenPort" | "allowInsecureLan">> }>(
       "/api/system/settings/network",
       async (req, reply) => {
+        const overridden = options.configStore.getNetworkEnvironmentOverrides();
+        if (overridden.length > 0) {
+          return reply.status(409).send({
+            success: false,
+            error: `Network settings are controlled by environment variables: ${overridden.join(", ")}`,
+          });
+        }
         const candidate = await options.configStore.validate({
           ...adminScope.config,
           listenHost: req.body?.listenHost ?? adminScope.config.listenHost,

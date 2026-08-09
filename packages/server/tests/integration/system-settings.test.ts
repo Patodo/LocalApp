@@ -72,4 +72,47 @@ describe("system settings", () => {
       candidate: { listenHost: "0.0.0.0", listenPort: 43127, allowInsecureLan: true },
     });
   });
+
+  it("rejects a web rebind when an environment variable controls network settings", async () => {
+    closeMetaDb();
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-system-settings-"));
+    const requestRestart = vi.fn();
+    const setupTokens = new SetupTokenStore();
+    const app = await buildServer({
+      env: {
+        DATA_DIR: dataDir,
+        BOOTSTRAP_API_KEY: "system-settings-api-key",
+        JWT_SECRET: "test-jwt-secret",
+        LISTEN_PORT: "43126",
+      },
+      setupTokens,
+      restartController: { requestRestart },
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.addresses()[0];
+    if (!address || typeof address === "string") throw new Error("Expected TCP listener");
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    stop = async () => {
+      await app.close();
+      closeMetaDb();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    };
+    const issued = setupTokens.issue();
+    expect((await fetch(`${baseUrl}/api/setup/initialize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: issued.token, username: "owner", password: "correct-horse-battery" }),
+    })).status).toBe(201);
+
+    const response = await fetch(`${baseUrl}/api/system/settings/network`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-API-Key": "system-settings-api-key" },
+      body: JSON.stringify({ listenHost: "127.0.0.1", listenPort: 43127, allowInsecureLan: false }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ success: false, error: expect.stringContaining("LISTEN_PORT") });
+    expect(requestRestart).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(dataDir, "server.pending.json"))).toBe(false);
+  });
 });

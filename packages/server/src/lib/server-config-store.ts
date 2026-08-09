@@ -20,14 +20,26 @@ export interface ServerConfigStore {
   stageNetworkChange(candidate: ServerConfig): Promise<void>;
   finalizePendingNetworkChange(): Promise<void>;
   rollbackPendingNetworkChange(): Promise<void>;
+  getNetworkEnvironmentOverrides(): string[];
+}
+
+type AtomicFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+export interface AtomicFileOperations {
+  mkdir: typeof fs.mkdir;
+  open: typeof fs.open;
+  rename: typeof fs.rename;
+  rm: typeof fs.rm;
 }
 
 export interface CreateServerConfigStoreOptions {
   env?: NodeJS.ProcessEnv;
+  atomicFileOperations?: AtomicFileOperations;
 }
 
 export function createServerConfigStore(options: CreateServerConfigStoreOptions = {}): ServerConfigStore {
   const env = options.env ?? process.env;
+  const fileSystem = options.atomicFileOperations ?? fs;
 
   return {
     read: () => loadConfig(env),
@@ -39,14 +51,19 @@ export function createServerConfigStore(options: CreateServerConfigStoreOptions 
       if (!isLoopbackAddress(candidate.listenHost) && !candidate.allowInsecureLan) {
         throw new Error("allowInsecureLan must be true when binding outside loopback");
       }
-      await assertListenerAvailable(candidate.listenHost, candidate.listenPort);
+      assertListenerHost(candidate.listenHost);
+      const current = await loadConfig(env);
+      const samePortHostOnlyChange = candidate.listenPort !== 0
+        && candidate.listenPort === current.listenPort
+        && candidate.listenHost !== current.listenHost;
+      if (!samePortHostOnlyChange) await assertListenerAvailable(candidate.listenHost, candidate.listenPort);
       return {
         ...candidate,
         workspaceDir: path.resolve(candidate.dataDir, candidate.workspaceDir),
       };
     },
     async write(candidate) {
-      await writeSettings(candidate.dataDir, settingsFromConfig(candidate));
+      await writeSettings(candidate.dataDir, settingsFromConfig(candidate), fileSystem);
     },
     async hasPendingNetworkChange() {
       return readPendingNetworkSettings((await loadConfig(env)).dataDir) !== undefined;
@@ -57,25 +74,26 @@ export function createServerConfigStore(options: CreateServerConfigStoreOptions 
         previous: asCompleteSettings(readPersistedServerSettings(dataDir)),
         candidate: settingsFromConfig(candidate),
       };
-      await writeJsonAtomically(path.join(dataDir, "server.pending.json"), pending);
+      await writeJsonAtomically(path.join(dataDir, "server.pending.json"), pending, fileSystem);
     },
     async finalizePendingNetworkChange() {
       const dataDir = (await loadConfig(env)).dataDir;
       const pending = readPendingNetworkSettings(dataDir);
       if (!pending) return;
-      await writeSettings(dataDir, pending.candidate);
-      await fs.rm(path.join(dataDir, "server.pending.json"), { force: true });
-      await syncDirectory(dataDir);
+      await writeSettings(dataDir, pending.candidate, fileSystem);
+      await fileSystem.rm(path.join(dataDir, "server.pending.json"), { force: true });
+      await syncDirectory(dataDir, fileSystem);
     },
     async rollbackPendingNetworkChange() {
       const dataDir = (await loadConfig(env)).dataDir;
       const pending = readPendingNetworkSettings(dataDir);
       if (!pending) return;
-      if (pending.previous) await writeSettings(dataDir, pending.previous);
-      else await fs.rm(path.join(dataDir, "server.json"), { force: true });
-      await fs.rm(path.join(dataDir, "server.pending.json"), { force: true });
-      await syncDirectory(dataDir);
+      if (pending.previous) await writeSettings(dataDir, pending.previous, fileSystem);
+      else await fileSystem.rm(path.join(dataDir, "server.json"), { force: true });
+      await fileSystem.rm(path.join(dataDir, "server.pending.json"), { force: true });
+      await syncDirectory(dataDir, fileSystem);
     },
+    getNetworkEnvironmentOverrides: () => networkEnvironmentOverrides(env),
   };
 }
 
@@ -93,34 +111,38 @@ function asCompleteSettings(settings: Partial<PersistedServerSettings>): Persist
   return Object.keys(settings).length === 5 ? settings as PersistedServerSettings : null;
 }
 
-async function writeSettings(dataDir: string, settings: PersistedServerSettings): Promise<void> {
-  await writeJsonAtomically(path.join(dataDir, "server.json"), settings);
+async function writeSettings(dataDir: string, settings: PersistedServerSettings, fileSystem: AtomicFileOperations): Promise<void> {
+  await writeJsonAtomically(path.join(dataDir, "server.json"), settings, fileSystem);
 }
 
-async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
+export async function writeJsonAtomically(
+  filePath: string,
+  value: unknown,
+  fileSystem: AtomicFileOperations = fs,
+): Promise<void> {
   const directory = path.dirname(filePath);
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fileSystem.mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
-  const handle = await fs.open(temporaryPath, "wx", 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
-    if (process.platform !== "win32") await handle.chmod(0o600);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await fs.rename(temporaryPath, filePath);
+    const handle: AtomicFileHandle = await fileSystem.open(temporaryPath, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+      if (process.platform !== "win32") await handle.chmod(0o600);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fileSystem.rename(temporaryPath, filePath);
+    await syncDirectory(directory, fileSystem);
   } catch (error) {
-    await fs.rm(temporaryPath, { force: true });
+    await fileSystem.rm(temporaryPath, { force: true });
     throw error;
   }
-  await syncDirectory(directory);
 }
 
-async function syncDirectory(directory: string): Promise<void> {
+async function syncDirectory(directory: string, fileSystem: AtomicFileOperations): Promise<void> {
   try {
-    const handle = await fs.open(directory, "r");
+    const handle = await fileSystem.open(directory, "r");
     try {
       await handle.sync();
     } finally {
@@ -130,6 +152,17 @@ async function syncDirectory(directory: string): Promise<void> {
     const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
     if (!["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) throw error;
   }
+}
+
+function networkEnvironmentOverrides(env: NodeJS.ProcessEnv): string[] {
+  return ["LISTEN_HOST", "LISTEN_PORT", "PORT", "PUBLIC_URL", "ALLOW_INSECURE_LAN"].filter((key) => {
+    if (key === "ALLOW_INSECURE_LAN") return env[key] !== undefined;
+    return env[key] !== undefined && env[key] !== "";
+  });
+}
+
+function assertListenerHost(host: string): void {
+  if (net.isIP(host) === 0) throw new Error("listenHost must be an IP address");
 }
 
 async function assertListenerAvailable(host: string, port: number): Promise<void> {
