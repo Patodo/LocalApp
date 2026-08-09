@@ -33,7 +33,7 @@ import { dbRoutes } from "./routes/db.js";
 import { desktopActionsRoutes } from "./routes/desktop-actions.js";
 import { verificationRoutes } from "./routes/verification.js";
 import { setupRoutes } from "./routes/setup.js";
-import { cleanOldLogs } from "./lib/meta-sqlite.js";
+import { cleanOldLogs, listUsers } from "./lib/meta-sqlite.js";
 import { startRequestLogger, stopRequestLogger, pushRequestLog } from "./lib/request-logger.js";
 import { initContentStorage } from "./lib/s3-client.js";
 import { applyPlatformMigrationsToAllApps } from "./lib/platform-migrations.js";
@@ -68,7 +68,9 @@ async function registerServerPluginsAndRoutes(
   setDatabaseWriteGuard((dbPath) => assertAppDataWritable(path.dirname(dbPath), isCurrentDbQueueOwner(dbPath)));
   await initContentStorage(app.config);
   await app.register(verificationPlugin);
-  await applyPlatformMigrationsToAllApps({ dataDir: app.config.dataDir, logger: console });
+  if (listUsers(1, 1).total > 0) {
+    await applyPlatformMigrationsToAllApps({ dataDir: app.config.dataDir, logger: console });
+  }
 
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });

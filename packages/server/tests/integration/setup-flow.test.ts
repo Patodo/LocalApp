@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { findUserByName } from "../../src/lib/meta-sqlite.js";
+import initSqlJs from "sql.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { buildServer } from "../../src/server.js";
+import { closeMetaDb, findUserByName } from "../../src/lib/meta-sqlite.js";
 import { createTestServer } from "./helpers.js";
 
 describe("first-run setup", () => {
@@ -31,5 +36,46 @@ describe("first-run setup", () => {
       body: JSON.stringify({ token: issued.token, username: "second", password: "correct-horse-battery" }),
     });
     expect(replay.status).toBe(410);
+  });
+
+  it("does not migrate a legacy-looking app before first-run setup", async () => {
+    const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-clean-setup-"));
+    const pageDir = path.join(dataDir, "legacy-owner", "legacy-app");
+    const migrationsDir = path.resolve(import.meta.dirname, "../../platform-migrations");
+    const migrationPath = path.join(migrationsDir, "999_skip-clean-setup.sql");
+    let app: Awaited<ReturnType<typeof buildServer>> | undefined;
+
+    try {
+      fs.mkdirSync(pageDir, { recursive: true });
+      const metaBefore = JSON.stringify({ name: "legacy-app", userId: "legacy-owner", status: "legacy" });
+      fs.writeFileSync(path.join(pageDir, "meta.json"), metaBefore);
+
+      const SQL = await initSqlJs();
+      const database = new SQL.Database();
+      database.run("CREATE TABLE users (id TEXT PRIMARY KEY)");
+      const appDbBefore = Buffer.from(database.export());
+      database.close();
+      fs.writeFileSync(path.join(pageDir, "app.db"), appDbBefore);
+
+      fs.mkdirSync(migrationsDir, { recursive: true });
+      fs.writeFileSync(migrationPath, "ALTER TABLE users ADD COLUMN migrated_by_platform INTEGER;");
+
+      app = await buildServer({
+        env: {
+          DATA_DIR: dataDir,
+          JWT_SECRET: "test-jwt-secret-key",
+          BOOTSTRAP_API_KEY: "test-api-key-1234567890abcdef",
+        },
+      });
+
+      expect(fs.readFileSync(path.join(pageDir, "app.db"))).toEqual(appDbBefore);
+      expect(fs.readFileSync(path.join(pageDir, "meta.json"), "utf8")).toBe(metaBefore);
+    } finally {
+      await app?.close();
+      closeMetaDb();
+      fs.rmSync(migrationPath, { force: true });
+      if (fs.existsSync(migrationsDir) && fs.readdirSync(migrationsDir).length === 0) fs.rmdirSync(migrationsDir);
+      await fs.promises.rm(dataDir, { recursive: true, force: true });
+    }
   });
 });
