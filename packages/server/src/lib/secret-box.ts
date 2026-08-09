@@ -62,7 +62,7 @@ export class SecretBox {
         const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
         if (code === "EEXIST") {
           fs.rmSync(temporaryPath, { force: true });
-          this.key = readCompleteKey(this.keyFile);
+          this.key = adoptCompleteKey(this.keyFile, directory);
           return this.key;
         }
         if (UNSUPPORTED_HARD_LINK_CODES.has(code ?? "")) {
@@ -77,7 +77,7 @@ export class SecretBox {
     } catch (error: unknown) {
       fs.rmSync(temporaryPath, { force: true });
       if (!published && fs.existsSync(this.keyFile)) {
-        this.key = readCompleteKey(this.keyFile);
+        this.key = adoptCompleteKey(this.keyFile, directory);
       } else {
         throw error;
       }
@@ -92,6 +92,12 @@ function readCompleteKey(keyFile: string): Buffer {
   if (stored.length !== KEY_BYTES) throw new Error("Peer master key must contain exactly 32 bytes");
   if (process.platform !== "win32") fs.chmodSync(keyFile, 0o600);
   return stored;
+}
+
+function adoptCompleteKey(keyFile: string, directory: string): Buffer {
+  const key = readCompleteKey(keyFile);
+  syncDirectory(directory);
+  return key;
 }
 
 function syncDirectory(directory: string): void {

@@ -59,7 +59,13 @@ describe("SecretBox", () => {
   it("adopts a complete key published by a concurrent first creator without a stale lock", () => {
     const keyFile = createKeyFile();
     const linkSync = fs.linkSync;
+    const fsyncSync = fs.fsyncSync;
     let simulatedRace = false;
+    let fsyncCalls = 0;
+    vi.spyOn(fs, "fsyncSync").mockImplementation(((descriptor: number) => {
+      fsyncCalls += 1;
+      return fsyncSync(descriptor);
+    }) as typeof fs.fsyncSync);
     vi.spyOn(fs, "linkSync").mockImplementation(((temporaryPath: fs.PathLike, finalPath: fs.PathLike) => {
       linkSync(temporaryPath, finalPath);
       simulatedRace = true;
@@ -69,9 +75,10 @@ describe("SecretBox", () => {
 
     const first = new SecretBox(keyFile);
     const sealed = first.seal("peer-api-key-that-must-not-leak", "peer-a");
-    const concurrent = new SecretBox(keyFile);
 
     expect(simulatedRace).toBe(true);
+    expect(fsyncCalls).toBe(2);
+    const concurrent = new SecretBox(keyFile);
     expect(concurrent.open(sealed, "peer-a")).toBe("peer-api-key-that-must-not-leak");
     expect(fs.readFileSync(keyFile)).toHaveLength(32);
     expect(fs.readdirSync(path.dirname(keyFile)).filter((entry) => entry.endsWith(".lock"))).toEqual([]);
