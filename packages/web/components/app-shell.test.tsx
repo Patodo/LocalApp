@@ -41,3 +41,34 @@ describe("AppShell dashboard content width", () => {
     expect(content.parentElement).not.toHaveClass("max-w-7xl");
   });
 });
+
+describe("AppShell control-plane navigation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: { id: "admin", name: "admin", role: "admin" },
+    }), { headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: false,
+      media: "(max-width: 1023px)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows Studio, tasks, and system administration in the Web shell", async () => {
+    render(<AppShell><div>content</div></AppShell>);
+
+    expect(await screen.findByRole("link", { name: "Studio" })).toHaveAttribute("href", "/my/studio");
+    expect(screen.getByRole("link", { name: "任务" })).toHaveAttribute("href", "/my/tasks");
+    expect(screen.getByRole("link", { name: "系统设置" })).toHaveAttribute("href", "/my/system");
+  });
+});

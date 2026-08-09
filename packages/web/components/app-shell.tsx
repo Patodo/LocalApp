@@ -17,6 +17,8 @@ import {
   Group,
   Star,
   Clock,
+  FolderKanban,
+  ListChecks,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -38,6 +40,7 @@ const homeNavItem = { href: "/", label: "首页", icon: House };
 
 const profileNavItems = [
   { href: "/my/info", label: "个人资料", icon: UserCircle },
+  { href: "/my/studio", label: "Studio", icon: FolderKanban },
   { href: "/my/apps", label: "我的应用", icon: Package },
   { href: "/my/keys", label: "API 密钥", icon: Key },
   { href: "/my/groups", label: "我的群组", icon: Group },
@@ -46,12 +49,14 @@ const profileNavItems = [
 ];
 
 const adminNavItems = [
+  { href: "/my/tasks", label: "任务", icon: ListChecks },
   { href: "/my/dashboard", label: "系统概览", icon: LayoutDashboard },
   { href: "/my/analytics", label: "数据分析", icon: BarChart3 },
   { href: "/my/users", label: "用户管理", icon: Users },
   { href: "/my/pages", label: "应用管理", icon: Globe },
   { href: "/my/orgs", label: "组织管理", icon: Users2 },
   { href: "/my/settings", label: "系统配置", icon: Settings },
+  { href: "/my/system", label: "系统设置", icon: Settings },
 ];
 
 function NavItem({ item, pathname, collapsed, onClose }: { item: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }; pathname: string; collapsed: boolean; onClose: () => void }) {

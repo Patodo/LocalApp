@@ -141,6 +141,20 @@ export async function serveRoutes(app: FastifyInstance) {
 
   app.get("/", serveNextHtml("index"));
 
+  app.get("/setup", async (_req, reply) => {
+    if (listUsers(1, 1).total !== 0) return reply.status(404).type("text/html").send(HTML_404);
+    return serveNextHtml("setup")(_req, reply);
+  });
+
+  app.get("/setup.txt", async (_req, reply) => {
+    if (listUsers(1, 1).total !== 0) return reply.status(404).send("");
+    try {
+      return reply.type("text/plain; charset=utf-8").send(fs.readFileSync(path.join(WEB_OUT_DIR, "setup.txt"), "utf-8"));
+    } catch {
+      return reply.status(404).send("");
+    }
+  });
+
   app.get("/api/home/stats", async () => {
     let totalPages = 0;
     let totalSchemas = 0;

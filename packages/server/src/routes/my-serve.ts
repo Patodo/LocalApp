@@ -18,7 +18,7 @@ function serveNextHtml(page: string) {
   };
 }
 
-const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings"]);
+const ADMIN_PAGES = new Set(["dashboard", "analytics", "users", "pages", "orgs", "settings", "tasks", "system"]);
 
 function pageNameForAuth(sub: string): string {
   return sub.endsWith(".txt") ? sub.slice(0, -".txt".length) : sub;
