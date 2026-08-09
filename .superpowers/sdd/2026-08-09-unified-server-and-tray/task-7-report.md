@@ -197,3 +197,163 @@ The build emitted only the repository's existing Next.js static-export rewrite w
 - Web history values use React text nodes (no raw HTML), while SSE connections remain stable by job ID and close on terminal/removal/unmount.
 - Task 8/application-plus-data behavior was not implemented. No unresolved Critical or Important defect was found in the final diff review.
 - Changed scope is 14 files: 10 production files, 3 test files, and this report. `.zcode/`, `tmp/`, and `docs/superpowers/plans/2026-08-09-local-app-install.md` remain untouched and untracked.
+
+---
+
+# Task 7 review fix round 1/5
+
+## RED evidence
+
+### Task 3 interrupted installer recovery
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts
+```
+
+Exit code: `1`.
+
+```text
+Test Files  1 failed (1)
+Tests       2 failed (2)
+Duration    2.39s
+```
+
+The first real child process exited after the v2 migration was written but before activation. A fresh `buildServer()` retained the v1 metadata while the database still contained the v2 `upgraded` column:
+
+```text
+expected [ 'id', 'value', 'upgraded' ] to not include 'upgraded'
+app-installer-recovery.test.ts:32
+```
+
+The second child exited immediately after the new metadata rename. The expected durable Task 3 installer journal did not exist:
+
+```text
+expected false to be true
+app-installer-recovery.test.ts:46
+```
+
+### Session publication and meta.sqlite durability
+
+```text
+pnpm -C packages/server exec vitest run tests/meta-sqlite-durability.test.ts tests/integration/two-peer-sync.test.ts
+```
+
+Exit code: `1`.
+
+```text
+Test Files  2 failed (2)
+Tests       7 failed | 8 passed (15)
+Duration    3.40s
+```
+
+Observed failures matched the missing guarantees:
+
+- injected session metadata publication left the final session directory visible (`expected true to be false`);
+- pruning removed only the valid expired session instead of three expired valid/orphan/corrupt uncommitted residues (`expected 1 to be 3`);
+- injected meta rename and real directory-fsync failures did not throw;
+- unsupported directory-fsync tests observed zero fsync calls instead of the required file + directory pair.
+
+### Target commit serialization and source deadlines/cancellation
+
+```text
+pnpm -C packages/server exec vitest run tests/app-sync-hardening.test.ts
+```
+
+Exit code: `1`.
+
+```text
+Test Files  1 failed (1)
+Tests       4 failed (4)
+Errors      2 errors
+Duration    1.28s
+```
+
+The four focused failures were exact evidence of the review findings:
+
+- the injected target installer was never called (`expected 0 to be 1`), so two concurrent commits were not serialized through one install operation;
+- a never-resolving upload remained permanently `installing` beyond its configured hard deadline;
+- response loss on the first target commit left the source `failed` instead of retrying to the persisted `completed` outcome;
+- cancellation in `activating` was rejected locally and never consulted the target (`deleteCalls expected 1, received 0`).
+
+The two unhandled rejections came from the deliberately failing target-concurrency test exiting before its deferred real installer promises settled. The test cleanup is corrected before the GREEN run; it does not alter the four product RED observations above.
+
+### Transactional meta publication error preservation
+
+```text
+pnpm -C packages/server exec vitest run tests/meta-sqlite-durability.test.ts -t 'does not mask'
+```
+
+Exit code: `1`.
+
+```text
+Test Files  1 failed (1)
+Tests       1 failed | 5 skipped (6)
+Duration    225ms
+```
+
+After an injected atomic-rename `EIO`, the transactional caller attempted `ROLLBACK` on the SQL.js image that publication recovery had already closed. The assertion expected `transaction publication failed` but received `Database closed`, proving the real durability failure was masked.
+
+## GREEN evidence
+
+### Final Task 7 focused Server group
+
+```text
+pnpm -C packages/server exec vitest run tests/meta-sqlite-durability.test.ts tests/app-sync-hardening.test.ts tests/integration/app-installer-recovery.test.ts tests/integration/two-peer-sync.test.ts tests/integration/app-package-install.test.ts tests/integration/peers.test.ts tests/integration/security-boundary.test.ts
+```
+
+Exit code: `0`.
+
+```text
+Test Files  7 passed (7)
+Tests       66 passed (66)
+Duration    13.88s
+```
+
+This covers real child-process installer crashes, fail-closed unrecoverable startup, atomic session publication/residue pruning, atomic meta publication and reentrancy, target commit serialization/retries, upload and commit hard deadlines, both cancellation outcomes at the activation boundary, owner scoping, credential non-leakage, and the original Task 7 install/peer/security cases.
+
+### Full Server and build
+
+Final full run:
+
+```text
+pnpm -C packages/server test
+```
+
+Exit code: `0`.
+
+```text
+Test Files  138 passed (138)
+Tests       939 passed | 1 skipped (940)
+Duration    164.94s
+```
+
+`pnpm -C packages/server build` exited `0` with no TypeScript errors.
+
+An immediately preceding full run had one unrelated `workspace-clone.test.ts` two-second Git clone timeout (`137 passed`, one failed). Its isolated rerun passed `5/5` in `1.21s`, and the subsequent final full run above passed all 138 files. The only emitted Server warning was the repository's existing Fastify `reply.redirect` deprecation warning.
+
+### Full Web and build
+
+```text
+pnpm -C packages/web test
+```
+
+Exit code: `0`.
+
+```text
+Test Files  45 passed (45)
+Tests       372 passed (372)
+Duration    18.02s
+```
+
+`pnpm -C packages/web build` exited `0`, compiled successfully, and generated `27/27` static pages. It emitted only the repository's existing Next.js static-export rewrite warnings. No Web production file changed in this review round.
+
+## Round 1 self-review
+
+- Task 3 now writes a durable installer transaction before database mutation, including the exact backup identity/digest and prior/new application identity. Startup reconciliation runs before routes: it repeats a marked rollback, verifies and completes an activated install, or persists/reports `recovery-required` and refuses startup when safety cannot be proven.
+- Session creation writes and fsyncs complete metadata in a private staged directory before atomic publication. Idempotent retry recovers safe empty/corrupt uncommitted residue, metadata conflicts remain non-destructive, and pruning preserves committing/completed/recovery-required sessions and any residue containing a package.
+- Every shared meta.sqlite save publishes a full private temp image using file fsync, atomic rename, and parent-directory fsync. Unsupported directory-fsync codes (`EINVAL`, `EPERM`, `EISDIR`) accept the successfully renamed state; real I/O failures throw and reload the visible disk image. Reentrant mutation is rejected, and committed SQL transactions no longer mask publication failures with an invalid rollback.
+- Target commits are serialized by session, duplicate callers await one installer invocation, completed outcomes are replayed after response loss, and startup reconciliation verifies the retained exact package, active version directory, and complete migration history rather than trusting metadata alone.
+- Source upload and commit requests combine manual cancellation with hard deadlines. Commit response loss/in-progress replies retry until the persisted target outcome is known; deadline expiry becomes `recovery-required`. Cancellation is decided by the target at the installing/activating boundary, using the active job's ephemeral exact peer credential; a 409 leaves the commit running, while 204 aborts locally. APP errors are `failed`, never falsely reported as rolled back.
+- API keys remain encrypted only in the peer store and ephemeral in active request state; jobs, sessions, public errors, and report output contain no credential. No production `withData: true` path exists, so Task 8 was not implemented.
+- Final changed scope is 12 task files: 6 production files, 5 test files, and this report. `.zcode/`, `tmp/`, and `docs/superpowers/plans/2026-08-09-local-app-install.md` remain untouched and untracked.
+- No unresolved Critical or Important finding remains. The only concern observed during final verification was the transient unrelated Git clone timeout documented above; both isolated and final full-suite reruns passed.

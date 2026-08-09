@@ -57,6 +57,7 @@ import { SyncSessionStore } from "./lib/sync-session-store.js";
 import { SyncJobStore } from "./lib/sync-job-store.js";
 import { AppSyncTarget } from "./lib/app-sync-target.js";
 import { AppSyncSource } from "./lib/app-sync-source.js";
+import { reconcileAppInstallTransactions } from "./lib/app-installer.js";
 import { syncSourceRoutes, syncTargetRoutes } from "./routes/sync.js";
 
 export interface BuildServerOptions {
@@ -88,6 +89,7 @@ async function registerServerPluginsAndRoutes(
   const { default: websocket } = await import("@fastify/websocket");
   await app.register(websocket);
   await app.register(storagePlugin);
+  await reconcileAppInstallTransactions(app.config.dataDir);
   setDatabaseWriteGuard((dbPath) => assertAppDataWritable(path.dirname(dbPath), isCurrentDbQueueOwner(dbPath)));
   await initContentStorage(app.config);
   await app.register(verificationPlugin);
@@ -119,7 +121,7 @@ async function registerServerPluginsAndRoutes(
   const syncJobs = new SyncJobStore();
   syncJobs.reconcileInterrupted();
   const syncTarget = new AppSyncTarget(app.config.dataDir, syncSessions);
-  syncTarget.reconcileInterrupted();
+  await syncTarget.reconcileInterrupted();
   const syncSource = new AppSyncSource(app.config.dataDir, syncJobs, peerStore);
   await taskRunner.reconcileRunning();
   workspaceStore.setTaskRunner(taskRunner);

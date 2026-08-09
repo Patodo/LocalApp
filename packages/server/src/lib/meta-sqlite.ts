@@ -96,6 +96,19 @@ export interface SavedReplyRecord {
 let db: SqlJsDatabase | null = null;
 let dbPath: string = "";
 let SqlJs: initSqlJs.SqlJsStatic | null = null;
+let publishing = false;
+
+export interface MetaAtomicFileOperations {
+  mkdirSync: typeof fs.mkdirSync;
+  openSync: typeof fs.openSync;
+  writeFileSync: typeof fs.writeFileSync;
+  fsyncSync: typeof fs.fsyncSync;
+  closeSync: typeof fs.closeSync;
+  renameSync: typeof fs.renameSync;
+  rmSync: typeof fs.rmSync;
+}
+
+let atomicFileOperations: MetaAtomicFileOperations = fs;
 
 function isWasmRuntimeError(err: unknown): boolean {
   if (typeof WebAssembly !== "undefined" && err instanceof WebAssembly.RuntimeError) return true;
@@ -143,12 +156,18 @@ function guardDatabase(database: SqlJsDatabase): SqlJsDatabase {
   for (const method of ["run", "exec", "export"]) {
     const original = target[method];
     if (typeof original !== "function") continue;
-    target[method] = (...args: unknown[]) => guardSqlJsCall(() => original.apply(database, args));
+    target[method] = (...args: unknown[]) => guardSqlJsCall(() => {
+      if (publishing && method !== "export") throw new Error("Meta database publication is already in progress");
+      return original.apply(database, args);
+    });
   }
 
   const originalPrepare = target.prepare;
   if (typeof originalPrepare === "function") {
-    target.prepare = (...args: unknown[]) => guardStatement(guardSqlJsCall(() => originalPrepare.apply(database, args)));
+    target.prepare = (...args: unknown[]) => guardStatement(guardSqlJsCall(() => {
+      if (publishing) throw new Error("Meta database publication is already in progress");
+      return originalPrepare.apply(database, args);
+    }));
   }
 
   return database;
@@ -165,17 +184,65 @@ function openMetaDbFromDisk(): SqlJsDatabase {
 
 function saveDb(): void {
   if (!db || !dbPath) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
+  if (publishing) throw new Error("Meta database publication is already in progress");
+  publishing = true;
+  const directory = path.dirname(dbPath);
+  const temporaryPath = path.join(directory, `.${path.basename(dbPath)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+  try {
+    const buffer = Buffer.from(db.export());
+    atomicFileOperations.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const descriptor = atomicFileOperations.openSync(temporaryPath, "wx", 0o600);
+    try {
+      atomicFileOperations.writeFileSync(descriptor, buffer);
+      atomicFileOperations.fsyncSync(descriptor);
+    } finally {
+      atomicFileOperations.closeSync(descriptor);
+    }
+    atomicFileOperations.renameSync(temporaryPath, dbPath);
+    syncMetaDirectory(directory);
+  } catch (error) {
+    try { atomicFileOperations.rmSync(temporaryPath, { force: true }); } catch { /* retain publication error */ }
+    publishing = false;
+    reloadMetaDbFromVisibleDisk();
+    throw error;
+  } finally {
+    publishing = false;
+    try { atomicFileOperations.rmSync(temporaryPath, { force: true }); } catch { /* publication already completed */ }
+  }
+}
+
+function syncMetaDirectory(directory: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = atomicFileOperations.openSync(directory, "r");
+    atomicFileOperations.fsyncSync(descriptor);
+  } catch (error) {
+    const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (["EINVAL", "EPERM", "EISDIR"].includes(code ?? "")) return;
+    throw error;
+  } finally {
+    if (descriptor !== undefined) atomicFileOperations.closeSync(descriptor);
+  }
+}
+
+function reloadMetaDbFromVisibleDisk(): void {
+  const current = db;
+  db = null;
+  try { current?.close(); } catch { /* failed publication already fails closed */ }
+  if (SqlJs && dbPath) openMetaDbFromDisk();
 }
 
 export function flushMetaDb(): void {
   saveDb();
 }
 
-export async function initMetaDb(dataDir: string): Promise<void> {
+export async function initMetaDb(
+  dataDir: string,
+  options: { atomicFileOperations?: MetaAtomicFileOperations } = {},
+): Promise<void> {
   if (db) return;
+
+  atomicFileOperations = options.atomicFileOperations ?? fs;
 
   if (!SqlJs) {
     SqlJs = await initSqlJs();
@@ -763,6 +830,7 @@ export function createInitialAdmin(
 ): UserRecord {
   const d = getDb();
   const createdAt = new Date().toISOString();
+  let committed = false;
   d.run("BEGIN");
   try {
     const countStmt = d.prepare("SELECT COUNT(*) AS total FROM users");
@@ -789,9 +857,10 @@ export function createInitialAdmin(
       ]);
     }
     d.run("COMMIT");
+    committed = true;
     saveDb();
   } catch (error) {
-    d.run("ROLLBACK");
+    if (!committed) d.run("ROLLBACK");
     throw error;
   }
 
@@ -823,6 +892,7 @@ export function provisionUserWithApiKey(
   if (exists) throw new Error("USER_EXISTS");
 
   const createdAt = new Date().toISOString();
+  let committed = false;
   d.run("BEGIN");
   try {
     d.run(
@@ -847,9 +917,10 @@ export function provisionUserWithApiKey(
     everyoneStmt.free();
 
     d.run("COMMIT");
+    committed = true;
     saveDb();
   } catch (error) {
-    d.run("ROLLBACK");
+    if (!committed) d.run("ROLLBACK");
     throw error;
   }
 
@@ -997,6 +1068,7 @@ export function updateUserPasswordAndRevokeSessions(
   expectedAuthGeneration?: string,
 ): number | null {
   const d = getDb();
+  let committed = false;
   d.run("BEGIN");
   try {
     if (expectedAuthVersion === undefined || expectedAuthGeneration === undefined) {
@@ -1021,10 +1093,11 @@ export function updateUserPasswordAndRevokeSessions(
     const authVersion = Number((versionStmt.getAsObject() as { auth_version: number }).auth_version);
     versionStmt.free();
     d.run("COMMIT");
+    committed = true;
     saveDb();
     return authVersion;
   } catch (error) {
-    d.run("ROLLBACK");
+    if (!committed) d.run("ROLLBACK");
     throw error;
   }
 }

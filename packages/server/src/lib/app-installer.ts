@@ -26,6 +26,7 @@ import {
   mergeManifests,
   PlatformManifestValidationError,
   commitSourceManifestAndMeta,
+  recoverSourceManifestAndMeta,
   readManifestState,
 } from "./app-manifest.js";
 import { CURRENT_PLATFORM_VERSION } from "./platform-version.js";
@@ -41,6 +42,26 @@ import {
 import type { BusinessMetadata, CollaborationConfig, RouteAccess } from "../types/models.js";
 
 const MAX_RETAINED_VERSIONS = 10;
+const INSTALL_TRANSACTION_FILE = ".app-install-transaction.json";
+
+interface AppInstallTransaction {
+  schemaVersion: 1;
+  id: string;
+  ownerId: string;
+  appName: string;
+  state: "prepared" | "rolling-back" | "recovery-required";
+  issue?: string;
+  jobDir: string;
+  database: { existed: boolean; backupPath: string | null; backupDigest: string | null };
+  previous: { meta: PageMeta | null; sourceManifest: Record<string, unknown> | null };
+  next: {
+    localVersion: number;
+    appVersion: string;
+    digest: string;
+    versionPath: string;
+    packagePath: string;
+  };
+}
 
 export interface InstallAppPackageInput {
   dataDir: string;
@@ -96,6 +117,41 @@ export async function installAppPackage(input: InstallAppPackageInput): Promise<
   assertPlatformCompatible(inspected.metadata.platformVersion);
   const pageDir = getPageDir(input.dataDir, input.ownerId, inspected.name);
   return withAppDataMaintenance(pageDir, async () => installInspectedPackage(input, inspected, pageDir));
+}
+
+export async function reconcileAppInstallTransactions(dataDir: string): Promise<number> {
+  let recovered = 0;
+  if (!fs.existsSync(dataDir)) return recovered;
+  for (const owner of fs.readdirSync(dataDir, { withFileTypes: true })) {
+    if (!owner.isDirectory() || owner.name.startsWith(".")) continue;
+    const ownerDir = path.join(dataDir, owner.name);
+    for (const app of fs.readdirSync(ownerDir, { withFileTypes: true })) {
+      if (!app.isDirectory()) continue;
+      const pageDir = path.join(ownerDir, app.name);
+      if (!fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) continue;
+      await reconcileInstallTransaction(dataDir, pageDir);
+      recovered += 1;
+    }
+  }
+  return recovered;
+}
+
+export async function verifyInstalledAppVersion(input: {
+  dataDir: string; ownerId: string; appName: string; appVersion: string; digest: string;
+}): Promise<PageVersionMeta> {
+  const meta = readRawPageMeta(input.dataDir, input.ownerId, input.appName);
+  const version = meta?.versions.find((entry) => entry.appVersion === input.appVersion && entry.digest === input.digest);
+  if (!meta || meta.currentVersion !== version?.version || !version.packagePath) {
+    throw new Error("Installed application metadata does not identify the active synchronized version");
+  }
+  const pageDir = getPageDir(input.dataDir, input.ownerId, input.appName);
+  assertVersionHealthy(path.join(pageDir, "versions", `v${version.version}`));
+  const inspected = await inspectAppPackage(resolvePageRelative(pageDir, version.packagePath));
+  if (inspected.name !== input.appName || inspected.version !== input.appVersion || inspected.digest !== input.digest) {
+    throw new Error("Installed portable package does not match the active synchronized version");
+  }
+  await verifyAppliedMigrations(pageDir, inspected);
+  return version;
 }
 
 export async function activateAppVersion(input: {
@@ -195,7 +251,11 @@ async function installInspectedPackage(
   const previousManifest = fs.existsSync(previousManifestPath) ? fs.readFileSync(previousManifestPath) : null;
   let finalVersionDir: string | undefined;
   let retainedPackage: { relativePath: string; created: boolean } | undefined;
+  let transaction: AppInstallTransaction | undefined;
   try {
+    const previousSourceManifest = previousManifest
+      ? JSON.parse(previousManifest.toString("utf8")) as Record<string, unknown>
+      : null;
     await extractAppPackage(inspected, extractedDir);
     materializeStagedVersion(extractedDir, stagedVersionDir, sourceManifest);
     const parsed = validateStagedApplication(stagedVersionDir, sourceManifest, inspected.metadata.platformVersion);
@@ -213,9 +273,67 @@ async function installInspectedPackage(
     }
     applyManifestMetadata(updatedMeta, parsed);
 
+    const newVersion = Math.max(0, ...baseMeta.versions.map((entry) => entry.version), baseMeta.currentVersion) + 1;
+    finalVersionDir = path.join(pageDir, "versions", `v${newVersion}`);
+    if (fs.existsSync(finalVersionDir)) {
+      throw new AppInstallError("APP_VERSION_STORAGE_CONFLICT", `Version directory already exists: v${newVersion}`, 409);
+    }
+    const packageRelativePath = `.packages/v${newVersion}-${inspected.digest}.localapp`;
+    const now = new Date().toISOString();
+    const versionEntry: PageVersionMeta = {
+      version: newVersion,
+      appVersion: inspected.version,
+      digest: inspected.digest,
+      packagePath: packageRelativePath,
+      createdAt: now,
+      fileCount: countFiles(stagedVersionDir),
+      totalSize: getDirectorySize(stagedVersionDir),
+      uploaderId: input.ownerId,
+      ...(input.uploaderDisplayName ? { uploaderDisplayName: input.uploaderDisplayName } : {}),
+      ...(parsed.issueTemplates ? { issues: { templates: parsed.issueTemplates } } : {}),
+      manifest: sourceManifest,
+    };
+    updatedMeta.currentVersion = newVersion;
+    updatedMeta.currentAppVersion = inspected.version;
+    updatedMeta.previousVersion = baseMeta.currentVersion > 0 ? baseMeta.currentVersion : undefined;
+    updatedMeta.updatedAt = now;
+    updatedMeta.versions = [...baseMeta.versions, versionEntry];
+    updatedMeta.packageIdentities = {
+      ...(baseMeta.packageIdentities ?? {}),
+      [inspected.version]: { digest: inspected.digest, version: newVersion },
+    };
+    const allVersions = updatedMeta.versions;
+    updatedMeta.versions = retainedVersions(updatedMeta);
+
     fs.mkdirSync(pageDir, { recursive: true });
     closeConnectionsForPage(pageDir);
-    if (dbExisted) fs.copyFileSync(dbPath, dbBackupPath);
+    if (dbExisted) {
+      fs.copyFileSync(dbPath, dbBackupPath);
+      syncFile(dbBackupPath);
+      syncDirectory(jobDir);
+    }
+    transaction = {
+      schemaVersion: 1,
+      id: path.basename(jobDir),
+      ownerId: input.ownerId,
+      appName: inspected.name,
+      state: "prepared",
+      jobDir: path.relative(input.dataDir, jobDir),
+      database: {
+        existed: dbExisted,
+        backupPath: dbExisted ? path.relative(input.dataDir, dbBackupPath) : null,
+        backupDigest: dbExisted ? sha256FileSync(dbBackupPath) : null,
+      },
+      previous: { meta: existing ? cloneJson(existing) : null, sourceManifest: previousSourceManifest },
+      next: {
+        localVersion: newVersion,
+        appVersion: inspected.version,
+        digest: inspected.digest,
+        versionPath: path.relative(pageDir, finalVersionDir),
+        packagePath: packageRelativePath,
+      },
+    };
+    writeInstallTransaction(pageDir, transaction);
     await validateMigrationHistory(pageDir, inspected);
     const migrationsDir = path.join(extractedDir, "migrations");
     if (fs.existsSync(migrationsDir) && fs.readdirSync(migrationsDir).some((entry) => entry.endsWith(".sql"))) {
@@ -239,47 +357,22 @@ async function installInspectedPackage(
       }
     }
 
-    const newVersion = Math.max(0, ...baseMeta.versions.map((entry) => entry.version), baseMeta.currentVersion) + 1;
-    finalVersionDir = path.join(pageDir, "versions", `v${newVersion}`);
-    if (fs.existsSync(finalVersionDir)) {
-      throw new AppInstallError("APP_VERSION_STORAGE_CONFLICT", `Version directory already exists: v${newVersion}`, 409);
-    }
     fs.mkdirSync(path.dirname(finalVersionDir), { recursive: true });
     fs.renameSync(stagedVersionDir, finalVersionDir);
+    syncDirectory(path.dirname(finalVersionDir));
     assertVersionHealthy(finalVersionDir);
     retainedPackage = await retainExactPackage(pageDir, newVersion, inspected);
-
-    const now = new Date().toISOString();
-    const versionEntry: PageVersionMeta = {
-      version: newVersion,
-      appVersion: inspected.version,
-      digest: inspected.digest,
-      packagePath: retainedPackage.relativePath,
-      createdAt: now,
-      fileCount: countFiles(finalVersionDir),
-      totalSize: getDirectorySize(finalVersionDir),
-      uploaderId: input.ownerId,
-      ...(input.uploaderDisplayName ? { uploaderDisplayName: input.uploaderDisplayName } : {}),
-      ...(parsed.issueTemplates ? { issues: { templates: parsed.issueTemplates } } : {}),
-      manifest: sourceManifest,
-    };
-    updatedMeta.currentVersion = newVersion;
-    updatedMeta.currentAppVersion = inspected.version;
-    updatedMeta.previousVersion = baseMeta.currentVersion > 0 ? baseMeta.currentVersion : undefined;
-    updatedMeta.updatedAt = now;
-    updatedMeta.versions = [...baseMeta.versions, versionEntry];
-    updatedMeta.packageIdentities = {
-      ...(baseMeta.packageIdentities ?? {}),
-      [inspected.version]: { digest: inspected.digest, version: newVersion },
-    };
-    const allVersions = updatedMeta.versions;
-    updatedMeta.versions = retainedVersions(updatedMeta);
+    if (retainedPackage.relativePath !== packageRelativePath) {
+      throw new AppInstallError("APP_PACKAGE_STORAGE_CONFLICT", "Retained package path does not match installation transaction", 500);
+    }
     commitSourceManifestAndMeta(
       pageDir,
       getPageMetaPath(input.dataDir, input.ownerId, inspected.name),
       sourceManifest,
       updatedMeta,
     );
+    removeInstallTransaction(pageDir);
+    transaction = undefined;
     try {
       cleanupOldVersions(pageDir, allVersions, updatedMeta.versions);
     } catch {
@@ -297,21 +390,258 @@ async function installInspectedPackage(
       idempotent: false,
     };
   } catch (error) {
-    closeConnectionsForPage(pageDir);
-    restoreDatabase(dbPath, dbBackupPath, dbExisted);
-    if (finalVersionDir) removeDirRecursive(finalVersionDir);
-    if (retainedPackage?.created) removeRetainedPackage(pageDir, retainedPackage.relativePath);
-    if (existing) {
-      if (previousManifest) fs.writeFileSync(previousManifestPath, previousManifest);
-      else fs.rmSync(previousManifestPath, { force: true });
-      writePageMeta(input.dataDir, input.ownerId, inspected.name, existing);
-    } else if (!pageExisted) {
-      removeDirRecursive(pageDir);
+    if (transaction && fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) {
+      const activeTransaction = transaction;
+      try {
+        activeTransaction.state = "rolling-back";
+        writeInstallTransaction(pageDir, activeTransaction);
+        await rollbackInstallTransaction(input.dataDir, pageDir, activeTransaction);
+        transaction = undefined;
+      } catch (recoveryError) {
+        markRecoveryRequired(pageDir, activeTransaction, recoveryError);
+        throw new AppInstallError(
+          "APP_INSTALL_RECOVERY_REQUIRED",
+          "Application installation failed and automatic rollback could not be proven safe",
+          503,
+          undefined,
+          { cause: recoveryError },
+        );
+      }
+    } else {
+      closeConnectionsForPage(pageDir);
+      restoreDatabase(dbPath, dbBackupPath, dbExisted);
+      if (finalVersionDir) removeDirRecursive(finalVersionDir);
+      if (retainedPackage?.created) removeRetainedPackage(pageDir, retainedPackage.relativePath);
+      if (existing) {
+        if (previousManifest) fs.writeFileSync(previousManifestPath, previousManifest);
+        else fs.rmSync(previousManifestPath, { force: true });
+        writePageMeta(input.dataDir, input.ownerId, inspected.name, existing);
+      } else if (!pageExisted) {
+        removeDirRecursive(pageDir);
+      }
     }
     throw error;
   } finally {
-    removeDirRecursive(jobDir);
+    if (!transaction && !fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) removeDirRecursive(jobDir);
   }
+}
+
+async function reconcileInstallTransaction(dataDir: string, pageDir: string): Promise<void> {
+  const transactionPath = path.join(pageDir, INSTALL_TRANSACTION_FILE);
+  let transaction: AppInstallTransaction;
+  try {
+    transaction = JSON.parse(fs.readFileSync(transactionPath, "utf8")) as AppInstallTransaction;
+    validateInstallTransaction(dataDir, pageDir, transaction);
+  } catch (error) {
+    throw new AppInstallError(
+      "APP_INSTALL_RECOVERY_REQUIRED",
+      `Cannot safely read application installation transaction at ${transactionPath}`,
+      503,
+      transactionPath,
+      { cause: error },
+    );
+  }
+  if (transaction.state === "recovery-required") {
+    throw new AppInstallError(
+      "APP_INSTALL_RECOVERY_REQUIRED",
+      transaction.issue ?? "Application installation requires operator recovery",
+      503,
+      transactionPath,
+    );
+  }
+
+  try {
+    recoverSourceManifestAndMeta(pageDir, getPageMetaPath(dataDir, transaction.ownerId, transaction.appName));
+    const visibleMeta = readRawPageMeta(dataDir, transaction.ownerId, transaction.appName);
+    if (transaction.state === "rolling-back" || sameJson(visibleMeta, transaction.previous.meta)) {
+      if (transaction.state !== "rolling-back") {
+        transaction.state = "rolling-back";
+        writeInstallTransaction(pageDir, transaction);
+      }
+      await rollbackInstallTransaction(dataDir, pageDir, transaction);
+      return;
+    }
+    if (isNextInstallMeta(visibleMeta, transaction)) {
+      await verifyCompletedInstall(pageDir, transaction);
+      removeInstallTransaction(pageDir);
+      removeDirRecursive(resolveTransactionJobDir(dataDir, transaction));
+      return;
+    }
+    throw new Error("Visible application metadata matches neither the previous nor activated version");
+  } catch (error) {
+    markRecoveryRequired(pageDir, transaction, error);
+    throw new AppInstallError(
+      "APP_INSTALL_RECOVERY_REQUIRED",
+      `Application ${transaction.ownerId}/${transaction.appName} requires recovery before Server can start`,
+      503,
+      transactionPath,
+      { cause: error },
+    );
+  }
+}
+
+async function rollbackInstallTransaction(dataDir: string, pageDir: string, transaction: AppInstallTransaction): Promise<void> {
+  const dbPath = path.join(pageDir, "app.db");
+  closeConnectionsForPage(pageDir);
+  if (transaction.database.existed) {
+    const backupPath = resolveTransactionBackup(dataDir, transaction);
+    if (!backupPath || !fs.existsSync(backupPath)) throw new Error("Application database backup is missing");
+    if (sha256FileSync(backupPath) !== transaction.database.backupDigest) throw new Error("Application database backup digest mismatch");
+    durableCopyFile(backupPath, dbPath);
+    if (sha256FileSync(dbPath) !== transaction.database.backupDigest) throw new Error("Restored application database digest mismatch");
+  } else {
+    fs.rmSync(dbPath, { force: true });
+    syncDirectory(pageDir);
+  }
+
+  removeDirRecursive(resolvePageRelative(pageDir, transaction.next.versionPath));
+  removeRetainedPackage(pageDir, transaction.next.packagePath);
+  fs.rmSync(path.join(pageDir, ".app-state-transaction.json"), { force: true });
+  const sourcePath = path.join(pageDir, "manifest.json");
+  const metaPath = getPageMetaPath(dataDir, transaction.ownerId, transaction.appName);
+  if (transaction.previous.sourceManifest) durableWriteJson(sourcePath, transaction.previous.sourceManifest);
+  else fs.rmSync(sourcePath, { force: true });
+  if (transaction.previous.meta) durableWriteJson(metaPath, transaction.previous.meta as unknown as Record<string, unknown>);
+  else fs.rmSync(metaPath, { force: true });
+  syncDirectory(pageDir);
+
+  if (!sameJson(readRawPageMeta(dataDir, transaction.ownerId, transaction.appName), transaction.previous.meta)) {
+    throw new Error("Previous application metadata could not be restored exactly");
+  }
+  removeInstallTransaction(pageDir);
+  removeDirRecursive(resolveTransactionJobDir(dataDir, transaction));
+}
+
+async function verifyCompletedInstall(pageDir: string, transaction: AppInstallTransaction): Promise<void> {
+  const versionDir = resolvePageRelative(pageDir, transaction.next.versionPath);
+  assertVersionHealthy(versionDir);
+  const packagePath = resolvePageRelative(pageDir, transaction.next.packagePath);
+  const inspected = await inspectAppPackage(packagePath);
+  if (inspected.digest !== transaction.next.digest || inspected.version !== transaction.next.appVersion
+    || inspected.name !== transaction.appName) {
+    throw new Error("Activated package does not match installation transaction");
+  }
+  await verifyAppliedMigrations(pageDir, inspected);
+}
+
+async function verifyAppliedMigrations(pageDir: string, inspected: InspectedAppPackage): Promise<void> {
+  const migrations = inspected.entries.filter((entry) => entry.path.startsWith("migrations/") && entry.path.endsWith(".sql"));
+  if (migrations.length === 0) return;
+  const dbPath = path.join(pageDir, "app.db");
+  if (!fs.existsSync(dbPath)) throw new Error("Activated application database is missing");
+  await getConnection(dbPath);
+  try {
+    const table = execRawSql(dbPath, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_localapp_applied_migrations'");
+    if ((table.rows ?? []).length === 0) throw new Error("Activated application migration history is missing");
+    const applied = new Map((execRawSql(dbPath, "SELECT filename, checksum FROM _localapp_applied_migrations").rows ?? [])
+      .map((row) => [String(row.filename), String(row.checksum)]));
+    for (const migration of migrations) {
+      if (applied.get(path.posix.basename(migration.path)) !== migration.sha256) {
+        throw new Error(`Activated migration is not verified: ${migration.path}`);
+      }
+    }
+  } finally { closeConnectionsForPage(pageDir); }
+}
+
+function writeInstallTransaction(pageDir: string, transaction: AppInstallTransaction): void {
+  durableWriteJson(path.join(pageDir, INSTALL_TRANSACTION_FILE), transaction as unknown as Record<string, unknown>);
+}
+
+function removeInstallTransaction(pageDir: string): void {
+  fs.rmSync(path.join(pageDir, INSTALL_TRANSACTION_FILE), { force: true });
+  syncDirectory(pageDir);
+}
+
+function markRecoveryRequired(pageDir: string, transaction: AppInstallTransaction, error: unknown): void {
+  transaction.state = "recovery-required";
+  transaction.issue = error instanceof Error ? error.message : String(error);
+  try { writeInstallTransaction(pageDir, transaction); } catch { /* preserve the original durable journal if publication fails */ }
+}
+
+function validateInstallTransaction(dataDir: string, pageDir: string, transaction: AppInstallTransaction): void {
+  if (transaction.schemaVersion !== 1 || !transaction.id || !transaction.ownerId || !transaction.appName) {
+    throw new Error("Invalid application installation transaction metadata");
+  }
+  if (!["prepared", "rolling-back", "recovery-required"].includes(transaction.state)) throw new Error("Invalid recovery state");
+  if (getPageDir(dataDir, transaction.ownerId, transaction.appName) !== pageDir) throw new Error("Installation transaction identity mismatch");
+  resolveTransactionJobDir(dataDir, transaction);
+  resolvePageRelative(pageDir, transaction.next.versionPath);
+  resolvePageRelative(pageDir, transaction.next.packagePath);
+  if (transaction.database.existed) resolveTransactionBackup(dataDir, transaction);
+}
+
+function resolveTransactionJobDir(dataDir: string, transaction: AppInstallTransaction): string {
+  const root = path.resolve(dataDir, ".staging", "apps");
+  const resolved = path.resolve(dataDir, transaction.jobDir);
+  if (path.dirname(resolved) !== root || path.basename(resolved) !== transaction.id) throw new Error("Unsafe installer staging path");
+  return resolved;
+}
+
+function resolveTransactionBackup(dataDir: string, transaction: AppInstallTransaction): string | null {
+  if (!transaction.database.backupPath) return null;
+  const jobDir = resolveTransactionJobDir(dataDir, transaction);
+  const resolved = path.resolve(dataDir, transaction.database.backupPath);
+  if (path.dirname(resolved) !== jobDir) throw new Error("Unsafe installer database backup path");
+  return resolved;
+}
+
+function resolvePageRelative(pageDir: string, relativePath: string): string {
+  const resolved = path.resolve(pageDir, relativePath);
+  if (!resolved.startsWith(`${path.resolve(pageDir)}${path.sep}`)) throw new Error("Unsafe application transaction path");
+  return resolved;
+}
+
+function isNextInstallMeta(meta: PageMeta | null, transaction: AppInstallTransaction): boolean {
+  if (!meta) return false;
+  const version = meta.versions.find((entry) => entry.version === transaction.next.localVersion);
+  return meta.userId === transaction.ownerId && meta.name === transaction.appName
+    && meta.currentVersion === transaction.next.localVersion
+    && meta.currentAppVersion === transaction.next.appVersion
+    && version?.digest === transaction.next.digest
+    && version.packagePath === transaction.next.packagePath;
+}
+
+function readRawPageMeta(dataDir: string, ownerId: string, appName: string): PageMeta | null {
+  const metaPath = getPageMetaPath(dataDir, ownerId, appName);
+  return fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, "utf8")) as PageMeta : null;
+}
+
+function durableWriteJson(filePath: string, value: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    syncFile(tempPath);
+    fs.renameSync(tempPath, filePath);
+    syncDirectory(path.dirname(filePath));
+  } finally { fs.rmSync(tempPath, { force: true }); }
+}
+
+function durableCopyFile(source: string, target: string): void {
+  const tempPath = `${target}.${process.pid}.${crypto.randomUUID()}.restore`;
+  try {
+    fs.copyFileSync(source, tempPath);
+    syncFile(tempPath);
+    fs.renameSync(tempPath, target);
+    syncDirectory(path.dirname(target));
+  } finally { fs.rmSync(tempPath, { force: true }); }
+}
+
+function syncFile(filePath: string): void {
+  const descriptor = fs.openSync(filePath, "r");
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+}
+
+function sha256FileSync(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function activateVersionLocked(

@@ -1,10 +1,19 @@
-import { AppInstallError, installAppPackage, type InstallOutcome } from "./app-installer.js";
+import { AppInstallError, installAppPackage, verifyInstalledAppVersion, type InstallAppPackageInput, type InstallOutcome } from "./app-installer.js";
 import { inspectAppPackage } from "./app-package.js";
 import { readPageMeta } from "../plugins/storage.js";
 import { SyncSessionError, SyncSessionStore, type SyncSessionRecord } from "./sync-session-store.js";
 
 export class AppSyncTarget {
-  constructor(private readonly dataDir: string, readonly sessions: SyncSessionStore) {}
+  private readonly commits = new Map<string, Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }>>();
+  private readonly install: (input: InstallAppPackageInput) => Promise<InstallOutcome>;
+
+  constructor(
+    private readonly dataDir: string,
+    readonly sessions: SyncSessionStore,
+    options: { install?: (input: InstallAppPackageInput) => Promise<InstallOutcome> } = {},
+  ) {
+    this.install = options.install ?? installAppPackage;
+  }
 
   create(input: {
     id: string; ownerId: string; mode: "app-only"; appName: string; appVersion: string; packageDigest: string; packageSize: number;
@@ -22,15 +31,28 @@ export class AppSyncTarget {
     return this.sessions.create(input);
   }
 
-  async commit(id: string, ownerId: string): Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }> {
+  commit(id: string, ownerId: string): Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }> {
     const session = this.sessions.getOwned(id, ownerId);
-    if (!session) throw new SyncSessionError("SYNC_SESSION_NOT_FOUND", "Synchronization session not found", 404);
+    if (!session) return Promise.reject(new SyncSessionError("SYNC_SESSION_NOT_FOUND", "Synchronization session not found", 404));
     if (session.status === "completed" && session.outcome) {
-      return { session, outcome: session.outcome as unknown as InstallOutcome };
+      return Promise.resolve({ session, outcome: session.outcome as unknown as InstallOutcome });
+    }
+    const inFlight = this.commits.get(id);
+    if (inFlight) return inFlight;
+    if (session.status === "committing") {
+      return Promise.reject(new SyncSessionError("SYNC_COMMIT_IN_PROGRESS", "Synchronization commit is in progress", 409));
     }
     if (session.status !== "uploaded" && session.status !== "failed") {
-      throw new SyncSessionError("SYNC_PACKAGE_REQUIRED", "A verified package upload is required", 409);
+      return Promise.reject(new SyncSessionError("SYNC_PACKAGE_REQUIRED", "A verified package upload is required", 409));
     }
+    const run = this.executeCommit(session, ownerId);
+    this.commits.set(id, run);
+    void run.finally(() => { if (this.commits.get(id) === run) this.commits.delete(id); }).catch(() => undefined);
+    return run;
+  }
+
+  private async executeCommit(session: SyncSessionRecord, ownerId: string): Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }> {
+    const id = session.id;
     const packagePath = this.sessions.packagePath(id);
     const inspected = await inspectAppPackage(packagePath);
     if (inspected.name !== session.appName || inspected.version !== session.appVersion || inspected.digest !== session.packageDigest) {
@@ -38,29 +60,34 @@ export class AppSyncTarget {
     }
     this.sessions.transition(id, ownerId, "committing");
     try {
-      const outcome = await installAppPackage({ dataDir: this.dataDir, ownerId, packagePath, preserveTargetAccess: true });
+      const outcome = await this.install({ dataDir: this.dataDir, ownerId, packagePath, preserveTargetAccess: true });
       return { session: this.sessions.transition(id, ownerId, "completed", { outcome: outcome as unknown as Record<string, unknown> }), outcome };
     } catch (error) {
-      this.sessions.transition(id, ownerId, "failed", { error: publicInstallError(error) });
+      this.sessions.transition(id, ownerId, error instanceof AppInstallError && error.code === "APP_INSTALL_RECOVERY_REQUIRED"
+        ? "recovery-required" : "failed", { error: publicInstallError(error) });
       throw error;
     }
   }
 
-  reconcileInterrupted(): number {
+  async reconcileInterrupted(): Promise<number> {
     let reconciled = 0;
     for (const session of this.sessions.list()) {
       if (session.status !== "committing") continue;
-      const meta = readPageMeta(this.dataDir, session.ownerId, session.appName);
-      const version = meta?.versions.find((entry) => entry.appVersion === session.appVersion && entry.digest === session.packageDigest);
-      if (meta && version) {
+      try {
+        const version = await verifyInstalledAppVersion({
+          dataDir: this.dataDir, ownerId: session.ownerId, appName: session.appName,
+          appVersion: session.appVersion, digest: session.packageDigest,
+        });
         const outcome: InstallOutcome = {
           name: session.appName, ownerId: session.ownerId, localVersion: version.version,
           appVersion: session.appVersion, digest: session.packageDigest,
           created: false, upgraded: false, idempotent: true,
         };
         this.sessions.transition(session.id, session.ownerId, "completed", { outcome: outcome as unknown as Record<string, unknown> });
-      } else {
-        this.sessions.transition(session.id, session.ownerId, "failed", { error: "Server restarted before synchronization commit completed" });
+      } catch {
+        this.sessions.transition(session.id, session.ownerId, "recovery-required", {
+          error: "Server restarted before synchronization commit outcome could be verified",
+        });
       }
       reconciled += 1;
     }

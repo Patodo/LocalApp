@@ -5,7 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import { execRawSql, getConnection } from "@localapp/server-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { installAppPackage } from "../../src/lib/app-installer.js";
 import { MAX_APP_PACKAGE_BYTES, writeAppPackage } from "../../src/lib/app-package.js";
 import { SyncJobStore } from "../../src/lib/sync-job-store.js";
@@ -175,8 +175,67 @@ describe("application-only peer synchronization", () => {
     });
     store.transition(interrupted.id, interrupted.ownerId, "committing");
     const target = new AppSyncTarget(dataDir, store);
-    expect(target.reconcileInterrupted()).toBe(1);
-    expect(store.getOwned(interrupted.id, interrupted.ownerId)!.status).toBe("failed");
+    expect(await target.reconcileInterrupted()).toBe(1);
+    expect(store.getOwned(interrupted.id, interrupted.ownerId)!.status).toBe("recovery-required");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("publishes a complete session atomically and recovers an empty crash residue idempotently", () => {
+    const root = path.join(dataDir, ".staging", `sync-publish-${crypto.randomUUID()}`);
+    const store = new SyncSessionStore({ dataDir, rootDir: root });
+    const id = crypto.randomUUID();
+    const input = {
+      id, ownerId: "target-owner", mode: "app-only" as const, appName: "atomic-session",
+      appVersion: "1.0.0", packageDigest: "d".repeat(64), packageSize: 12,
+    };
+    const originalRename = fs.renameSync;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+      if (path.basename(String(target)) === "session.json") throw new Error("injected session metadata publication failure");
+      return originalRename(source, target);
+    });
+    try {
+      expect(() => store.create(input)).toThrow("injected session metadata publication failure");
+      expect(fs.existsSync(store.sessionDir(id))).toBe(false);
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(store.create(input)).toMatchObject({ id, status: "created" });
+    expect(store.create(input)).toMatchObject({ id, status: "created" });
+
+    const residueId = crypto.randomUUID();
+    fs.mkdirSync(store.sessionDir(residueId), { recursive: true });
+    expect(store.create({ ...input, id: residueId })).toMatchObject({ id: residueId, status: "created" });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("prunes expired orphan and corrupt uncommitted residues without deleting completed sessions", () => {
+    const root = path.join(dataDir, ".staging", `sync-residue-${crypto.randomUUID()}`);
+    const store = new SyncSessionStore({ dataDir, rootDir: root, retentionMs: 10 });
+    const expired = store.create({
+      id: crypto.randomUUID(), ownerId: "target-owner", mode: "app-only", appName: "expired",
+      appVersion: "1.0.0", packageDigest: "a".repeat(64), packageSize: 1,
+    });
+    const completed = store.create({
+      id: crypto.randomUUID(), ownerId: "target-owner", mode: "app-only", appName: "completed",
+      appVersion: "1.0.0", packageDigest: "b".repeat(64), packageSize: 1,
+    });
+    store.transition(completed.id, completed.ownerId, "completed");
+    const orphanId = crypto.randomUUID();
+    const corruptId = crypto.randomUUID();
+    fs.mkdirSync(store.sessionDir(orphanId));
+    fs.mkdirSync(store.sessionDir(corruptId));
+    fs.writeFileSync(path.join(store.sessionDir(corruptId), "session.json"), "{broken");
+    const oldTime = new Date(Date.now() - 60_000);
+    for (const id of [expired.id, completed.id, orphanId, corruptId]) {
+      fs.utimesSync(store.sessionDir(id), oldTime, oldTime);
+    }
+
+    expect(store.prune()).toBe(3);
+    expect(fs.existsSync(store.sessionDir(completed.id))).toBe(true);
+    expect(fs.existsSync(store.sessionDir(expired.id))).toBe(false);
+    expect(fs.existsSync(store.sessionDir(orphanId))).toBe(false);
+    expect(fs.existsSync(store.sessionDir(corruptId))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

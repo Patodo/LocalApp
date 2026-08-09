@@ -5,7 +5,7 @@ import type { Readable } from "node:stream";
 import { MAX_APP_PACKAGE_BYTES } from "./app-package.js";
 import { removeDirRecursive } from "./file-utils.js";
 
-export type SyncSessionStatus = "created" | "uploaded" | "committing" | "completed" | "failed";
+export type SyncSessionStatus = "created" | "uploaded" | "committing" | "completed" | "failed" | "recovery-required";
 export interface SyncSessionRecord {
   id: string;
   ownerId: string;
@@ -48,24 +48,37 @@ export class SyncSessionStore {
   create(input: Omit<SyncSessionRecord, "status" | "outcome" | "error" | "createdAt" | "updatedAt">): SyncSessionRecord {
     validateInput(input);
     const directory = this.sessionDir(input.id);
-    const existing = this.get(input.id);
+    let existing: SyncSessionRecord | null = null;
+    try { existing = this.get(input.id); }
+    catch (error) {
+      if (!isSafeUncommittedResidue(directory)) throw error;
+      removeDirRecursive(directory);
+      syncDirectory(this.rootDir);
+    }
     if (existing) {
       if (!sameIdentity(existing, input)) throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already used for different metadata", 409);
       return existing;
     }
-    try { fs.mkdirSync(directory, { mode: 0o700 }); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    const now = new Date().toISOString();
+    const session: SyncSessionRecord = { ...input, status: "created", outcome: null, error: null, createdAt: now, updatedAt: now };
+    const stagingDirectory = path.join(this.rootDir, `.session-${input.id}-${crypto.randomUUID()}.partial`);
+    try {
+      fs.mkdirSync(stagingDirectory, { mode: 0o700 });
+      this.writeInDirectory(session, stagingDirectory);
+      try {
+        fs.renameSync(stagingDirectory, directory);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (!["EEXIST", "ENOTEMPTY"].includes(code ?? "")) throw error;
         const raced = this.get(input.id);
         if (raced && sameIdentity(raced, input)) return raced;
         throw new SyncSessionError("SYNC_SESSION_CONFLICT", "Synchronization ID is already in use", 409);
       }
-      throw error;
+      syncDirectory(this.rootDir);
+      return this.get(input.id)!;
+    } finally {
+      removeDirRecursive(stagingDirectory);
     }
-    const now = new Date().toISOString();
-    const session: SyncSessionRecord = { ...input, status: "created", outcome: null, error: null, createdAt: now, updatedAt: now };
-    this.write(session);
-    return session;
   }
 
   get(id: string): SyncSessionRecord | null {
@@ -115,6 +128,7 @@ export class SyncSessionStore {
       throw new SyncSessionError("SYNC_PACKAGE_CONFLICT", "Staged package does not match session metadata", 409);
     }
     if (session.status === "committing") throw new SyncSessionError("SYNC_COMMIT_IN_PROGRESS", "Synchronization commit is in progress", 409);
+    if (session.status === "recovery-required") throw new SyncSessionError("SYNC_RECOVERY_REQUIRED", "Synchronization requires operator recovery", 409);
     const partialPath = path.join(this.sessionDir(input.id), `package.${process.pid}.${crypto.randomUUID()}.partial`);
     const handle = await fs.promises.open(partialPath, "wx", 0o600);
     const hash = crypto.createHash("sha256");
@@ -162,7 +176,7 @@ export class SyncSessionStore {
   remove(id: string, ownerId: string): boolean {
     const session = this.getOwned(id, ownerId);
     if (!session) return false;
-    if (session.status === "committing" || session.status === "completed") {
+    if (session.status === "committing" || session.status === "completed" || session.status === "recovery-required") {
       throw new SyncSessionError("SYNC_CANNOT_CANCEL", "Synchronization can no longer be cancelled", 409);
     }
     removeDirRecursive(this.sessionDir(id));
@@ -174,10 +188,29 @@ export class SyncSessionStore {
     let removed = 0;
     for (const entry of fs.readdirSync(this.rootDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
+      const directory = path.join(this.rootDir, entry.name);
+      const age = now - fs.statSync(directory).mtimeMs;
+      if (entry.name.startsWith(".session-") && entry.name.endsWith(".partial")) {
+        if (age > this.retentionMs) { removeDirRecursive(directory); removed += 1; }
+        continue;
+      }
       let session: SyncSessionRecord | null;
-      try { session = this.get(entry.name); } catch { continue; }
-      if (!session || session.status === "committing" || session.status === "completed") continue;
-      const age = now - fs.statSync(this.sessionDir(entry.name)).mtimeMs;
+      try { session = this.get(entry.name); }
+      catch {
+        if (age > this.retentionMs && isSafeUncommittedResidue(directory)) {
+          removeDirRecursive(directory);
+          removed += 1;
+        }
+        continue;
+      }
+      if (!session) {
+        if (age > this.retentionMs && isSafeUncommittedResidue(directory)) {
+          removeDirRecursive(directory);
+          removed += 1;
+        }
+        continue;
+      }
+      if (session.status === "committing" || session.status === "completed" || session.status === "recovery-required") continue;
       if (age <= this.retentionMs) continue;
       removeDirRecursive(this.sessionDir(entry.name));
       removed += 1;
@@ -189,6 +222,10 @@ export class SyncSessionStore {
   private write(session: SyncSessionRecord): void {
     const directory = this.sessionDir(session.id);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    this.writeInDirectory(session, directory);
+  }
+
+  private writeInDirectory(session: SyncSessionRecord, directory: string): void {
     const finalPath = path.join(directory, "session.json");
     const tempPath = path.join(directory, `.session.${process.pid}.${crypto.randomUUID()}.partial`);
     try {
@@ -201,6 +238,16 @@ export class SyncSessionStore {
       syncDirectory(directory);
     } finally { fs.rmSync(tempPath, { force: true }); }
   }
+}
+
+function isSafeUncommittedResidue(directory: string): boolean {
+  if (!fs.existsSync(directory)) return true;
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); }
+  catch { return false; }
+  return entries.every((entry) => entry.isFile()
+    && (entry.name === "session.json" || entry.name.startsWith(".session.") || entry.name.endsWith(".partial")))
+    && !entries.some((entry) => entry.name === "package.localapp");
 }
 
 function validateInput(input: { id: string; ownerId: string; mode: string; appName: string; appVersion: string; packageDigest: string; packageSize: number }): void {
