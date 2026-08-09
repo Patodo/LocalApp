@@ -1,9 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 export interface ServerConfig {
   port: number;
   dataDir: string;
+  listenHost: string;
+  listenPort: number;
+  publicUrl: string;
+  workspaceDir: string;
+  jwtKeyFile: string;
+  masterKeyFile: string;
+  allowInsecureLan: boolean;
   jwtSecret: string;
   bootstrapApiKey: string;
   templateRepoUrl: string;
@@ -26,7 +34,14 @@ export interface ServerConfig {
 
 const DEFAULTS: ServerConfig = {
   port: 3000,
-  dataDir: "./data",
+  dataDir: path.resolve(process.cwd(), ".localapp-server"),
+  listenHost: "127.0.0.1",
+  listenPort: 3000,
+  publicUrl: "",
+  workspaceDir: "workspaces",
+  jwtKeyFile: "jwt.key",
+  masterKeyFile: "master.key",
+  allowInsecureLan: false,
   jwtSecret: "",
   bootstrapApiKey: "",
   templateRepoUrl: "",
@@ -51,6 +66,10 @@ interface TomlConfigResult {
   values: Partial<ServerConfig>;
   hasDeprecatedRegistrationConfig: boolean;
 }
+
+export type PersistedServerSettings = Pick<ServerConfig,
+  "listenHost" | "listenPort" | "publicUrl" | "workspaceDir" | "allowInsecureLan"
+>;
 
 const warnedDeprecatedConfigDirs = new Set<string>();
 
@@ -109,6 +128,25 @@ async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
   };
 }
 
+function readPersistedServerSettings(dataDir: string): Partial<PersistedServerSettings> {
+  const settingsPath = path.join(dataDir, "server.json");
+  if (!fs.existsSync(settingsPath)) return {};
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const values: Partial<PersistedServerSettings> = {};
+    if (typeof parsed.listenHost === "string") values.listenHost = parsed.listenHost;
+    if (typeof parsed.listenPort === "number") values.listenPort = parsed.listenPort;
+    if (typeof parsed.publicUrl === "string") values.publicUrl = parsed.publicUrl;
+    if (typeof parsed.workspaceDir === "string") values.workspaceDir = parsed.workspaceDir;
+    if (typeof parsed.allowInsecureLan === "boolean") values.allowInsecureLan = parsed.allowInsecureLan;
+    return values;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to parse ${settingsPath}: ${message}`);
+  }
+}
+
 function pickEnv(env: NodeJS.ProcessEnv, key: string, tomlValue: string | undefined, defaultVal: string): string {
   const envVal = env[key];
   if (envVal !== undefined && envVal !== "") return envVal;
@@ -122,10 +160,34 @@ function pickPositiveInteger(env: NodeJS.ProcessEnv, key: string, tomlValue: num
   return raw;
 }
 
+function pickPort(env: NodeJS.ProcessEnv, persistedValue: number | undefined, tomlValue: number | undefined): number {
+  const raw = env.LISTEN_PORT ?? env.PORT;
+  if (raw !== undefined && raw !== "") {
+    const port = Number(raw);
+    if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) throw new Error("LISTEN_PORT must be between 0 and 65535");
+    return port;
+  }
+  return persistedValue ?? tomlValue ?? DEFAULTS.listenPort;
+}
+
+function resolveDataPath(dataDir: string, candidate: string): string {
+  return path.isAbsolute(candidate) ? candidate : path.resolve(dataDir, candidate);
+}
+
+function readOrCreateJwtSecret(jwtKeyFile: string): string {
+  if (fs.existsSync(jwtKeyFile)) return fs.readFileSync(jwtKeyFile, "utf8").trim();
+  fs.mkdirSync(path.dirname(jwtKeyFile), { recursive: true, mode: 0o700 });
+  const secret = randomBytes(32).toString("base64url");
+  fs.writeFileSync(jwtKeyFile, secret, { mode: 0o600 });
+  fs.chmodSync(jwtKeyFile, 0o600);
+  return secret;
+}
+
 export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
-  const dataDir = env.DATA_DIR || DEFAULTS.dataDir;
+  const dataDir = path.resolve(env.DATA_DIR || DEFAULTS.dataDir);
   const tomlResult = await readTomlConfig(dataDir);
   const toml = tomlResult.values;
+  const persisted = readPersistedServerSettings(dataDir);
   const hasDeprecatedEnvironmentConfig = [
     "ALLOW_REGISTER",
     "REGISTRATION_KEY",
@@ -141,11 +203,20 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     );
   }
 
+  const listenPort = pickPort(env, persisted.listenPort, toml.port);
+  const jwtKeyFile = resolveDataPath(dataDir, env.JWT_KEY_FILE || DEFAULTS.jwtKeyFile);
   const config: ServerConfig = {
-    port: env.PORT ? parseInt(env.PORT, 10) : (toml.port ?? DEFAULTS.port),
+    port: listenPort,
     // dataDir is determined before reading config.toml — toml's data_dir must not override
     dataDir: dataDir,
-    jwtSecret: pickEnv(env, "JWT_SECRET", toml.jwtSecret, DEFAULTS.jwtSecret),
+    listenHost: pickEnv(env, "LISTEN_HOST", persisted.listenHost, DEFAULTS.listenHost),
+    listenPort,
+    publicUrl: pickEnv(env, "PUBLIC_URL", persisted.publicUrl, DEFAULTS.publicUrl),
+    workspaceDir: resolveDataPath(dataDir, pickEnv(env, "WORKSPACE_DIR", persisted.workspaceDir, DEFAULTS.workspaceDir)),
+    jwtKeyFile,
+    masterKeyFile: resolveDataPath(dataDir, env.MASTER_KEY_FILE || DEFAULTS.masterKeyFile),
+    allowInsecureLan: env.ALLOW_INSECURE_LAN === "true" || (env.ALLOW_INSECURE_LAN === undefined && (persisted.allowInsecureLan ?? DEFAULTS.allowInsecureLan)),
+    jwtSecret: env.JWT_SECRET || toml.jwtSecret || readOrCreateJwtSecret(jwtKeyFile),
     bootstrapApiKey: pickEnv(env, "BOOTSTRAP_API_KEY", toml.bootstrapApiKey, DEFAULTS.bootstrapApiKey),
     templateRepoUrl: pickEnv(env, "TEMPLATE_REPO_URL", toml.templateRepoUrl, DEFAULTS.templateRepoUrl),
     gitDownloadUrl: pickEnv(env, "GIT_DOWNLOAD_URL", toml.gitDownloadUrl, DEFAULTS.gitDownloadUrl),

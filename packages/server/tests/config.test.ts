@@ -39,7 +39,9 @@ describe("loadConfig", () => {
     const config = await loadConfig({ DATA_DIR: tmpDir } as NodeJS.ProcessEnv);
     expect(config.templateRepoUrl).toBe("");
     expect(config.port).toBe(3000);
-    expect(config.jwtSecret).toBe("");
+    expect(config.jwtSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(fs.readFileSync(config.jwtKeyFile, "utf8")).toBe(config.jwtSecret);
+    if (process.platform !== "win32") expect(fs.statSync(config.jwtKeyFile).mode & 0o777).toBe(0o600);
   });
 
   it("reads templateRepoUrl from config.toml", async () => {

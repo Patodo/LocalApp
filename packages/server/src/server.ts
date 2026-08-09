@@ -38,29 +38,34 @@ import { startRequestLogger, stopRequestLogger, pushRequestLog } from "./lib/req
 import { initContentStorage } from "./lib/s3-client.js";
 import { applyPlatformMigrationsToAllApps } from "./lib/platform-migrations.js";
 import { assertAppDataWritable } from "./lib/app-data-maintenance.js";
-import { loadConfig } from "./lib/config.js";
 import { SetupTokenStore } from "./lib/setup-token-store.js";
+import { createServerConfigStore, type ServerConfigStore } from "./lib/server-config-store.js";
+import { systemRoutes, type RestartController } from "./routes/system.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
   webRoot?: string;
   setupTokens?: SetupTokenStore;
+  restartController?: RestartController;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
-  const config = await loadConfig(options.env ?? process.env);
+  const configStore = createServerConfigStore({ env: options.env ?? process.env });
+  const config = await configStore.read();
   const app = Fastify({ ignoreTrailingSlash: true });
   app.decorate("config", config);
   await registerServerPluginsAndRoutes(app, {
     webRoot: options.webRoot,
     setupTokens: options.setupTokens ?? new SetupTokenStore(),
+    configStore,
+    restartController: options.restartController ?? { requestRestart: (exitCode) => process.exit(exitCode) },
   });
   return app;
 }
 
 async function registerServerPluginsAndRoutes(
   app: FastifyInstance,
-  options: { webRoot?: string; setupTokens: SetupTokenStore },
+  options: { webRoot?: string; setupTokens: SetupTokenStore; configStore: ServerConfigStore; restartController: RestartController },
 ): Promise<void> {
   const { default: websocket } = await import("@fastify/websocket");
   await app.register(websocket);
@@ -77,6 +82,7 @@ async function registerServerPluginsAndRoutes(
   await app.register(sessionPlugin);
   app.register(verificationRoutes);
   await setupRoutes(app, options.setupTokens);
+  await systemRoutes(app, { configStore: options.configStore, restartController: options.restartController });
   app.get("/health", async () => ({ status: "ok" }));
 
   const webRoot = options.webRoot ?? path.resolve(__dirname, "../../web/out");

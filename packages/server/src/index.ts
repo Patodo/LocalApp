@@ -2,8 +2,8 @@ import { buildServer } from "./server.js";
 
 async function main() {
   const app = await buildServer();
-  await app.listen({ port: app.config.port, host: "0.0.0.0" });
-  console.log(`LocalApp server listening on port ${app.config.port}`);
+  await app.listen({ port: app.config.listenPort, host: app.config.listenHost });
+  console.log(`LocalApp server listening on ${app.config.listenHost}:${app.config.listenPort}`);
 }
 
 main().catch((err) => {

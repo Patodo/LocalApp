@@ -26,6 +26,13 @@ function config(dataDir: string): ServerConfig {
   return {
     port: 3000,
     dataDir,
+    listenHost: "127.0.0.1",
+    listenPort: 3000,
+    publicUrl: "",
+    workspaceDir: path.join(dataDir, "workspaces"),
+    jwtKeyFile: path.join(dataDir, "jwt.key"),
+    masterKeyFile: path.join(dataDir, "master.key"),
+    allowInsecureLan: false,
     jwtSecret: "",
     bootstrapApiKey: "",
     templateRepoUrl: "",

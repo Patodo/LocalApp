@@ -19,6 +19,13 @@ function testConfig(dataDir: string): ServerConfig {
   return {
     port: 0,
     dataDir,
+    listenHost: "127.0.0.1",
+    listenPort: 0,
+    publicUrl: "",
+    workspaceDir: path.join(dataDir, "workspaces"),
+    jwtKeyFile: path.join(dataDir, "jwt.key"),
+    masterKeyFile: path.join(dataDir, "master.key"),
+    allowInsecureLan: false,
     jwtSecret: "test-secret",
     bootstrapApiKey: "",
     templateRepoUrl: "",

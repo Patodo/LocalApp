@@ -9,6 +9,13 @@ function minimalConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     port: 3000,
     dataDir: "",
+    listenHost: "127.0.0.1",
+    listenPort: 3000,
+    publicUrl: "",
+    workspaceDir: "workspaces",
+    jwtKeyFile: "jwt.key",
+    masterKeyFile: "master.key",
+    allowInsecureLan: false,
     jwtSecret: "",
     bootstrapApiKey: "",
     templateRepoUrl: "",

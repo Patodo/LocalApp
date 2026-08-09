@@ -46,7 +46,7 @@ describe("application database backups", () => {
     dbPath = path.join(pageDir, "app.db");
     fs.writeFileSync(dbPath, await sqliteBytes("original"));
     await initContentStorage({
-      port: 3000, dataDir, jwtSecret: "", bootstrapApiKey: "", templateRepoUrl: "", gitDownloadUrl: "", adminStaticDir: "", minCliVersion: "", releaseManifestUrl: "",
+      port: 3000, dataDir, listenHost: "127.0.0.1", listenPort: 3000, publicUrl: "", workspaceDir: path.join(dataDir, "workspaces"), jwtKeyFile: path.join(dataDir, "jwt.key"), masterKeyFile: path.join(dataDir, "master.key"), allowInsecureLan: false, jwtSecret: "", bootstrapApiKey: "", templateRepoUrl: "", gitDownloadUrl: "", adminStaticDir: "", minCliVersion: "", releaseManifestUrl: "",
       llmApiKey: "", llmModel: "", llmBaseUrl: "", minioEndpoint: "127.0.0.1:19999", minioAccessKey: "none", minioSecretKey: "none",
       minioBucket: "test", adminDefaultPassword: "admin",
       appDataArchiveMaxBytes: 2 * 1024 * 1024 * 1024, appDataExpandedMaxBytes: 4 * 1024 * 1024 * 1024, appDataArchiveMaxFiles: 10_000,
