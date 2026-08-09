@@ -13,6 +13,28 @@ export interface UploadRequest {
   files: UploadFile[];
 }
 
+/** 可移植应用包安装结果 */
+export interface AppInstallResponse {
+  name: string;
+  ownerId: string;
+  localVersion: number;
+  appVersion: string;
+  digest: string;
+  created: boolean;
+  upgraded: boolean;
+  idempotent: boolean;
+}
+
+/** Server 保留的应用部署版本 */
+export interface AppVersionInfo {
+  version: number;
+  appVersion: string;
+  digest: string;
+  createdAt: string;
+  fileCount: number;
+  totalSize: number;
+}
+
 /** 页面信息响应 */
 export interface PageInfoResponse {
   name: string;
@@ -20,6 +42,7 @@ export interface PageInfoResponse {
   createdAt: string;
   updatedAt: string;
   currentVersion: number;
+  currentAppVersion?: string;
   versionCount: number;
   schemas: DataSchema[];
 }
@@ -36,6 +59,7 @@ export interface SchemaCreateRequest {
 export interface PageListItem {
   name: string;
   currentVersion: number;
+  currentAppVersion?: string;
   createdAt: string;
   updatedAt: string;
 }

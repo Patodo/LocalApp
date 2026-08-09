@@ -87,6 +87,7 @@ export async function pagesRoutes(app: FastifyInstance) {
         pages.push({
           name: meta.name,
           currentVersion: meta.currentVersion,
+          currentAppVersion: meta.currentAppVersion,
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
         });
@@ -114,6 +115,7 @@ export async function pagesRoutes(app: FastifyInstance) {
         url: shellPagePath(meta.userId, meta.name),
         rawUrl: rawAppResourcePath(meta.userId, meta.name),
         currentVersion: meta.currentVersion,
+        currentAppVersion: meta.currentAppVersion,
         versionCount: meta.versions.length,
         versions: meta.versions,
         createdAt: meta.createdAt,

@@ -41,6 +41,8 @@ import { assertAppDataWritable } from "./lib/app-data-maintenance.js";
 import { SetupTokenStore } from "./lib/setup-token-store.js";
 import { createServerConfigStore, type ServerConfigStore } from "./lib/server-config-store.js";
 import { systemRoutes, type RestartController } from "./routes/system.js";
+import { appsRoutes } from "./routes/apps.js";
+import { MAX_APP_PACKAGE_BYTES } from "./lib/app-package.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -79,7 +81,7 @@ async function registerServerPluginsAndRoutes(
   }
 
   await app.register(cookie);
-  await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
+  await app.register(multipart, { limits: { fileSize: MAX_APP_PACKAGE_BYTES } });
   await app.register(sessionPlugin);
   app.register(verificationRoutes);
   await setupRoutes(app, options.setupTokens);
@@ -115,6 +117,7 @@ async function registerServerPluginsAndRoutes(
     authScope.register(keysRoutes);
     authScope.register(configRoutes);
     authScope.register(uploadRoutes);
+    authScope.register(appsRoutes);
     authScope.register(dbRoutes);
     authScope.register(pagesRoutes);
     authScope.register(schemasRoutes);

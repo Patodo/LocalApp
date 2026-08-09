@@ -23,6 +23,7 @@ export interface Page {
   createdAt: string;
   updatedAt: string;
   currentVersion: number;
+  currentAppVersion?: string;
   metadata: Record<string, unknown>;
   pageAccess?: PageAccess;
 }
@@ -30,6 +31,8 @@ export interface Page {
 /** 页面版本 */
 export interface Version {
   version: number;
+  appVersion: string;
+  digest: string;
   createdAt: string;
   fileCount: number;
   totalSize: number;

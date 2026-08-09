@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import fp from "fastify-plugin";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { BusinessMetadata, DataSchema, PageAccess, ManifestDb, RouteAccess, ShellConfig, NotifyConfig, CollaborationConfig, AppLifecycle } from "../types/models.js";
@@ -19,17 +20,12 @@ export interface PageMeta {
   userId: string;
   description: string;
   currentVersion: number;
+  currentAppVersion?: string;
+  previousVersion?: number;
   createdAt: string;
   updatedAt: string;
-  versions: Array<{
-    version: number;
-    createdAt: string;
-    fileCount: number;
-    totalSize: number;
-    uploaderId?: string;
-    uploaderDisplayName?: string;
-    issues?: { templates: IssueTemplateConfig[] };
-  }>;
+  versions: PageVersionMeta[];
+  packageIdentities?: Record<string, { digest: string; version: number }>;
   metadata: Record<string, unknown>;
   pageAccess?: PageAccess;
   schemas?: DataSchema[];
@@ -45,6 +41,19 @@ export interface PageMeta {
   issues?: { templates: IssueTemplateConfig[] };
   lifecycle?: AppLifecycle;
   status?: "needs-migration-repair";
+}
+
+export interface PageVersionMeta {
+  version: number;
+  appVersion?: string;
+  digest?: string;
+  createdAt: string;
+  fileCount: number;
+  totalSize: number;
+  uploaderId?: string;
+  uploaderDisplayName?: string;
+  issues?: { templates: IssueTemplateConfig[] };
+  manifest?: Record<string, unknown>;
 }
 
 async function storage(app: FastifyInstance) {
@@ -72,7 +81,14 @@ export function readPageMeta(dataDir: string, userId: string, name: string): Pag
 
 export function writePageMeta(dataDir: string, userId: string, name: string, meta: PageMeta): void {
   const metaPath = getPageMetaPath(dataDir, userId, name);
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+  fs.mkdirSync(path.dirname(metaPath), { recursive: true });
+  const temporary = `${metaPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(meta, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+    fs.renameSync(temporary, metaPath);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 export function resolveVersionPublisher(
