@@ -215,6 +215,37 @@ describe("atomic application package installation", () => {
     }
   });
 
+  it("keeps a durable deployment committed when journal cleanup fails and recovery reruns", async () => {
+    const v1 = await fixturePackage({ name: "journal-cleanup-app", version: "1.0.0", html: "version-one", manifest: { description: "one" } });
+    const v2 = await fixturePackage({ name: "journal-cleanup-app", version: "2.0.0", html: "version-two", manifest: { description: "two" } });
+    expect((await installFixturePackage(v1, ownerCookie)).status).toBe(201);
+
+    const pageDir = path.join(dataDir, "packageowner", "journal-cleanup-app");
+    const transactionPath = path.join(pageDir, ".app-state-transaction.json");
+    const originalRemove = fs.rmSync;
+    const remove = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (path.resolve(String(target)) === transactionPath) {
+        throw new Error("injected journal cleanup failure");
+      }
+      return originalRemove(target, options);
+    });
+    let response: Response;
+    try {
+      response = await installFixturePackage(v2, ownerCookie);
+      expect(response.status).toBe(201);
+    } finally {
+      remove.mockRestore();
+    }
+
+    const versions = await fetch(`${baseUrl}/api/me/apps/journal-cleanup-app/versions`, { headers: { Cookie: ownerCookie } });
+    expect(versions.status).toBe(200);
+    const meta = readMeta("packageowner", "journal-cleanup-app");
+    expect(meta).toMatchObject({ currentVersion: 2, currentAppVersion: "2.0.0" });
+    expect(fs.existsSync(path.join(pageDir, "versions", "v2"))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(pageDir, "manifest.json"), "utf8"))).toMatchObject({ description: "two" });
+    expect(fs.existsSync(transactionPath)).toBe(false);
+  });
+
   it("retains the previous active deployment when pruning version history so rollback remains available", async () => {
     for (let version = 1; version <= 10; version += 1) {
       const packageBytes = await fixturePackage({

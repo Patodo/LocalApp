@@ -178,12 +178,17 @@ export function commitSourceManifestAndMeta(
   try {
     atomicWriteJson(sourcePath, sourceManifest);
     atomicWriteJson(metaPath, meta as Record<string, unknown>);
-    fs.rmSync(transactionPath, { force: true });
   } catch (error) {
     if (previousSource) atomicWriteJson(sourcePath, previousSource);
     else fs.rmSync(sourcePath, { force: true });
     fs.rmSync(transactionPath, { force: true });
     throw error;
+  }
+  try {
+    fs.rmSync(transactionPath, { force: true });
+  } catch {
+    // The manifest and metadata are the durable commit point. Keep the
+    // journal so a later metadata read can idempotently complete cleanup.
   }
 }
 
