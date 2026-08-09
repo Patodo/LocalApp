@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { createServerConfigStore } from "./lib/server-config-store.js";
 import type { WorkerReadyMessage } from "./worker.js";
+import { closeMetaDb, initMetaDb, listUsers } from "./lib/meta-sqlite.js";
 
 interface StartOptions {
   dataDir?: string;
@@ -33,28 +34,59 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const env = { ...process.env, ...(options.dataDir ? { DATA_DIR: options.dataDir } : {}) };
   const configStore = createServerConfigStore({ env });
   const config = await configStore.read();
+  const setupRequired = await requiresSetup(config.dataDir);
   if (options.host !== undefined || options.port !== undefined) {
     await configStore.write(await configStore.validate({
       ...config,
-      listenHost: options.host ?? config.listenHost,
+      listenHost: setupRequired ? "127.0.0.1" : (options.host ?? config.listenHost),
       listenPort: options.port ?? config.listenPort,
+      publicUrl: setupRequired ? "" : config.publicUrl,
+      allowInsecureLan: setupRequired ? false : config.allowInsecureLan,
     }));
   }
 
   let stopping = false;
   let child: ChildProcess;
-  const spawnWorker = () => spawn(process.execPath, [path.join(__dirname, "worker.js")], {
-    env,
+  const spawnWorker = (usePendingConfig: boolean) => spawn(process.execPath, [path.join(__dirname, "worker.js")], {
+    env: {
+      ...env,
+      ...(usePendingConfig ? { LOCALAPP_USE_PENDING_CONFIG: "1" } : {}),
+    },
     stdio: ["inherit", "inherit", "inherit", "ipc"],
   });
-  const attachWorker = () => {
-    child = spawnWorker();
-    child.on("message", (message: WorkerReadyMessage) => {
-      if (message.type === "ready") process.stdout.write(`${JSON.stringify(message)}\n`);
+  const attachWorker = async (pendingConfig?: boolean) => {
+    const usePendingConfig = pendingConfig ?? await configStore.hasPendingNetworkChange();
+    child = spawnWorker(usePendingConfig);
+    let ready = false;
+    child.on("message", async (message: WorkerReadyMessage) => {
+      if (message.type !== "ready") return;
+      try {
+        if (usePendingConfig) await configStore.finalizePendingNetworkChange();
+        ready = true;
+        process.stdout.write(`${JSON.stringify(message)}\n`);
+      } catch (error) {
+        console.error(error);
+        child.kill("SIGTERM");
+      }
     });
-    child.once("exit", (code) => {
-      if (code === 75 && !stopping) {
-        attachWorker();
+    child.once("exit", async (code) => {
+      if (stopping) {
+        process.exit(code ?? 1);
+        return;
+      }
+      if (usePendingConfig && !ready) {
+        try {
+          await configStore.rollbackPendingNetworkChange();
+          process.stderr.write("candidate worker exited before readiness; rolling back\n");
+          await attachWorker(false);
+        } catch (error) {
+          console.error(error);
+          process.exit(1);
+        }
+        return;
+      }
+      if (code === 75) {
+        await attachWorker();
         return;
       }
       process.exit(code ?? 1);
@@ -66,7 +98,16 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   };
   process.once("SIGINT", () => stop("SIGINT"));
   process.once("SIGTERM", () => stop("SIGTERM"));
-  attachWorker();
+  await attachWorker();
+}
+
+async function requiresSetup(dataDir: string): Promise<boolean> {
+  await initMetaDb(dataDir);
+  try {
+    return listUsers(1, 1).total === 0;
+  } finally {
+    closeMetaDb();
+  }
 }
 
 if (require.main === module) {

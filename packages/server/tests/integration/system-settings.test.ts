@@ -17,6 +17,13 @@ describe("system settings", () => {
   it("persists a validated network change and requests supervised restart", async () => {
     closeMetaDb();
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-system-settings-"));
+    fs.writeFileSync(path.join(dataDir, "server.json"), JSON.stringify({
+      listenHost: "127.0.0.1",
+      listenPort: 3000,
+      publicUrl: "",
+      workspaceDir: path.join(dataDir, "workspaces"),
+      allowInsecureLan: false,
+    }));
     const requestRestart = vi.fn();
     const setupTokens = new SetupTokenStore();
     const app = await buildServer({
@@ -56,9 +63,13 @@ describe("system settings", () => {
     expect(await response.json()).toMatchObject({ success: true, data: { restarting: true } });
     expect(requestRestart).toHaveBeenCalledWith(75);
     expect(JSON.parse(fs.readFileSync(path.join(dataDir, "server.json"), "utf8"))).toMatchObject({
-      listenHost: "0.0.0.0",
-      listenPort: 43127,
-      allowInsecureLan: true,
+      listenHost: "127.0.0.1",
+      listenPort: 3000,
+      allowInsecureLan: false,
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(dataDir, "server.pending.json"), "utf8"))).toMatchObject({
+      previous: { listenHost: "127.0.0.1", listenPort: 3000, allowInsecureLan: false },
+      candidate: { listenHost: "0.0.0.0", listenPort: 43127, allowInsecureLan: true },
     });
   });
 });

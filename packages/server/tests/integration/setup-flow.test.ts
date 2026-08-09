@@ -53,6 +53,22 @@ describe("first-run setup", () => {
     expect(replay.status).toBe(410);
   });
 
+  it("rejects setup initialization requests that do not originate from loopback", async () => {
+    const server = await createTestServer({ cleanSetup: true });
+    stop = server.stop;
+    const issued = server.setupTokens.issue();
+
+    const rejected = await server.app.inject({
+      method: "POST",
+      url: "/api/setup/initialize",
+      remoteAddress: "192.0.2.10",
+      payload: { token: issued.token, username: "owner", password: "correct-horse-battery" },
+    });
+
+    expect(rejected.statusCode).toBe(403);
+    expect((await server.app.inject({ method: "GET", url: "/api/setup/status" })).json().data).toEqual({ required: true });
+  });
+
   it("does not migrate a legacy-looking app before first-run setup", async () => {
     const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-clean-setup-"));
     const pageDir = path.join(dataDir, "legacy-owner", "legacy-app");

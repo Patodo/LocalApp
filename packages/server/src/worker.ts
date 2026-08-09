@@ -6,6 +6,7 @@ export interface WorkerReadyMessage {
   type: "ready";
   url: string;
   setupUrl?: string;
+  workerPid: number;
 }
 
 export async function runWorker(): Promise<void> {
@@ -19,12 +20,14 @@ export async function runWorker(): Promise<void> {
       },
     },
   });
-  await app.listen({ host: app.config.listenHost, port: app.config.listenPort });
+  const setupRequired = listUsers(1, 1).total === 0;
+  const listenHost = setupRequired ? "127.0.0.1" : app.config.listenHost;
+  await app.listen({ host: listenHost, port: app.config.listenPort });
   const address = app.addresses()[0];
   if (!address || typeof address === "string") throw new Error("Expected TCP listener");
-  const url = app.config.publicUrl || `http://${app.config.listenHost}:${address.port}`;
-  const message: WorkerReadyMessage = { type: "ready", url };
-  if (listUsers(1, 1).total === 0) {
+  const url = setupRequired ? `http://127.0.0.1:${address.port}` : (app.config.publicUrl || `http://${listenHost}:${address.port}`);
+  const message: WorkerReadyMessage = { type: "ready", url, workerPid: process.pid };
+  if (setupRequired) {
     const issued = setupTokens.issue();
     message.setupUrl = `${url}/setup?token=${encodeURIComponent(issued.token)}`;
   }

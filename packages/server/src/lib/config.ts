@@ -71,6 +71,11 @@ export type PersistedServerSettings = Pick<ServerConfig,
   "listenHost" | "listenPort" | "publicUrl" | "workspaceDir" | "allowInsecureLan"
 >;
 
+export interface PendingNetworkSettings {
+  previous: PersistedServerSettings | null;
+  candidate: PersistedServerSettings;
+}
+
 const warnedDeprecatedConfigDirs = new Set<string>();
 
 async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
@@ -128,23 +133,54 @@ async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
   };
 }
 
-function readPersistedServerSettings(dataDir: string): Partial<PersistedServerSettings> {
-  const settingsPath = path.join(dataDir, "server.json");
-  if (!fs.existsSync(settingsPath)) return {};
+function readJsonFile(filePath: string): Record<string, unknown> | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
-    const values: Partial<PersistedServerSettings> = {};
-    if (typeof parsed.listenHost === "string") values.listenHost = parsed.listenHost;
-    if (typeof parsed.listenPort === "number") values.listenPort = parsed.listenPort;
-    if (typeof parsed.publicUrl === "string") values.publicUrl = parsed.publicUrl;
-    if (typeof parsed.workspaceDir === "string") values.workspaceDir = parsed.workspaceDir;
-    if (typeof parsed.allowInsecureLan === "boolean") values.allowInsecureLan = parsed.allowInsecureLan;
-    return values;
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to parse ${settingsPath}: ${message}`);
+    throw new Error(`Failed to parse ${filePath}: ${message}`);
   }
+}
+
+function parsePersistedServerSettings(parsed: Record<string, unknown> | undefined): Partial<PersistedServerSettings> {
+  if (!parsed) return {};
+  const values: Partial<PersistedServerSettings> = {};
+  if (typeof parsed.listenHost === "string") values.listenHost = parsed.listenHost;
+  if (typeof parsed.listenPort === "number") values.listenPort = parsed.listenPort;
+  if (typeof parsed.publicUrl === "string") values.publicUrl = parsed.publicUrl;
+  if (typeof parsed.workspaceDir === "string") values.workspaceDir = parsed.workspaceDir;
+  if (typeof parsed.allowInsecureLan === "boolean") values.allowInsecureLan = parsed.allowInsecureLan;
+  return values;
+}
+
+export function readPersistedServerSettings(dataDir: string): Partial<PersistedServerSettings> {
+  return parsePersistedServerSettings(readJsonFile(path.join(dataDir, "server.json")));
+}
+
+export function readPendingNetworkSettings(dataDir: string): PendingNetworkSettings | undefined {
+  const parsed = readJsonFile(path.join(dataDir, "server.pending.json"));
+  if (!parsed) return undefined;
+  const candidate = parsePersistedServerSettings(parsed.candidate as Record<string, unknown> | undefined);
+  if (Object.keys(candidate).length !== 5) throw new Error("Invalid pending network configuration");
+  const previous = parsed.previous === null
+    ? null
+    : parsePersistedServerSettings(parsed.previous as Record<string, unknown> | undefined);
+  if (previous !== null && Object.keys(previous).length !== 5) throw new Error("Invalid previous network configuration");
+  return {
+    previous: previous as PersistedServerSettings | null,
+    candidate: candidate as PersistedServerSettings,
+  };
+}
+
+function readSettingsForProcess(dataDir: string, usePending: boolean): Partial<PersistedServerSettings> {
+  if (usePending) {
+    const pending = readPendingNetworkSettings(dataDir);
+    if (!pending) throw new Error("Pending network configuration is missing");
+    return pending.candidate;
+  }
+  return readPersistedServerSettings(dataDir);
 }
 
 function pickEnv(env: NodeJS.ProcessEnv, key: string, tomlValue: string | undefined, defaultVal: string): string {
@@ -175,19 +211,31 @@ function resolveDataPath(dataDir: string, candidate: string): string {
 }
 
 function readOrCreateJwtSecret(jwtKeyFile: string): string {
-  if (fs.existsSync(jwtKeyFile)) return fs.readFileSync(jwtKeyFile, "utf8").trim();
   fs.mkdirSync(path.dirname(jwtKeyFile), { recursive: true, mode: 0o700 });
-  const secret = randomBytes(32).toString("base64url");
-  fs.writeFileSync(jwtKeyFile, secret, { mode: 0o600 });
-  fs.chmodSync(jwtKeyFile, 0o600);
-  return secret;
+  try {
+    const secret = randomBytes(32).toString("base64url");
+    const descriptor = fs.openSync(jwtKeyFile, "wx", 0o600);
+    try {
+      fs.writeFileSync(descriptor, secret);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    if (process.platform !== "win32") fs.chmodSync(jwtKeyFile, 0o600);
+    return secret;
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const secret = fs.readFileSync(jwtKeyFile, "utf8").trim();
+    if (process.platform !== "win32") fs.chmodSync(jwtKeyFile, 0o600);
+    return secret;
+  }
 }
 
 export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
   const dataDir = path.resolve(env.DATA_DIR || DEFAULTS.dataDir);
   const tomlResult = await readTomlConfig(dataDir);
   const toml = tomlResult.values;
-  const persisted = readPersistedServerSettings(dataDir);
+  const persisted = readSettingsForProcess(dataDir, env.LOCALAPP_USE_PENDING_CONFIG === "1");
   const hasDeprecatedEnvironmentConfig = [
     "ALLOW_REGISTER",
     "REGISTRATION_KEY",

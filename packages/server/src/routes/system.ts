@@ -47,7 +47,7 @@ export async function systemRoutes(
           listenPort: req.body?.listenPort ?? adminScope.config.listenPort,
           allowInsecureLan: req.body?.allowInsecureLan ?? adminScope.config.allowInsecureLan,
         });
-        await options.configStore.write(candidate);
+        await options.configStore.stageNetworkChange(candidate);
         reply.raw.once("finish", () => options.restartController.requestRestart(75));
         return reply.status(202).send({ success: true, data: { restarting: true } });
       },

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { createInitialAdmin, listUsers } from "../lib/meta-sqlite.js";
+import { isLoopbackAddress } from "../lib/loopback.js";
 import type { SetupTokenStore } from "../lib/setup-token-store.js";
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_-]{2,32}$/;
@@ -15,6 +16,9 @@ export async function setupRoutes(app: FastifyInstance, setupTokens: SetupTokenS
   app.post<{ Body: { token?: string; username?: string; password?: string } }>(
     "/api/setup/initialize",
     async (req, reply) => {
+      if (!isLoopbackAddress(req.ip)) {
+        return reply.status(403).send({ success: false, error: "Setup is only available from loopback" });
+      }
       const { token, username, password } = req.body ?? {};
       if (!token || !setupTokens.consume(token)) {
         return reply.status(410).send({ success: false, error: "Setup token has expired or was already used" });

@@ -1,12 +1,9 @@
-import { buildServer } from "./server.js";
+export { buildServer } from "./server.js";
+import { runCli } from "./cli.js";
 
-async function main() {
-  const app = await buildServer();
-  await app.listen({ port: app.config.listenPort, host: app.config.listenHost });
-  console.log(`LocalApp server listening on ${app.config.listenHost}:${app.config.listenPort}`);
+if (require.main === module) {
+  runCli(["start", ...process.argv.slice(2)]).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
