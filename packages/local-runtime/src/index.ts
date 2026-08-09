@@ -159,7 +159,11 @@ export async function createLocalRuntime(
     // 提前拦截 _next 静态资源(绕过 Fastify 路由器对方括号/圆括号路径段的特殊处理)。
     // PlatformShell 的 Next.js chunks 路径含 [userId]/[name]/(dashboard) 等特殊字符。
     if (resourcesDir && request.url.startsWith("/_next/")) {
-      const relPath = decodeURIComponent(request.url.replace(/^\/_next\//, "").split("?")[0]);
+      const pathname = decodeRequestPathname(request);
+      if (pathname === null) {
+        return reply.status(400).send({ success: false, error: "Invalid asset path" });
+      }
+      const relPath = pathname.replace(/^\/_next\//, "");
       const filePath = path.join(resourcesDir, "_next", relPath);
       return serveStaticFile(filePath, reply);
     }
@@ -343,6 +347,28 @@ export async function createLocalRuntime(
     });
   }
 
+  server.all("/serve/*", async (request, reply) => {
+    const state = shellApiGuard(request, reply);
+    if (!state) return;
+    if (!(await ensureInitialized(state, reply))) return;
+
+    const pathname = decodeRequestPathname(request);
+    if (pathname === null) {
+      return reply.status(400).send({ success: false, error: "Invalid asset path" });
+    }
+    const rawAppPath = parseRawAppResourcePath(pathname, state.registration.id);
+    if (rawAppPath === null) {
+      return reply.status(404).send({ success: false, error: "File not found" });
+    }
+    if (rawAppPath.startsWith("api/")) {
+      return handleAppApi(state, request, reply, `/${rawAppPath}`);
+    }
+    if (request.method !== "GET") {
+      return reply.status(404).send({ success: false, error: "File not found" });
+    }
+    return serveRawAppResource(state, rawAppPath, reply);
+  });
+
   server.get("/*", async (request, reply) => {
     const appId = parseAppHost(request.headers.host, apps);
     if (!appId) return reply.status(421).send({ success: false, error: "Invalid host" });
@@ -454,8 +480,9 @@ async function handleAppApi(
   state: AppState,
   request: FastifyRequest,
   reply: FastifyReply,
+  pathnameOverride?: string,
 ) {
-  const pathname = new URL(request.url, "http://localhost").pathname;
+  const pathname = pathnameOverride ?? new URL(request.url, "http://localhost").pathname;
   const route = matchAppApiRoute(request.method, pathname);
   if (route.kind === "time") {
     return { success: true, data: { now: new Date().toISOString() } };
@@ -591,7 +618,10 @@ function serveStaticOrShell(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
-  const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
+  const pathname = decodeRequestPathname(request);
+  if (pathname === null) {
+    return reply.status(400).send({ success: false, error: "Invalid asset path" });
+  }
   if (pathname === "/.localapp/local-shell.js") {
     return reply
       .type("text/javascript; charset=utf-8")
@@ -613,13 +643,69 @@ function serveStaticOrShell(
   if (!filePath.startsWith(`${distRoot}${path.sep}`)) {
     return reply.status(400).send({ success: false, error: "Invalid asset path" });
   }
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-    if (path.extname(relative) === "") {
-      return serveShell(state, reply);
+  const isFile = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  if (isFile) {
+    if (!isRealPathWithinRoot(distRoot, filePath)) {
+      return reply.status(400).send({ success: false, error: "Invalid asset path" });
     }
-    return reply.status(404).send({ success: false, error: "Asset not found" });
+    return reply.type(contentType(filePath)).send(fs.createReadStream(filePath));
   }
-  return reply.type(contentType(filePath)).send(fs.createReadStream(filePath));
+  if (path.extname(relative) === "") {
+    return serveShell(state, reply);
+  }
+  return reply.status(404).send({ success: false, error: "Asset not found" });
+}
+
+function decodeRequestPathname(request: FastifyRequest): string | null {
+  try {
+    return decodeURIComponent(new URL(request.url, "http://localhost").pathname);
+  } catch {
+    return null;
+  }
+}
+
+function parseRawAppResourcePath(pathname: string, appId: string): string | null {
+  const prefix = `/serve/local-user/${appId}`;
+  if (pathname === prefix || pathname === `${prefix}/`) return "";
+  if (!pathname.startsWith(`${prefix}/`)) return null;
+  return pathname.slice(prefix.length + 1);
+}
+
+function serveRawAppResource(
+  state: AppState,
+  relativePath: string,
+  reply: FastifyReply,
+) {
+  const distRoot = path.resolve(state.registration.versionRoot, "dist");
+  const requestedPath = relativePath || "index.html";
+  const filePath = path.resolve(distRoot, requestedPath);
+  if (!filePath.startsWith(`${distRoot}${path.sep}`)) {
+    return reply.status(400).send({ success: false, error: "Invalid asset path" });
+  }
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    if (!isRealPathWithinRoot(distRoot, filePath)) {
+      return reply.status(400).send({ success: false, error: "Invalid asset path" });
+    }
+    return reply.type(contentType(filePath)).send(fs.createReadStream(filePath));
+  }
+  const indexPath = path.join(distRoot, "index.html");
+  if (fs.existsSync(indexPath) && path.extname(relativePath) === "") {
+    if (!isRealPathWithinRoot(distRoot, indexPath)) {
+      return reply.status(400).send({ success: false, error: "Invalid asset path" });
+    }
+    return reply.type(contentType(indexPath)).send(fs.createReadStream(indexPath));
+  }
+  return reply.status(404).send({ success: false, error: "Asset not found" });
+}
+
+function isRealPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  try {
+    const realRoot = fs.realpathSync(rootPath);
+    const realCandidate = fs.realpathSync(candidatePath);
+    return realCandidate === realRoot || realCandidate.startsWith(`${realRoot}${path.sep}`);
+  } catch {
+    return false;
+  }
 }
 
 function serveShell(state: AppState, reply: FastifyReply) {
@@ -653,7 +739,7 @@ function serveShell(state: AppState, reply: FastifyReply) {
  * 把 PlatformShell placeholder.html 改写为本地可用形态。
  *
  * 1. RSC payload 字符串替换:placeholder → local-user / appId(复用 serve.ts 逻辑)
- * 2. 注入 native shell template(app-resource-base="/",本地同源)
+ * 2. 注入 native shell template(与远程 /serve 资源基址一致)
  */
 function injectPlatformShell(html: string, appId: string): string {
   const userId = "local-user";
@@ -661,8 +747,8 @@ function injectPlatformShell(html: string, appId: string): string {
     .replace(/\\"platform-shell\\",\\"placeholder\\",\\"placeholder\\"/g, `\\"platform-shell\\",\\"${userId}\\",\\"${appId}\\"`)
     .replace(/\[\\"userId\\",\\"placeholder\\"/g, `[\\"userId\\",\\"${userId}\\"`)
     .replace(/\[\\"name\\",\\"placeholder\\"/g, `[\\"name\\",\\"${appId}\\"`);
-  // 注入 native shell 标记(本地 app 资源同源,base = "/")
-  const marker = `<template data-localapp-native-shell="true" data-localapp-app-root="root" data-localapp-app-resource-base="/"></template>`;
+  const resourceBase = `/serve/${userId}/${appId}/`;
+  const marker = `<template data-localapp-native-shell="true" data-localapp-app-root="root" data-localapp-app-resource-base="${resourceBase}"></template>`;
   if (!result.includes("data-localapp-native-shell")) {
     result = result.replace("</body>", `${marker}</body>`);
   }

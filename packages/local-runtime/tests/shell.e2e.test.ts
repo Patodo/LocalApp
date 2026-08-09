@@ -85,6 +85,142 @@ describe("Local Runtime formal entry E2E", () => {
     });
   });
 
+  it("serves the uploaded app entry and assets through the Platform Shell resource base", async () => {
+    const root = createRoot();
+    const app = createFixtureApp(root, "resource-app");
+    const runtime = await startRuntime([app]);
+    const cookie = await createSession(runtime, app.id);
+
+    const entry = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/`,
+      headers: {
+        host: `${app.id}.localhost`,
+        cookie,
+      },
+    });
+
+    expect(entry.statusCode, entry.body).toBe(200);
+    expect(entry.headers["content-type"]).toContain("text/html");
+    expect(entry.body).toContain('<script type="module" src="/assets/app.js"></script>');
+    expect(entry.body).not.toContain('data-localapp-local-shell="true"');
+
+    const asset = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/assets/app.js`,
+      headers: {
+        host: `${app.id}.localhost`,
+        cookie,
+      },
+    });
+
+    expect(asset.statusCode, asset.body).toBe(200);
+    expect(asset.headers["content-type"]).toContain("text/javascript");
+    expect(asset.body).toContain("resource-app");
+  });
+
+  it("does not serve a symlink that escapes the installed dist directory", async () => {
+    if (process.platform === "win32") return;
+
+    const root = createRoot();
+    const app = createFixtureApp(root, "resource-symlink-app");
+    const runtime = await startRuntime([app]);
+    const cookie = await createSession(runtime, app.id);
+    const outsidePath = path.join(root, "outside.txt");
+    const symlinkPath = path.join(app.versionRoot, "dist", "assets", "outside.txt");
+    fs.writeFileSync(outsidePath, "outside app dist");
+    fs.symlinkSync(outsidePath, symlinkPath);
+
+    const response = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/assets/outside.txt`,
+      headers: {
+        host: `${app.id}.localhost`,
+        cookie,
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(400);
+    expect(response.body).not.toContain("outside app dist");
+  });
+
+  it("rejects malformed encoded raw resource paths", async () => {
+    const root = createRoot();
+    const app = createFixtureApp(root, "resource-malformed-path-app");
+    const runtime = await startRuntime([app]);
+    const cookie = await createSession(runtime, app.id);
+
+    const response = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/assets/%E0%A4%A`,
+      headers: {
+        host: `${app.id}.localhost`,
+        cookie,
+      },
+    });
+
+    expect(response.statusCode, response.body).toBe(400);
+  });
+
+  it("routes SDK API requests through the Platform Shell resource base", async () => {
+    const root = createRoot();
+    const app = createFixtureApp(root, "resource-api-app");
+    const runtime = await startRuntime([app]);
+    const cookie = await createSession(runtime, app.id);
+
+    const unauthenticated = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/assets/app.js`,
+      headers: { host: `${app.id}.localhost` },
+    });
+    expect(unauthenticated.statusCode, unauthenticated.body).toBe(401);
+
+    const identity = await runtime.inject({
+      method: "GET",
+      url: `/serve/local-user/${app.id}/api/me`,
+      headers: {
+        host: `${app.id}.localhost`,
+        cookie,
+      },
+    });
+
+    expect(identity.statusCode, identity.body).toBe(200);
+    expect(identity.json()).toEqual({
+      success: true,
+      data: {
+        id: "local-user",
+        name: "Local User",
+        role: "owner",
+      },
+    });
+
+    const query = await runtime.inject({
+      method: "POST",
+      url: `/serve/local-user/${app.id}/api/queries/items.list`,
+      headers: {
+        host: `${app.id}.localhost`,
+        origin: `http://${app.id}.localhost`,
+        cookie,
+      },
+      payload: { params: {} },
+    });
+
+    expect(query.statusCode, query.body).toBe(200);
+    expect(query.json().data.rows).toEqual([]);
+
+    const wrongOrigin = await runtime.inject({
+      method: "POST",
+      url: `/serve/local-user/${app.id}/api/queries/items.list`,
+      headers: {
+        host: `${app.id}.localhost`,
+        origin: "http://other-app.localhost",
+        cookie,
+      },
+      payload: { params: {} },
+    });
+    expect(wrongOrigin.statusCode, wrongOrigin.body).toBe(403);
+  });
+
   it("keeps fixed shell resources behind the current application session", async () => {
     const root = createRoot();
     const alpha = createFixtureApp(root, "alpha-app");
