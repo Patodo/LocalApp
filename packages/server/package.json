@@ -13,6 +13,7 @@
     "build": "tsc",
     "start": "node dist/cli.js start",
     "test": "vitest run",
+    "test:runner-protocol": "node --test tests/runner-protocol.node-test.mjs",
     "clean": "rimraf dist"
   },
   "dependencies": {

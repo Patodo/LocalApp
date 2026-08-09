@@ -43,6 +43,12 @@ import { createServerConfigStore, type ServerConfigStore } from "./lib/server-co
 import { systemRoutes, type RestartController } from "./routes/system.js";
 import { appsRoutes } from "./routes/apps.js";
 import { MAX_APP_PACKAGE_BYTES } from "./lib/app-package.js";
+import { WorkspaceStore } from "./lib/workspace-store.js";
+import { TaskStore } from "./lib/task-store.js";
+import { TaskRunner } from "./lib/task-runner.js";
+import { AgentRunner } from "./lib/agent-runner.js";
+import { workspacesRoutes } from "./routes/workspaces.js";
+import { tasksRoutes } from "./routes/tasks.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -83,6 +89,26 @@ async function registerServerPluginsAndRoutes(
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: MAX_APP_PACKAGE_BYTES } });
   await app.register(sessionPlugin);
+  const workspaceStore = new WorkspaceStore({
+    workspaceDir: app.config.workspaceDir,
+    archiveLimits: {
+      maxCompressedBytes: app.config.appDataArchiveMaxBytes,
+      maxExpandedBytes: app.config.appDataExpandedMaxBytes,
+      maxFileEntries: app.config.appDataArchiveMaxFiles,
+    },
+  });
+  const taskStore = new TaskStore();
+  taskStore.reconcileRunning();
+  const taskRunner = new TaskRunner({
+    workspaceStore,
+    taskStore,
+    taskDir: path.join(app.config.dataDir, "tasks"),
+  });
+  const agentRunner = new AgentRunner({ taskRunner });
+  workspaceStore.setTaskRunner(taskRunner);
+  app.addHook("onClose", async () => {
+    await Promise.all([taskRunner.shutdown(), workspaceStore.shutdown()]);
+  });
   app.register(verificationRoutes);
   await setupRoutes(app, options.setupTokens);
   await systemRoutes(app, { configStore: options.configStore, restartController: options.restartController });
@@ -121,6 +147,8 @@ async function registerServerPluginsAndRoutes(
     authScope.register(dbRoutes);
     authScope.register(pagesRoutes);
     authScope.register(schemasRoutes);
+    authScope.register(async (workspaceScope) => workspacesRoutes(workspaceScope, workspaceStore));
+    authScope.register(async (taskScope) => tasksRoutes(taskScope, { taskStore, taskRunner, agentRunner }));
   });
   app.register(adminRoutes);
 

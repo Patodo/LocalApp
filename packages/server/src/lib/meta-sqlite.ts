@@ -333,6 +333,41 @@ export async function initMetaDb(dataDir: string): Promise<void> {
   db.run(`CREATE INDEX IF NOT EXISTS idx_desktop_actions_expiry ON desktop_actions(status, expires_at)`);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_workspaces_owner ON workspaces(owner_id, created_at DESC)`);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      executable TEXT NOT NULL,
+      args_json TEXT NOT NULL,
+      timeout_ms INTEGER NOT NULL,
+      requested_by TEXT NOT NULL,
+      output_path TEXT NOT NULL,
+      status TEXT NOT NULL,
+      pid INTEGER,
+      exit_code INTEGER,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_requester ON tasks(requested_by, created_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id, created_at DESC)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
