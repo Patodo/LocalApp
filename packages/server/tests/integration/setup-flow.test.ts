@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import crypto from "node:crypto";
 import initSqlJs from "sql.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +7,20 @@ import path from "node:path";
 import { buildServer } from "../../src/server.js";
 import { closeMetaDb, findUserByName } from "../../src/lib/meta-sqlite.js";
 import { createTestServer } from "./helpers.js";
+
+vi.mock("../../src/lib/platform-migrations.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../src/lib/platform-migrations.js")>();
+  const { join } = await import("node:path");
+
+  return {
+    ...original,
+    applyPlatformMigrationsToAllApps: (options: Parameters<typeof original.applyPlatformMigrationsToAllApps>[0]) =>
+      original.applyPlatformMigrationsToAllApps({
+        ...options,
+        migrationsDir: join(options.dataDir, ".test-platform-migrations"),
+      }),
+  };
+});
 
 describe("first-run setup", () => {
   let stop: (() => Promise<void>) | undefined;
@@ -41,8 +56,7 @@ describe("first-run setup", () => {
   it("does not migrate a legacy-looking app before first-run setup", async () => {
     const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-clean-setup-"));
     const pageDir = path.join(dataDir, "legacy-owner", "legacy-app");
-    const migrationsDir = path.resolve(import.meta.dirname, "../../platform-migrations");
-    const migrationPath = path.join(migrationsDir, "999_skip-clean-setup.sql");
+    const migrationsDir = path.join(dataDir, ".test-platform-migrations");
     let app: Awaited<ReturnType<typeof buildServer>> | undefined;
 
     try {
@@ -58,7 +72,10 @@ describe("first-run setup", () => {
       fs.writeFileSync(path.join(pageDir, "app.db"), appDbBefore);
 
       fs.mkdirSync(migrationsDir, { recursive: true });
-      fs.writeFileSync(migrationPath, "ALTER TABLE users ADD COLUMN migrated_by_platform INTEGER;");
+      fs.writeFileSync(
+        path.join(migrationsDir, "001_add_platform_marker.sql"),
+        "ALTER TABLE users ADD COLUMN migrated_by_platform INTEGER;",
+      );
 
       app = await buildServer({
         env: {
@@ -68,13 +85,12 @@ describe("first-run setup", () => {
         },
       });
 
-      expect(fs.readFileSync(path.join(pageDir, "app.db"))).toEqual(appDbBefore);
+      expect(crypto.createHash("sha256").update(fs.readFileSync(path.join(pageDir, "app.db"))).digest("hex"))
+        .toBe(crypto.createHash("sha256").update(appDbBefore).digest("hex"));
       expect(fs.readFileSync(path.join(pageDir, "meta.json"), "utf8")).toBe(metaBefore);
     } finally {
       await app?.close();
       closeMetaDb();
-      fs.rmSync(migrationPath, { force: true });
-      if (fs.existsSync(migrationsDir) && fs.readdirSync(migrationsDir).length === 0) fs.rmdirSync(migrationsDir);
       await fs.promises.rm(dataDir, { recursive: true, force: true });
     }
   });
