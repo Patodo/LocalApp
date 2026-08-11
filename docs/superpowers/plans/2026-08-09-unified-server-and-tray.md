@@ -949,6 +949,7 @@ git commit -m "feat(server): add generic local device actions"
 - Create: `packages/desktop/src-tauri/src/server_process.rs`
 - Create: `packages/desktop/src-tauri/src/activation.rs`
 - Create: `packages/desktop/src-tauri/src/device_control_client.rs`
+- Create: `packages/desktop/src-tauri/tests/device_control.rs`
 - Create: `packages/desktop/src-tauri/tests/tray_server.rs`
 - Create: `packages/desktop/src-tauri/tests/activation.rs`
 - Create: `packages/desktop/scripts/bundle-server.mjs`
@@ -985,7 +986,7 @@ git commit -m "feat(server): add generic local device actions"
 - Produces tray menu IDs `tray-open-home` and `tray-exit` only.
 - Consumes the exact artifact from Task 9 and a pinned Node.js runtime under Tauri resources.
 
-- [ ] **Step 1: Write failing activation, tray-menu, and child-lifecycle tests**
+- [x] **Step 1: Write failing activation, tray-menu, and child-lifecycle tests**
 
 ```rust
 #[test]
@@ -1008,45 +1009,47 @@ async fn server_process_opens_ready_url_and_stops_child() {
 #[test]
 fn activation_ticket_rejects_scripts_credentials_and_extra_fields() {
     assert!(ActivationTicket::parse(
-        "localapp://action/018f7c0e-0f8f-7b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abc_123&protocolVersion=2"
+        "localapp://action/018f7c0e-0f8f-4b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abcdefghijklmnop&protocolVersion=2"
     ).is_ok());
     assert!(ActivationTicket::parse(
-        "localapp://action/018f7c0e-0f8f-7b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abc_123&protocolVersion=2&script=evil"
+        "localapp://action/018f7c0e-0f8f-4b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abcdefghijklmnop&protocolVersion=2&script=evil"
     ).is_err());
 }
 ```
 
-- [ ] **Step 2: Run tray tests and verify RED**
+- [x] **Step 2: Run tray tests and verify RED**
 
 Run: `cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --test tray_server --test activation`
 
 Expected: FAIL because the minimal menu, Scheme parser, loopback client, and unified Server process controller do not exist.
 
-- [ ] **Step 3: Implement the strict native activation bridge**
+- [x] **Step 3: Implement the strict native activation bridge**
 
 Keep `tauri-plugin-deep-link` and `tauri-plugin-single-instance`. Register `localapp://`, accept only the versioned Device Action ticket shape, reject source schemes other than HTTP(S), userinfo, fragments, control characters, unknown/duplicate fields, non-canonical UUIDs, non-base64url nonces, and any executable content or credential field. The bridge never fetches an action and never decides whether an HTTP origin is trusted; Task 10's local Server source policy makes that decision before network access.
 
 Generate a cryptographically random control token for each Server child. Pass it only through `LOCALAPP_DEVICE_CONTROL_TOKEN`; do not persist or log it. Forward a parsed ticket to `POST http://127.0.0.1:<ready-port>/api/device-control/activations` in `x-localapp-device-control`. If activation arrives before readiness, start or await the child once, then forward. Duplicate OS deliveries are safe because the Server consumes the ticket idempotently. If the response contains a confirmation URL, open it only after verifying that its origin equals the child's ready origin and its normalized path is below `/my/device-actions/`.
 
-- [ ] **Step 4: Replace the Desktop application destructively**
+- [x] **Step 4: Replace the Desktop application destructively**
 
 Delete the React application and all Rust business modules listed above. Replace `lib.rs` with Tauri setup, Scheme registration, single-instance URL forwarding, Server child startup, two tray menu handlers, left-click open-home behavior, autostart/updater plugins, startup-failure notification, and graceful child termination on exit. There is no management window and no Rust action runner.
 
-- [ ] **Step 5: Remove the main window and unnecessary dependencies**
+- [x] **Step 5: Remove the main window and unnecessary dependencies**
 
 Set `app.windows` to `[]`, remove `beforeDevCommand`, `frontendDist`, WebView CSP, dialog/business plugins, React/Vite dependencies, database/task/runtime dependencies, and every generated command handler. Retain only the deep-link, single-instance, opener, autostart, updater, tray, notification, HTTP client, process, serialization, URL, and cryptography dependencies required by this bridge.
 
-- [ ] **Step 6: Bundle the exact Server release artifact**
+- [x] **Step 6: Bundle the exact Server release artifact**
 
 `bundle-server.mjs` invokes Task 9's builder and copies its release directory to `src-tauri/resources/server`. `bundle-node-runtime.mjs` resolves the pinned, checksummed Node.js runtime for each Tauri target and places only the required executable and licenses under `src-tauri/resources/node/<target>`. The launcher invokes this bundled executable, never a Node installation from `PATH`. The Node test compares `.localapp-server-artifact.json` digests between both Server locations and verifies the bundled runtime reports the pinned Node major version.
 
-- [ ] **Step 7: Run native bridge build and tests**
+- [x] **Step 7: Run native bridge build and tests**
 
-Run: `pnpm -C packages/desktop test && cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml && pnpm -C packages/desktop tauri build --debug`
+Run: `pnpm -C packages/desktop test && cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml && pnpm -C packages/desktop tauri build --debug --bundles app`
 
 Expected: PASS; build metadata contains no window, resources contain Server rather than Local Runtime, the Scheme reaches only the authenticated loopback endpoint, and no execution/trust implementation remains in Rust.
 
-- [ ] **Step 8: Commit the native bridge**
+The default macOS bundle set also creates a DMG; this host's DMG helper is unavailable, so the acceptance command explicitly builds the verified `.app` bundle.
+
+- [x] **Step 8: Commit the native bridge**
 
 ```bash
 git add -A packages/desktop

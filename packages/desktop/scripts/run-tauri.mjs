@@ -2,9 +2,6 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { buildLocalRuntime } from "./build-local-runtime.mjs";
-import { prepareNodeRuntime } from "./prepare-node-runtime.mjs";
-
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIRECTORY = path.resolve(SCRIPT_DIRECTORY, "..");
 const PREPARED_COMMANDS = new Set(["build", "bundle", "dev"]);
@@ -12,9 +9,7 @@ const GLOBAL_OPTIONS_WITH_VALUE = new Set(["--color", "--config"]);
 
 export async function runTauri({
   arguments_ = [],
-  prepareRuntime = async (options) => {
-    await Promise.all([prepareNodeRuntime(options), buildLocalRuntime()]);
-  },
+  prepareRuntime = prepareServerResources,
   launchTauri = launchLocalTauri,
 } = {}) {
   if (PREPARED_COMMANDS.has(tauriCommand(arguments_))) {
@@ -22,6 +17,23 @@ export async function runTauri({
     await prepareRuntime(targetTriple ? { target: runtimeTarget(targetTriple) } : {});
   }
   return launchTauri(arguments_);
+}
+
+async function prepareServerResources({ target } = {}) {
+  await runNodeScript("bundle-server.mjs");
+  await runNodeScript("bundle-node-runtime.mjs", target ? ["--target", target] : []);
+}
+
+function runNodeScript(script, arguments_ = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(SCRIPT_DIRECTORY, script), ...arguments_], { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) reject(new Error(`${script} terminated by signal ${signal}`));
+      else if (code !== 0) reject(new Error(`${script} exited with code ${code ?? 1}`));
+      else resolve();
+    });
+  });
 }
 
 function tauriCommand(arguments_) {
@@ -51,6 +63,7 @@ function runtimeTarget(targetTriple) {
     "x86_64-pc-windows-msvc": "win-x64",
     "aarch64-apple-darwin": "darwin-arm64",
     "x86_64-apple-darwin": "darwin-x64",
+    "x86_64-unknown-linux-gnu": "linux-x64",
   };
   const target = targets[targetTriple];
   if (!target) throw new Error(`Unsupported Node runtime target triple: ${targetTriple}`);
