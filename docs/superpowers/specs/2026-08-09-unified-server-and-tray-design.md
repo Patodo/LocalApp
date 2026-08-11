@@ -1,8 +1,8 @@
 # Unified Server and Optional Tray Design
 
-**Status:** Approved design
+**Status:** Approved design, revised for generic Device Actions
 
-**Date:** 2026-08-09
+**Date:** 2026-08-09; revised 2026-08-10
 
 ## Summary
 
@@ -10,14 +10,18 @@ LocalApp will have one canonical Server implementation and no separate MiniServe
 
 The Server owns the Web control plane, users, authentication, applications, workspaces, task execution, messages, files, backups, and peer synchronization. Local and remote Servers are independent, equal peers. They do not proxy or manage each other.
 
-The primary distribution is the `@localapp/server` Node package. An optional tray-only Tauri distribution bundles and supervises the exact same Server artifact for users who want a signed installer, bundled Node runtime, autostart, and a system tray.
+The primary distribution is the `@localapp/server` Node package. An optional windowless Tauri distribution bundles and supervises the exact same Server artifact and provides the native bridge that owns the `localapp://` URL scheme. The bridge contains no application-hosting or script-execution backend of its own.
+
+The Server also provides generic Device Actions. Any hosted application may ask the browser to hand an action to the Server running on the computer where the user clicked. A SKILL marketplace is one consumer of this platform primitive, not a special Server subsystem.
 
 ## Goals
 
 - Use one Server package, one application API surface, and one user system in every deployment.
 - Remove the MiniServer and fixed `local-user` concepts.
 - Move all management UI from Desktop into the Server-hosted Web application.
-- Reduce Desktop to an optional tray launcher with two actions: open home and exit.
+- Reduce Desktop to an optional native bridge and tray with two menu actions: open home and exit.
+- Preserve a generic, SDK-accessible Device Action capability for Web applications that need explicitly trusted work on the current computer.
+- Deliver Device Actions through `localapp://` without device registration, cross-device dispatch, or a permanent remote control channel.
 - Give every Server a complete Web control plane that works offline.
 - Support loopback-only operation by default and explicit LAN enablement.
 - Treat Server instances as equal peers connected with target-user API keys.
@@ -36,6 +40,8 @@ The primary distribution is the `@localapp/server` Node package. An optional tra
 - Compatibility aliases for legacy local-install or upload workflows.
 - A Tauri-hosted management window.
 - Direct editing of arbitrary client filesystem directories from Studio.
+- Application-specific Device Action semantics such as SKILL catalog formats, resume records, package installation rules, or target-tool adapters.
+- Selecting another computer from the Web or dispatching an action to a computer other than the one on which the Scheme link was activated.
 
 ## Product Model
 
@@ -49,6 +55,7 @@ The primary distribution is the `@localapp/server` Node package. An optional tra
 - Application migrations, backend contracts, Named SQL, content storage, and Platform Shell.
 - Server-managed Studio workspaces.
 - Agent tasks, logs, messages, cancellation, trust, and execution history.
+- Device Action creation, activation, trust, local execution, recovery, and result reporting.
 - Backups, data import/export, and factory reset.
 - Peer configuration and synchronization jobs.
 - Capability and health endpoints.
@@ -76,20 +83,24 @@ npm install -g @localapp/server
 localapp-server start
 ```
 
-The same package is usable from a project dependency, container image, system service, or bundled tray distribution.
+The same package is usable from a project dependency, container image, system service, or bundled tray distribution. Headless and public deployments retain the same application API but leave the loopback Device Action ingress disabled unless it is explicitly supplied a local control credential.
 
-### Optional Tray Distribution
+### Optional Native Bridge and Tray Distribution
 
-The tray distribution is a convenience launcher, not a second client or runtime. It:
+The tray distribution is a native Scheme bridge and convenience launcher, not a second application runtime. It:
 
 - Bundles a pinned build of `@localapp/server` and a compatible Node runtime.
 - Starts and supervises the Server child process.
+- Registers `localapp://` with the operating system and enforces single-instance activation.
+- Strictly parses an action activation URL, starts the Server when necessary, and forwards only the activation ticket to a loopback-only Server endpoint authenticated by an in-memory per-launch control secret. It may open only the loopback confirmation URL returned by that endpoint.
 - Creates no main window or WebView.
 - Provides exactly two menu items: `打开主页` and `退出本地服务`.
 - Opens the Server homepage in the system browser.
 - Stops the Server before exiting.
 - Supports signed installers, autostart, and application updates.
 - Reports startup failure through tray state, structured logs, and a system notification without adding menu items.
+
+It does not fetch application scripts, decide trust, install SKILLs, access application databases, or execute actions. Those responsibilities remain in the canonical Server. A direct Node installation can host applications without Tauri; click-to-run Scheme activation requires an installed native bridge.
 
 The tray and direct Node distributions must execute byte-identical Server application bundles for the same release.
 
@@ -149,6 +160,7 @@ The control plane provides:
 - Peers: add URL and API key, test connection, inspect capabilities, synchronize, and remove credentials.
 - Users and access: users, roles, API keys, sessions, and application permissions.
 - System settings: network, public URL, storage, data directories, external tools, logs, and diagnostics.
+- Device Actions: pending confirmations, active and historical actions, publisher trust grants, permission changes, cancellation, and local logs.
 
 Web pages call only same-origin Server APIs. Secrets stored by the Server are never serialized into page responses.
 
@@ -164,6 +176,42 @@ https://server.example.com/<owner>/<app>/
 The application API and raw-resource base use the same path-based contract in every deployment. The local `<app>.localhost` origin, local ticket exchange, and fixed local-owner routing are removed.
 
 Application code, migrations, backend resources, Named SQL behavior, Platform Shell behavior, file APIs, authentication context, and authorization checks are identical because the same Server routes and shared core execute them.
+
+## Generic Device Actions
+
+### Product Boundary
+
+Device Actions are a platform primitive exposed by the application SDK. A hosted application supplies a title, description, script, dependency map, JSON input, requested local permissions, and timeout. The platform owns transport, publisher attribution, trust, execution lifecycle, and result delivery. The application owns the meaning of the action and every domain-specific workflow built on its result.
+
+The protocol therefore supports a SKILL marketplace, local export/import, CLI automation, file conversion, or hardware tooling without placing any of those products in Server Core.
+
+### Source-to-Current-Computer Flow
+
+1. An authenticated user clicks an application control in a Web application hosted by any LocalApp Server.
+2. The SDK posts a Device Action request to that application's same-origin API.
+3. The source Server validates the application, current version, publisher, request limits, and requested permission declaration, persists the action, and returns a short-lived activation URL. Its origin comes from canonical Server configuration, never an untrusted `Host` or forwarded header.
+4. The browser opens a canonical URL containing only protocol version, source HTTPS or explicitly accepted local/LAN origin, action ID, and a high-entropy single-use nonce. The Scheme never contains the script, dependencies, API keys, session cookies, or user data.
+5. The operating system activates the native bridge on that same computer. The bridge starts its bundled Server if needed and forwards the ticket through its authenticated loopback control endpoint.
+6. The local Server claims the action from the source over HTTP(S), persists an action-scoped callback credential, and validates that the claimed metadata matches the ticket.
+7. If no matching local trust grant exists, the local Server returns its own loopback confirmation URL and the bridge opens it in the system browser. The bridge verifies that the URL uses the exact ready origin and expected confirmation path. Only a local Server administrator may grant or revoke Device Action trust.
+8. The local Server executes the action, persists state and bounded logs, and reports progress and the terminal result to the source using only the action-scoped credential.
+9. The source Web page observes the persisted action through SSE with polling fallback.
+
+Scheme activation always targets the computer on which the click occurred. There is no device picker, remote device registry, background connection to the source, peer requirement, or user-account synchronization.
+
+### Trust and Permissions
+
+A trust grant is keyed by normalized source origin, application owner and name, immutable publisher user ID, and a canonical permission-set digest. Display names are informational and never identify trust. Reuse searches grants under the same origin/application/publisher tuple and accepts a saved permission set only when it is a superset of the new request; the digest still gives every approved set an immutable identity.
+
+The first action from a publisher requires local confirmation. A later action runs without another confirmation only when the source, application, publisher, and requested permissions are identical to or narrower than the saved grant. A publisher change, source-origin change, or permission expansion returns the action to `awaiting-trust`. Revocation affects later actions and does not silently terminate a currently running child process.
+
+The permission declaration covers filesystem read roots, filesystem write roots, network access, child-process access, and the action's working directory. Filesystem grants resolve existing ancestors, reject symlink traversal outside an approved root, and are revalidated immediately before execution. The executor adds only its immutable runner and dependency-cache paths. It launches the bundled Node runtime with its permission system enabled, a minimal environment, no Server credentials, bounded input/result/log sizes, a bounded timeout, captured output, and process-tree cancellation. Until container isolation is introduced, granting child-process access is explicitly presented as arbitrary code execution under the current operating-system user.
+
+### Protocol, Persistence, and Recovery
+
+The source endpoints create actions, claim a specific action using its nonce, accept authenticated status updates, stream public status, and cancel active work. The local endpoints accept bridge activations, list pending confirmations, grant or revoke trust, expose local logs to administrators, and cancel local execution.
+
+Activation, claim, and terminal updates are idempotent. A nonce expires when unclaimed, is bound to one local installation after claim, and cannot claim another action. Claim requests use a fixed path, no redirects, no ambient proxy/cookie/authentication state, bounded connect/response time and bytes, DNS/address revalidation, and an explicit source-origin policy: HTTPS by default, loopback HTTP for local development, and private-network HTTP only after local administrator opt-in. The source never returns a script through status or browser-facing responses. The local Server durably records a claimed action before execution; after restart it resumes preparation where safe and otherwise reports `interrupted`. The externally visible states remain `pending`, `claimed`, `awaiting-trust`, `preparing`, `running`, `succeeded`, `failed`, `cancelled`, `expired`, and `interrupted`.
 
 ## Studio Workspaces and Task Execution
 
@@ -292,7 +340,7 @@ The application-development CLI uses Server-targeted language:
 ```text
 localapp app install --target <connection>
 localapp app sync --peer <peer-name>
-localapp app sync --peer <peer-name> --with-data
+localapp app sync --peer <peer-name> --with-data --confirm-app <app-name>
 ```
 
 Legacy `localapp local install`, `localapp upload`, MiniServer, and Local Runtime commands are removed. They do not alias the new commands.
@@ -313,8 +361,8 @@ A newly initialized Server contains only its first administrator. Applications, 
 
 ### Server Tests
 
-- Unit tests for configuration, setup tokens, authentication, authorization, peer credential encryption, workspace boundaries, package validation, version conflicts, and job transitions.
-- Integration tests for application serving, Platform Shell, Named SQL, files, backups, Studio workspaces, task cancellation, and network rebinding.
+- Unit tests for configuration, setup tokens, authentication, authorization, peer credential encryption, workspace boundaries, package validation, version conflicts, Device Action ticket parsing, trust fingerprints, permissions, and job transitions.
+- Integration tests for application serving, Platform Shell, Named SQL, files, backups, Studio workspaces, task cancellation, Device Action claim/execution/recovery, and network rebinding.
 
 ### Two-peer Tests
 
@@ -335,12 +383,19 @@ Tests interrupt each state boundary and cover upload interruption, invalid diges
 
 ### Browser End-to-End Tests
 
-Browser tests cover first setup, login, user management, application installation and opening, Studio workspace lifecycle, task execution, peer creation, application synchronization, data synchronization confirmation, and LAN configuration.
+Browser tests cover first setup, login, user management, application installation and opening, Studio workspace lifecycle, task execution, peer creation, application synchronization, data synchronization confirmation, Device Action trust and execution, and LAN configuration. Formal self-verification uses the `browser:control-in-app-browser` skill against loopback URLs only.
+
+Two applications provide the minimum realistic acceptance boundary:
+
+- A SKILL marketplace application uses only the generic Device Action SDK. Clicking install activates the local Scheme bridge, prompts for first-publisher trust on the local Server, writes a fixture SKILL into `<repo>/tmp/unified-acceptance/installed-skills`, and reports success to the source Web page.
+- A resume-management application uses Named SQL and content storage to create resume records, upload an image and a PDF, render the image with the template's preinstalled image-preview dependency, render the PDF with the template's preinstalled PDF dependency, and download both original files.
+
+Both applications are initialized from the real built-in template, implemented through its shipped agent guidance, checked, packaged, installed into clean local Server data directories, and exercised at their formal `/<owner>/<app>/` URLs. Failures that reveal general application-development guidance gaps are fixed in the template skills or `AGENTS.md`, then the application is regenerated or corrected through the documented workflow.
 
 ### Distribution Acceptance
 
 - A clean Node package installation starts a complete Server and serves the full Web control plane.
-- The tray distribution creates no main window, exposes exactly two menu items, starts the bundled Server, opens the same Web control plane, and stops the child process on exit.
+- The tray distribution creates no main window, exposes exactly two menu items, owns the Scheme bridge, starts the bundled Server, opens the same Web control plane, and stops the child process on exit.
 - Direct Node startup and tray startup run the same browser and API acceptance suites.
 - The bundled Server application artifact digest matches the corresponding Node package release artifact.
 
@@ -351,8 +406,8 @@ Implementation is organized into five independently verifiable tracks that conve
 1. Consolidate application runtime, identity, storage, and Web serving into the canonical Server.
 2. Move Desktop management features and server-managed workspaces into Web and Server APIs.
 3. Add peer credentials, synchronization sessions, atomic install, snapshot replacement, and rollback.
-4. Replace Desktop with the optional tray-only Server launcher and publish the Node package.
-5. Remove Local Runtime, legacy Desktop UI, local-host routing, and obsolete CLI workflows; then run cross-distribution acceptance tests.
+4. Preserve the generic local-action contract by moving trust and execution into Server, then replace Desktop with the optional Scheme bridge and tray and publish the Node package.
+5. Remove Local Runtime, legacy Desktop UI, local-host routing, and obsolete CLI workflows; improve the application template and agent guidance; then run cross-distribution and two-application acceptance tests.
 
 The repository may pass through temporary internal adapters while a track is under development, but the released result cannot expose separate Server and MiniServer behaviors.
 
@@ -370,4 +425,9 @@ The repository may pass through temporary internal adapters while a track is und
 - No synchronization mode transfers users, permissions, credentials, or platform data.
 - The Node package runs without Tauri.
 - The optional tray has no main window and only `打开主页` and `退出本地服务`.
+- Any hosted application can create a generic Device Action through the SDK, and Scheme activation executes it only on the computer where the user clicked.
+- Scheme activation transfers no script or platform credential, and first-publisher or expanded-permission actions require local administrator confirmation.
+- The SKILL marketplace acceptance application installs a fixture SKILL under the project `tmp` directory through the generic Device Action path.
+- The resume-management acceptance application uploads, previews, and downloads image and PDF content using dependencies present in every newly initialized application.
+- Application-development skills and `AGENTS.md` describe the unified Server, formal publish URL, Device Actions, content handling, and Browser verification without MiniServer or legacy upload commands.
 - Legacy Desktop and Local Runtime data are neither imported nor deleted automatically.

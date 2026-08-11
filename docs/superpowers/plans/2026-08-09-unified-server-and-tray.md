@@ -1,12 +1,14 @@
-# Unified Server and Optional Tray Implementation Plan
+# Unified Server, Device Actions, and Native Bridge Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the separate Local Runtime and full Desktop client with one distributable Node Server, one Server-hosted Web control plane, peer application synchronization, and an optional two-item tray launcher.
+**Goal:** Replace the separate Local Runtime and full Desktop client with one distributable Node Server, one Server-hosted Web control plane, peer application synchronization, a generic current-computer Device Action substrate, and an optional two-item native bridge and tray; prove the result with two real local applications.
 
-**Architecture:** `@localapp/server` becomes a reusable Fastify application plus a supervised `localapp-server` executable. Every deployment runs the same Server bundle and Web assets; configuration selects listener and storage providers. Server-owned workspaces, tasks, peers, and synchronization are implemented as focused services and routes. The Tauri package becomes a windowless process launcher that bundles the exact Server artifact.
+**Architecture:** `@localapp/server` becomes a reusable Fastify application plus a supervised `localapp-server` executable. Every deployment runs the same Server bundle and Web assets; configuration selects listener and storage providers. Server-owned workspaces, tasks, peers, synchronization, Device Action trust, and Device Action execution are implemented as focused services and routes. The Tauri package becomes a windowless `localapp://` bridge and process launcher that bundles the exact Server artifact but no second business backend.
 
 **Tech Stack:** Node.js 24+, TypeScript, Fastify 4, Next.js 15 static export, Vitest 4, Playwright, sql.js, Rust 2024, Tauri 2, pnpm, Cargo.
+
+**Implementation status (2026-08-10):** Tasks 1–6 are implemented and reviewed on `main`. Task 7 is implemented and in its final durability review. Tasks 8–15 are pending. The SDD progress ledger records commit-level evidence and is updated after every review round.
 
 ## Global Constraints
 
@@ -21,7 +23,16 @@
 - Application-plus-data synchronization is explicit, replaces the target database and files from a consistent snapshot, and rolls back atomically on failure.
 - Users, permissions, sessions, API keys, and platform data never synchronize.
 - Studio can access only Server-managed workspaces under `<data-dir>/workspaces`.
-- The primary distribution is the Node package; the optional Tauri tray has no window and exactly `打开主页` and `退出本地服务`.
+- The primary distribution is the Node package; the optional Tauri bridge has no window and exactly `打开主页` and `退出本地服务` in its tray menu.
+- Generic Device Actions are a Server and SDK capability available to every hosted application; SKILL installation is only an acceptance application use case.
+- A Scheme activation always targets the computer where the click occurred. Do not add device registration, a device picker, cross-device dispatch, or a permanent remote-control channel.
+- `localapp://` carries only source origin, protocol version, action ID, and a short-lived high-entropy nonce. It never carries scripts, dependencies, Server credentials, or user data.
+- The native bridge only starts/supervises Server and forwards strictly parsed activation tickets through an authenticated loopback control endpoint. Trust, dependency preparation, script execution, logs, and recovery live in `@localapp/server`.
+- Device Action trust is keyed by source origin, application identity, immutable publisher ID, and canonical permission-set digest. The first action and every permission expansion require confirmation by a local Server administrator.
+- Device Action execution uses the bundled Node runtime's permission system, minimal environment, bounded logs/time, process-tree cancellation, and no inherited Server secrets. Child-process permission is disclosed as arbitrary current-OS-user code execution until containers are introduced.
+- All generated data, Server data directories, acceptance downloads, and installed test SKILLs live below `<repo>/tmp`; never use `/tmp` for this plan's manual or Browser acceptance.
+- Final UI acceptance must use `browser:control-in-app-browser`, formal `/<owner>/<app>/` routes, and local loopback URLs only.
+- Every newly initialized application includes pinned `react-pdf@10.4.1`, `pdfjs-dist@6.1.200`, and `yet-another-react-lightbox@3.32.1` dependencies plus guidance for upload, preview, and download.
 - Delete legacy commands and product surfaces directly; do not add compatibility aliases or a migration phase.
 - Follow red-green-refactor for every behavior change. No production implementation precedes its failing test.
 
@@ -784,11 +795,163 @@ git commit -m "build(server): publish standalone Node distribution"
 
 ---
 
-### Task 10: Replace Desktop with a windowless two-item tray launcher
+### Task 10: Move generic Device Actions into the canonical Server and SDK
+
+**Files:**
+- Create: `packages/server/src/lib/device-action-types.ts`
+- Rename: `packages/server/src/lib/desktop-actions-db.ts` to `packages/server/src/lib/device-action-source-store.ts`
+- Create: `packages/server/src/lib/device-action-local-store.ts`
+- Create: `packages/server/src/lib/device-action-ticket.ts`
+- Create: `packages/server/src/lib/device-action-client.ts`
+- Create: `packages/server/src/lib/device-action-trust-store.ts`
+- Create: `packages/server/src/lib/device-action-executor.ts`
+- Rename: `packages/server/src/routes/desktop-actions.ts` to `packages/server/src/routes/device-actions.ts`
+- Create: `packages/server/src/routes/device-control.ts`
+- Rename: `packages/sdk-core/src/desktop.ts` to `packages/sdk-core/src/device.ts`
+- Rename: `packages/sdk-react/src/hooks/use-desktop-action.ts` to `packages/sdk-react/src/hooks/use-device-action.ts`
+- Create: `packages/server/tests/device-action-ticket.test.ts`
+- Create: `packages/server/tests/device-action-trust.test.ts`
+- Create: `packages/server/tests/device-action-executor.test.ts`
+- Create: `packages/server/tests/device-action-source-policy.test.ts`
+- Rename: `packages/server/tests/desktop-actions-db.test.ts` to `packages/server/tests/device-action-source-store.test.ts`
+- Rename: `packages/server/tests/integration/desktop-actions.test.ts` to `packages/server/tests/integration/device-actions.test.ts`
+- Create: `packages/server/tests/integration/two-server-device-action.test.ts`
+- Create: `packages/web/app/(dashboard)/my/device-actions/page.tsx`
+- Create: `packages/web/components/device-actions/device-actions-page.tsx`
+- Create: `packages/web/components/device-actions/device-actions-page.test.tsx`
+- Modify: `packages/server/src/server.ts`
+- Modify: `packages/server/src/lib/config.ts`
+- Modify: `packages/server/package.json`
+- Modify: `packages/sdk-core/src/index.ts`
+- Modify: `packages/sdk-core/tests/desktop.test.ts`
+- Modify: `packages/sdk-react/src/index.ts`
+- Modify: `packages/sdk-react/tests/use-desktop-action.test.tsx`
+- Modify: `packages/web/components/app-shell.tsx`
+
+**Interfaces:**
+- Produces `DeviceActionRequest`, `DeviceActionPermissionSet`, `DeviceActionSnapshot`, and `DeviceActivationTicket` in `device-action-types.ts`:
+
+```ts
+export interface DeviceActionPermissionSet {
+  filesystemRead?: string[];
+  filesystemWrite?: string[];
+  network?: boolean;
+  childProcess?: boolean;
+}
+
+export interface DeviceActionRequest {
+  title: string;
+  description?: string;
+  script: string;
+  dependencies?: Record<string, string>;
+  input?: unknown;
+  permissions: DeviceActionPermissionSet;
+  timeoutSeconds?: number;
+}
+
+export interface DeviceActivationTicket {
+  protocolVersion: 2;
+  sourceOrigin: string;
+  actionId: string;
+  nonce: string;
+}
+```
+
+- Produces SDK exports `device.run(request, options)`, `device.get(requestId)`, and React `useDeviceAction()`; removes the Desktop-named public exports without compatibility aliases.
+- Produces source application endpoint `POST /serve/:owner/:app/api/device-actions`, source claim endpoint `POST /api/device-actions/:id/claim`, action-scoped `POST /api/device-actions/:id/status`, authenticated user status/SSE endpoints, and cancellation.
+- Produces loopback-only bridge endpoint `POST /api/device-control/activations`, enabled only when `LOCALAPP_DEVICE_CONTROL_TOKEN` is present and requiring `x-localapp-device-control`. Its response may include only a confirmation URL under the exact local ready origin and `/my/device-actions/` path.
+- Produces local administrator endpoints under `/api/device-actions/local` for pending actions, exact trust grants, revocation, logs, and cancellation.
+- Consumes `packages/server/runner/localapp-runner.mjs`, the bundled Node executable, the Server master key, and Server-owned `<data-dir>/device-actions` directories.
+
+- [ ] **Step 1: Write failing protocol, trust, and two-Server tests**
+
+```ts
+it("hands a source action to the Server on the computer that receives the activation", async () => {
+  const created = await createHostedDeviceAction(source, {
+    title: "Install fixture",
+    script: "await import('node:fs/promises').then(fs => fs.writeFile(input.path, input.content)); return { installed: true };",
+    input: { path: installPath, content: "fixture" },
+    permissions: { filesystemWrite: [installPath] },
+  });
+
+  expect(created.activationUrl).toMatch(/^localapp:\/\/action\//);
+  expect(created.activationUrl).not.toContain("writeFile");
+  await activateOnLocalServer(local, created.activationUrl, controlToken);
+  expect(await localPendingAction(created.requestId)).toMatchObject({ status: "awaiting_trust" });
+  await trustLocalAction(local, created.requestId, localAdminSession);
+  await expectSourceAction(source, created.requestId, "succeeded");
+  expect(await readFile(installPath, "utf8")).toBe("fixture");
+});
+
+it("requires new confirmation when permissions expand", async () => {
+  await trustAndRun({ permissions: { filesystemWrite: [firstPath] } });
+  expect((await activate({ permissions: { filesystemWrite: [firstPath] } })).status).toBe("preparing");
+  expect((await activate({ permissions: { filesystemWrite: [firstPath, secondPath] } })).status).toBe("awaiting_trust");
+});
+```
+
+- [ ] **Step 2: Run Device Action tests and verify RED**
+
+Run: `pnpm -C packages/server exec vitest run tests/device-action-ticket.test.ts tests/device-action-trust.test.ts tests/device-action-executor.test.ts tests/device-action-source-policy.test.ts tests/integration/two-server-device-action.test.ts`
+
+Expected: FAIL because generic tickets, local activation, permission-aware trust, and Server-owned execution do not exist.
+
+- [ ] **Step 3: Generalize and harden the source action protocol**
+
+Rename the Desktop-specific stores and routes. Canonicalize and bound every request field, derive publisher identity from the active installed application version, and persist a canonical permission JSON plus SHA-256 digest. Return `localapp://action/<canonical-uuid>?origin=<percent-encoded-origin>&nonce=<base64url>&protocolVersion=2`; reject duplicate or unknown query fields. Keep script, dependencies, and input out of browser status responses and Scheme URLs.
+
+Derive the activation origin from canonical Server configuration, never request `Host` or untrusted forwarding headers. Accept only registry package names with exact versions in dependencies; reject URL, Git, file, workspace, tag, alias, and range specifications. Bound action/request/result/log sizes and timeouts before persistence.
+
+Claim uses the high-entropy nonce and local installation ID, atomically binds the action to one installation, and returns the action plus an action-scoped callback token. Encrypt that token with the Server master key so the identical installation can retry a lost claim response. Status updates accept only the callback token and bound installation ID; neither the source user's API key nor a synchronized identity is involved.
+
+- [ ] **Step 4: Implement authenticated local activation and durable claim**
+
+Register `device-control` only when the injected control token is non-empty. Require a loopback socket address, constant-time token comparison, JSON content type, protocol version 2, and a strictly normalized source origin. Persist the activation before returning. The local worker claims only a fixed endpoint with redirects, ambient proxy variables, cookies, and authentication disabled; enforce connect/total timeouts, response bounds, DNS/address revalidation, HTTPS by default, loopback HTTP for development, and private-network HTTP only after explicit local-admin opt-in. It verifies action ID, origin, publisher fields, permissions digest, expiry, and callback credential, then durably records the claimed payload before any trust or execution transition.
+
+- [ ] **Step 5: Implement permission-aware trust and the local Web surface**
+
+Store grants by `(sourceOrigin, appOwner, appName, publisherUserId, permissionsDigest)`. Canonical permission arrays are absolute, normalized, sorted, and duplicate-free. Reuse searches the same origin/application/publisher tuple and accepts an existing grant only when its stored permission set contains the new set. A source, application, publisher, or expanded path/boolean permission enters `awaiting_trust`. Only a local administrator may grant or revoke. Add `/my/device-actions` for pending confirmation, active/history state, exact permission display, trust revocation, cancellation, and local logs; it is a normal static-exported Server Web page, not a Tauri window.
+
+- [ ] **Step 6: Move script execution and dependency preparation into Server**
+
+Port only the generic behavior from Desktop's execution, runner, environment, and process tests. Prepare exact registry dependencies under a content-addressed Server cache with lifecycle scripts disabled and verified lockfile/integrity metadata. Launch the immutable Server runner with the bundled/current Node executable and `--permission`; always allow the runner, action module, dependency directory, and Server-created working directory, then add requested filesystem roots and `--allow-net`, `--allow-child-process`, or `--allow-worker` only when declared. Resolve existing ancestors and reject/recheck symlink escapes for filesystem grants. Supply a minimal environment that omits JWT, master key, peer keys, API keys, proxy variables, and inherited credential-like names. Persist bounded stdout/stderr, input, and result, enforce timeout, cancel the whole process tree, and recover claimed nonterminal records as `interrupted` unless they had not started and can safely resume preparation.
+
+- [ ] **Step 7: Rename the public SDK without narrowing the application contract**
+
+Keep the existing EventSource-with-polling fallback and abort behavior. Replace `desktop.run` with `device.run`, replace `useDesktopAction` with `useDeviceAction`, add the mandatory permission declaration, and preserve generic script/dependency/input/result typing. No SKILL-specific field or installer API belongs in SDK or Server.
+
+- [ ] **Step 8: Run Device Action, SDK, Web, and Server regression suites**
+
+Run:
+
+```bash
+pnpm -C packages/server exec vitest run tests/device-action-ticket.test.ts tests/device-action-trust.test.ts tests/device-action-executor.test.ts tests/device-action-source-policy.test.ts tests/device-action-source-store.test.ts tests/integration/device-actions.test.ts tests/integration/two-server-device-action.test.ts
+pnpm -C packages/sdk-core test
+pnpm -C packages/sdk-react test
+pnpm -C packages/web test
+pnpm -C packages/web build
+pnpm -C packages/server test
+```
+
+Expected: PASS; the two-Server test writes only inside its project-local fixture directory, a missing permission is denied, a replay is idempotent, and browser-visible responses contain no script or callback credential.
+
+- [ ] **Step 9: Commit generic Device Actions**
+
+```bash
+git add -A packages/server packages/sdk-core packages/sdk-react packages/web
+git commit -m "feat(server): add generic local device actions"
+```
+
+---
+
+### Task 11: Replace Desktop with a windowless Scheme bridge and two-item tray
 
 **Files:**
 - Create: `packages/desktop/src-tauri/src/server_process.rs`
+- Create: `packages/desktop/src-tauri/src/activation.rs`
+- Create: `packages/desktop/src-tauri/src/device_control_client.rs`
 - Create: `packages/desktop/src-tauri/tests/tray_server.rs`
+- Create: `packages/desktop/src-tauri/tests/activation.rs`
 - Create: `packages/desktop/scripts/bundle-server.mjs`
 - Create: `packages/desktop/scripts/bundle-server.node-test.mjs`
 - Create: `packages/desktop/scripts/bundle-node-runtime.mjs`
@@ -818,10 +981,12 @@ git commit -m "build(server): publish standalone Node distribution"
 
 **Interfaces:**
 - Produces: `ServerProcess::start`, `ready`, `open_home`, `stop`, and `restart_after_failure`.
+- Produces: strict `localapp://action/<uuid>?origin=<encoded-origin>&nonce=<base64url>&protocolVersion=2` parsing and loopback forwarding.
+- Produces: `DeviceControlClient::activate(ticket)` authenticated by a random per-process `LOCALAPP_DEVICE_CONTROL_TOKEN` shared only with the child Server.
 - Produces tray menu IDs `tray-open-home` and `tray-exit` only.
 - Consumes the exact artifact from Task 9 and a pinned Node.js runtime under Tauri resources.
 
-- [ ] **Step 1: Write failing tray-menu and child-lifecycle tests**
+- [ ] **Step 1: Write failing activation, tray-menu, and child-lifecycle tests**
 
 ```rust
 #[test]
@@ -840,42 +1005,58 @@ async fn server_process_opens_ready_url_and_stops_child() {
     process.stop().await.unwrap();
     assert!(!process.is_running());
 }
+
+#[test]
+fn activation_ticket_rejects_scripts_credentials_and_extra_fields() {
+    assert!(ActivationTicket::parse(
+        "localapp://action/018f7c0e-0f8f-7b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abc_123&protocolVersion=2"
+    ).is_ok());
+    assert!(ActivationTicket::parse(
+        "localapp://action/018f7c0e-0f8f-7b5f-8c20-7f468f808d10?origin=https%3A%2F%2Fapps.example&nonce=abc_123&protocolVersion=2&script=evil"
+    ).is_err());
+}
 ```
 
 - [ ] **Step 2: Run tray tests and verify RED**
 
-Run: `cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml tray_server`
+Run: `cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --test tray_server --test activation`
 
-Expected: FAIL because the minimal menu and unified Server process controller do not exist.
+Expected: FAIL because the minimal menu, Scheme parser, loopback client, and unified Server process controller do not exist.
 
-- [ ] **Step 3: Replace the Desktop application destructively**
+- [ ] **Step 3: Implement the strict native activation bridge**
 
-Delete the React application and all Rust business modules listed above. Replace `lib.rs` with Tauri setup, single-instance handling, server child startup, two tray menu handlers, left-click open-home behavior, autostart/updater plugins, and graceful child termination on exit.
+Keep `tauri-plugin-deep-link` and `tauri-plugin-single-instance`. Register `localapp://`, accept only the versioned Device Action ticket shape, reject source schemes other than HTTP(S), userinfo, fragments, control characters, unknown/duplicate fields, non-canonical UUIDs, non-base64url nonces, and any executable content or credential field. The bridge never fetches an action and never decides whether an HTTP origin is trusted; Task 10's local Server source policy makes that decision before network access.
 
-- [ ] **Step 4: Remove the main window and unnecessary dependencies**
+Generate a cryptographically random control token for each Server child. Pass it only through `LOCALAPP_DEVICE_CONTROL_TOKEN`; do not persist or log it. Forward a parsed ticket to `POST http://127.0.0.1:<ready-port>/api/device-control/activations` in `x-localapp-device-control`. If activation arrives before readiness, start or await the child once, then forward. Duplicate OS deliveries are safe because the Server consumes the ticket idempotently. If the response contains a confirmation URL, open it only after verifying that its origin equals the child's ready origin and its normalized path is below `/my/device-actions/`.
 
-Set `app.windows` to `[]`, remove `beforeDevCommand`, `frontendDist`, WebView CSP, dialog/deep-link/business plugins, React/Vite dependencies, database/HTTP/task dependencies no longer used by the launcher, and every generated command handler.
+- [ ] **Step 4: Replace the Desktop application destructively**
 
-- [ ] **Step 5: Bundle the exact Server release artifact**
+Delete the React application and all Rust business modules listed above. Replace `lib.rs` with Tauri setup, Scheme registration, single-instance URL forwarding, Server child startup, two tray menu handlers, left-click open-home behavior, autostart/updater plugins, startup-failure notification, and graceful child termination on exit. There is no management window and no Rust action runner.
+
+- [ ] **Step 5: Remove the main window and unnecessary dependencies**
+
+Set `app.windows` to `[]`, remove `beforeDevCommand`, `frontendDist`, WebView CSP, dialog/business plugins, React/Vite dependencies, database/task/runtime dependencies, and every generated command handler. Retain only the deep-link, single-instance, opener, autostart, updater, tray, notification, HTTP client, process, serialization, URL, and cryptography dependencies required by this bridge.
+
+- [ ] **Step 6: Bundle the exact Server release artifact**
 
 `bundle-server.mjs` invokes Task 9's builder and copies its release directory to `src-tauri/resources/server`. `bundle-node-runtime.mjs` resolves the pinned, checksummed Node.js runtime for each Tauri target and places only the required executable and licenses under `src-tauri/resources/node/<target>`. The launcher invokes this bundled executable, never a Node installation from `PATH`. The Node test compares `.localapp-server-artifact.json` digests between both Server locations and verifies the bundled runtime reports the pinned Node major version.
 
-- [ ] **Step 6: Run tray build and tests**
+- [ ] **Step 7: Run native bridge build and tests**
 
 Run: `pnpm -C packages/desktop test && cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml && pnpm -C packages/desktop tauri build --debug`
 
-Expected: PASS; build metadata contains no window and resources contain Server rather than Local Runtime.
+Expected: PASS; build metadata contains no window, resources contain Server rather than Local Runtime, the Scheme reaches only the authenticated loopback endpoint, and no execution/trust implementation remains in Rust.
 
-- [ ] **Step 7: Commit the tray-only launcher**
+- [ ] **Step 8: Commit the native bridge**
 
 ```bash
 git add -A packages/desktop
-git commit -m "refactor(desktop): replace client with server tray"
+git commit -m "refactor(desktop): replace client with native server bridge"
 ```
 
 ---
 
-### Task 11: Replace CLI publishing language and delete Local Runtime
+### Task 12: Replace CLI publishing language and delete Local Runtime
 
 **Files:**
 - Create: `packages/cli/src/commands/app.rs`
@@ -892,11 +1073,10 @@ git commit -m "refactor(desktop): replace client with server tray"
 - Modify: `pnpm-workspace.yaml`
 - Modify: `README.md`
 - Replace: `docs/local-runtime.md`
-- Modify: `init-repo/CLAUDE.md`
 - Modify: release/export scripts that reference Local Runtime or full Desktop
 
 **Interfaces:**
-- Produces CLI commands `localapp app install --target <connection>`, `localapp app sync --peer <name>`, and `localapp app sync --peer <name> --with-data`.
+- Produces CLI commands `localapp app install --target <connection>`, `localapp app sync --peer <name>`, and `localapp app sync --peer <name> --with-data --confirm-app <name>`.
 - Produces `ConnectionStore` for CLI-side named Server URLs and API Keys; `app install` uses the explicit target and `app sync` uses the active source connection unless `--target` is supplied.
 - Removes `localapp desktop`, `localapp local install`, and `localapp upload` entirely.
 - Removes `@localapp/local-runtime` from the pnpm workspace and dependency graph.
@@ -907,7 +1087,7 @@ git commit -m "refactor(desktop): replace client with server tray"
 #[test]
 fn parses_unified_app_commands_and_rejects_removed_commands() {
     assert!(Cli::try_parse_from(["localapp", "app", "install", "--target", "local"]).is_ok());
-    assert!(Cli::try_parse_from(["localapp", "app", "sync", "--peer", "office", "--with-data"]).is_ok());
+    assert!(Cli::try_parse_from(["localapp", "app", "sync", "--peer", "office", "--with-data", "--confirm-app", "notes"]).is_ok());
     assert!(Cli::try_parse_from(["localapp", "local", "install", "x.localapp"]).is_err());
     assert!(Cli::try_parse_from(["localapp", "upload"]).is_err());
 }
@@ -921,15 +1101,15 @@ Expected: FAIL because the old command tree is still present.
 
 - [ ] **Step 3: Implement Server-targeted application commands**
 
-`app install` builds or reads a `.localapp` package and posts it to `/api/me/apps/install` using the selected connection API Key. `app sync` asks the active (or explicitly selected) source Server to start `/api/me/apps/:name/sync`; the peer name resolves inside that Server, so the target peer credential is never copied into CLI configuration. `--with-data` requires an exact application-name confirmation flag in non-interactive mode.
+`app install` builds the current project or reads an explicit `--package <path>` `.localapp` package and posts it to `/api/me/apps/install` using the selected connection API Key. `app sync` asks the active (or explicitly selected) source Server to start `/api/me/apps/:name/sync`; the peer name resolves inside that Server, so the target peer credential is never copied into CLI configuration. `--with-data` requires `--confirm-app <exact-name>` in non-interactive mode and an exact typed name in interactive mode.
 
 - [ ] **Step 4: Delete old commands and Local Runtime**
 
 Remove the command variants, modules, tests, workspace entry, bundle scripts, and documentation. Update root and release scripts so searching tracked files for `@localapp/local-runtime`, `localapp-local-runtime`, or `localapp local install` returns no production references.
 
-- [ ] **Step 5: Rewrite documentation around one Server and equal peers**
+- [ ] **Step 5: Rewrite product documentation around one Server and equal peers**
 
-Document Node startup, optional Tray, first-run setup, loopback/LAN settings, application installation, peer API keys, application-only sync, explicit data sync, and clean-state policy. Remove publish/management terminology from user-facing workflows.
+Document Node startup, the optional native bridge, first-run setup, loopback/LAN settings, application installation, peer API keys, application-only sync, explicit data sync, Device Action activation, and clean-state policy. Remove MiniServer, legacy upload, and Desktop-management terminology from user-facing workflows. Task 13 separately owns generated-application guidance.
 
 - [ ] **Step 6: Run CLI, workspace, and documentation tests**
 
@@ -946,22 +1126,188 @@ git commit -m "refactor: remove local runtime and legacy client workflows"
 
 ---
 
-### Task 12: Run cross-distribution acceptance and Browser self-verification
+### Task 13: Upgrade the application template, media tooling, and agent guidance
+
+**Files:**
+- Modify: `AGENTS.md`
+- Create: `init-repo/AGENTS.md`
+- Modify: `init-repo/CLAUDE.md`
+- Modify: `init-repo/package.json`
+- Create: `init-repo/.npmrc`
+- Modify: `init-repo/.claude/skills/localapp/SKILL.md`
+- Modify: `init-repo/.claude/skills/localapp-upload/SKILL.md`
+- Create: `init-repo/.claude/skills/localapp-device-actions/SKILL.md`
+- Create: `init-repo/tests/media-preview-template.test.ts`
+- Create: `init-repo/tests/agent-guidance-template.test.ts`
+- Modify: `packages/localapp-template/src/lib.rs`
+- Modify: `packages/localapp-template/tests/smoke_init.rs`
+
+**Interfaces:**
+- Newly initialized applications include `react-pdf@10.4.1`, `pdfjs-dist@6.1.200`, and `yet-another-react-lightbox@3.32.1`.
+- pnpm projects receive `public-hoist-pattern[]=pdfjs-dist` so the PDF worker resolves consistently.
+- Every generated repository exposes the same `AGENTS.md` guidance to coding agents and documents generic `device.run()` without SKILL-specific Server APIs.
+- All local examples, generated apps, Server state, uploads, and downloads are placed below the repository `tmp/` directory.
+
+- [ ] **Step 1: Write failing template dependency and guidance tests**
+
+```ts
+test("template includes supported PDF and image preview packages", () => {
+  expect(template.dependencies["react-pdf"]).toBe("10.4.1");
+  expect(template.dependencies["pdfjs-dist"]).toBe("6.1.200");
+  expect(template.dependencies["yet-another-react-lightbox"]).toBe("3.32.1");
+});
+
+test("agent guidance uses the unified Server and generic Device Actions", () => {
+  expect(guidance).toContain("device.run");
+  expect(guidance).not.toMatch(/MiniServer|localapp upload|(^|[\s`"'(])\/tmp\//m);
+});
+```
+
+- [ ] **Step 2: Run template tests and verify RED**
+
+Run: `pnpm -C init-repo test && cargo test --manifest-path packages/localapp-template/Cargo.toml`
+
+Expected: FAIL because media dependencies, `.npmrc`, generated `AGENTS.md`, and the Device Action skill do not exist.
+
+- [ ] **Step 3: Add stable media-preview foundations**
+
+Pin the three preview packages exactly. Configure the PDF.js worker from the installed `pdfjs-dist` asset in a Vite-safe way and document a reusable PDF preview component with loading/error states, page navigation, and object-URL cleanup. Document image preview with keyboard navigation, alt text, download, and object-URL cleanup. Do not add a Server-specific media renderer: application uploads remain ordinary file resources.
+
+- [ ] **Step 4: Rewrite app-development instructions from real workflows**
+
+Replace MiniServer, `localapp upload`, `/tmp`, and raw `/serve/` navigation instructions with one Server, `localapp app install --target`, formal `/<owner>/<app>/` URLs, repository-local `tmp/`, and Browser self-verification. Explain that Device Actions are privileged current-computer operations: declare the narrowest permissions, keep scripts deterministic, display the operation before activation, and treat child-process permission as full current-user code execution.
+
+The Device Action skill contains a generic example that writes an explicitly selected file and reports a typed result. SKILL catalog metadata, install layouts, and target-tool adapters remain outside this skill because they belong to consumer applications.
+
+- [ ] **Step 5: Ensure builtin initialization copies every new artifact**
+
+Update the embedded-template package and smoke tests so `localapp init` emits `.npmrc`, `AGENTS.md`, the Device Action skill, media dependencies, migrations, and runtime files byte-for-byte. Initialize a fixture under `<repo>/tmp/template-smoke`, install dependencies, and build it without reaching into the source template.
+
+- [ ] **Step 6: Run template, CLI-init, and workspace checks**
+
+Run:
+
+```bash
+pnpm -C init-repo test
+pnpm -C init-repo build
+cargo test --manifest-path packages/localapp-template/Cargo.toml
+cargo test --manifest-path packages/cli/Cargo.toml init
+git diff --check
+```
+
+Expected: PASS, and the generated fixture resolves both PDF and image preview packages without warnings or source-template path dependencies.
+
+- [ ] **Step 7: Commit template and agent guidance**
+
+```bash
+git add AGENTS.md init-repo packages/localapp-template
+git commit -m "feat(template): add device actions and media preview guidance"
+```
+
+---
+
+### Task 14: Generate, publish, and exercise two realistic local applications
+
+**Files:**
+- Create: `examples/skill-market/**`
+- Create: `examples/skill-market/ACCEPTANCE.md`
+- Create: `examples/resume-manager/**`
+- Create: `examples/resume-manager/ACCEPTANCE.md`
+- Create: `packages/server/tests/e2e-unified/real-apps.spec.ts`
+- Create: `packages/server/tests/e2e-unified/fixtures/fixture-skill/SKILL.md`
+- Create: `packages/server/tests/e2e-unified/fixtures/portrait.png`
+- Create: `packages/server/tests/e2e-unified/fixtures/resume.pdf`
+- Modify: `package.json`
+- Modify: `pnpm-workspace.yaml`
+- Modify: `pnpm-lock.yaml`
+
+**Interfaces:**
+- Both applications originate from the real builtin `localapp init` template and are installed through the formal package installer; they are not test-only static HTML fixtures.
+- The SKILL marketplace calls only generic SDK `device.run()` and installs the fixture into `<repo>/tmp/unified-acceptance/installed-skills/<skill-name>` on the computer where the user clicks.
+- The resume manager uses Named SQL and the upload API, previews uploaded images and PDFs, and downloads the original bytes through authenticated application APIs.
+- Produces `pnpm test:real-apps` for deterministic non-Browser setup and assertions.
+
+- [ ] **Step 1: Write failing real-application acceptance tests**
+
+```ts
+test("skill market publishes a narrowly scoped local install action", async () => {
+  const action = await createSkillInstallAction(skillMarket, installRoot);
+  expect(action.permissions.filesystemWrite).toEqual([installRoot]);
+  expect(action.permissions.childProcess).toBe(false);
+  expect(action.activationUrl).toMatch(/^localapp:\/\/action\//);
+});
+
+test("resume manager preserves upload, preview, and download bytes", async () => {
+  const image = await uploadResumeAsset("portrait.png");
+  const pdf = await uploadResumeAsset("resume.pdf");
+  expect(await download(image)).toEqual(fixtureBytes("portrait.png"));
+  expect(await download(pdf)).toEqual(fixtureBytes("resume.pdf"));
+});
+```
+
+- [ ] **Step 2: Run real-application tests and verify RED**
+
+Run: `pnpm test:real-apps`
+
+Expected: FAIL because neither generated application nor its end-to-end contract exists.
+
+- [ ] **Step 3: Generate and implement the SKILL marketplace application**
+
+Initialize from the builtin template into `examples/skill-market`, then use the generated skills and `AGENTS.md` while implementing. Provide catalog cards, SKILL detail, selected install root, exact permission disclosure, install state, action result, and failure recovery. The install script validates a bounded relative SKILL name, creates the selected directory, writes the fixture `SKILL.md` atomically, and returns installed paths and digest. It never assumes Codex, Claude, or another target tool in Server code.
+
+- [ ] **Step 4: Generate and implement the resume manager application**
+
+Initialize from the builtin template into `examples/resume-manager`, then implement resume records, upload controls, authenticated image/PDF retrieval, inline image lightbox, PDF page preview, original-file download, replacement, deletion, loading/error/empty states, and durable metadata through Named SQL. Include tiny deterministic image and PDF fixtures whose license permits repository inclusion.
+
+- [ ] **Step 5: Build, package, and install both applications locally**
+
+Start two clean loopback Servers below `<repo>/tmp/unified-acceptance`: a source Web Server and the current-computer Server supervised through the native bridge contract. Initialize administrators, build both applications, install their `.localapp` packages on the source, and record formal URLs from Server responses. Do not hand-edit installed files or use raw `/serve/` routes as the product URL.
+
+- [ ] **Step 6: Exercise nonvisual contracts and persist reproducible fixtures**
+
+Use the source APIs to create an install action and the local control endpoint to claim it; explicitly grant the first publisher as local admin; assert the fixture SKILL bytes appear only below the selected repository-local target. Upload image/PDF fixtures to the resume manager, assert database metadata, content type, byte-for-byte download, authorization boundaries, and deletion. Leave Browser-only assertions for Task 15.
+
+- [ ] **Step 7: Run both application suites and commit**
+
+Run:
+
+```bash
+pnpm -C examples/skill-market test
+pnpm -C examples/skill-market build
+pnpm -C examples/resume-manager test
+pnpm -C examples/resume-manager build
+pnpm test:real-apps
+git diff --check
+```
+
+Expected: PASS; both packages are installed and usable through formal local application URLs, while generated runtime state remains ignored below `tmp/`.
+
+```bash
+git add examples packages/server/tests/e2e-unified package.json pnpm-lock.yaml pnpm-workspace.yaml
+git commit -m "feat(examples): add skill market and resume manager"
+```
+
+---
+
+### Task 15: Run cross-distribution acceptance and Browser self-verification
 
 **Files:**
 - Create: `packages/server/tests/e2e-unified/two-peer.spec.ts`
 - Create: `packages/server/tests/e2e-unified/studio-task.spec.ts`
 - Create: `packages/server/tests/e2e-unified/tray-artifact.node-test.mjs`
+- Create: `packages/server/tests/e2e-unified/device-action-bridge.spec.ts`
+- Create: `docs/verification/2026-08-10-unified-local-acceptance.md`
 - Modify: `playwright.config.ts`
 - Modify: `package.json`
 
 **Interfaces:**
 - Consumes the packaged Node Server and packaged tray Server artifact.
-- Produces `pnpm test:unified-acceptance`.
+- Consumes the two applications from Task 14.
+- Produces `pnpm test:unified-acceptance` and a checked local Browser acceptance record.
 
 - [ ] **Step 1: Write failing packaged-artifact acceptance tests**
 
-The tests must start two clean Server artifacts, complete first-admin setup for each, create target API keys, install an application on source, configure the target peer, run application-only sync, seed divergent target data, run data sync, and assert users/platform data remain independent.
+The tests must start two clean Server artifacts below `<repo>/tmp`, complete first-admin setup for each, create target API keys, install an application on source, configure the target peer, run application-only sync, seed divergent target data, run data sync, and assert users/platform data remain independent. They also launch the packaged native bridge's Server artifact, inject a versioned Scheme ticket through its Rust forwarding boundary, and assert exactly one local Device Action result reaches the source.
 
 ```ts
 test("two clean packaged peers synchronize code and explicitly replace data", async ({ page }) => {
@@ -984,7 +1330,7 @@ Expected: FAIL until every packaged route, Web page, and distribution artifact i
 
 - [ ] **Step 3: Fix only integration gaps exposed by acceptance tests**
 
-Do not add compatibility adapters. Correct package paths, static Web routes, readiness output, cookie/public URL behavior, synchronization progress, and tray artifact selection in the owning modules from prior tasks.
+Do not add compatibility adapters. Correct package paths, static Web routes, readiness output, cookie/public URL behavior, synchronization progress, Device Action handoff, and tray artifact selection in the owning modules from prior tasks.
 
 - [ ] **Step 4: Run the full automated verification matrix**
 
@@ -1001,31 +1347,48 @@ cargo test --manifest-path packages/cli/Cargo.toml
 cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml
 pnpm -C packages/desktop test
 pnpm test:unified-acceptance
+pnpm test:real-apps
 pnpm -r build
 git diff --check
 ```
 
 Expected: every command exits `0` with no unexpected warnings or skipped required suites.
 
-- [ ] **Step 5: Perform application-in-Browser self-verification**
+- [ ] **Step 5: Verify the complete SKILL marketplace flow in the application Browser**
 
-Start the packaged Server under `<repo>/tmp/unified-acceptance`, initialize the first admin, install the fixture application, and use the `browser:control-in-app-browser` skill to verify the Web home, Studio, tasks, peers, users, and the formal application URL. Confirm loaded module resources use `/serve/<owner>/<app>/`, application content renders, and browser error/warn logs are empty. Stop both packaged Servers and remove only the generated acceptance subdirectories after verification.
+Start the packaged source Server and native bridge locally under `<repo>/tmp/unified-acceptance`. Use the explicitly required `browser:control-in-app-browser` skill, read its in-app Browser documentation once, and interact only through visible/semantic Browser state. Log in, open the formal SKILL marketplace URL, inspect a SKILL, click install, follow the `localapp://` activation, approve first-publisher trust in the local Server Web page, and observe success in the source page. Assert the expected `SKILL.md` exists below `<repo>/tmp/unified-acceptance/installed-skills` with the expected digest, a repeated identical action does not re-prompt, and an expanded permission does re-prompt. Capture page state and check browser errors/warnings after each major transition.
 
-- [ ] **Step 6: Verify the destructive-removal boundary**
+- [ ] **Step 6: Verify resume upload, previews, and download in the application Browser**
+
+Using the same in-app Browser and formal application URL, open the resume manager, create a resume, upload the deterministic PNG and PDF fixtures, open the image lightbox, navigate/render the PDF preview, download both originals into `<repo>/tmp/unified-acceptance/downloads`, and compare their bytes with the fixtures. Refresh and log in again to prove metadata and content persist. Verify replacement/deletion and an unauthorized file request. Confirm there is no blank page, failed module request, uncaught exception, or browser error/warn log.
+
+- [ ] **Step 7: Verify the Server Web control plane and two-peer synchronization in the application Browser**
+
+Use the in-app Browser to verify first setup, login, users, applications, Studio, task execution, peers, application-only sync, explicit app-plus-data confirmation, backup/rollback status, Device Action history/trust revocation, and LAN setting presentation. Confirm application resources load under `/serve/<owner>/<app>/` while navigation uses `/<owner>/<app>/`. Re-run both apps after synchronization.
+
+- [ ] **Step 8: Verify the destructive-removal boundary**
 
 Run:
 
 ```bash
 test ! -e packages/local-runtime
 test ! -d packages/desktop/src
-rg -n "@localapp/local-runtime|localapp-local-runtime|localapp local install|Commands::Upload" packages pnpm-workspace.yaml README.md init-repo scripts --glob '!**/tests/**'
+rg -n "@localapp/local-runtime|localapp-local-runtime|localapp local install|Commands::Upload|MiniServer|localapp upload" packages pnpm-workspace.yaml README.md init-repo scripts AGENTS.md --glob '!**/tests/**'
 ```
 
 Expected: the first two checks succeed and `rg` returns no production references. Historical specifications/plans and deletion assertions in tests are intentionally outside this production scan.
 
-- [ ] **Step 7: Commit acceptance coverage and final integration fixes**
+- [ ] **Step 9: Request final code review and resolve every finding**
+
+Request a fresh, most-capable reviewer over the complete design, plan, commit range, two packaged distributions, Device Action threat boundary, sync rollback behavior, and both application journeys. For each actionable finding, write a reproducing test first, apply the smallest owning-module fix, rerun the focused and full matrices, and repeat review until no findings remain.
+
+- [ ] **Step 10: Commit acceptance coverage and final integration fixes**
 
 ```bash
 git add -A
 git commit -m "test: verify unified server distributions end to end"
 ```
+
+- [ ] **Step 11: Stop local processes and preserve the acceptance record**
+
+Stop both packaged Servers and the native bridge gracefully. Keep committed source fixtures and the Browser acceptance record; remove only generated runtime subdirectories below `<repo>/tmp/unified-acceptance` after byte comparisons and log capture are complete. Never touch unrelated user content already present under `tmp/`.
