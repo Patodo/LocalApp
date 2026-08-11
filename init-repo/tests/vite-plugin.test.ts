@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 // @ts-ignore - .mjs file has no type declarations
 import { buildDevServer, buildProxy, localapp } from "../runtime/vite-plugin.mjs";
 
@@ -12,9 +12,17 @@ type VitePlugin = {
   config?: (userConfig: any, env?: { command?: string }) => any;
 };
 
-function getLocalAppworkPlugin(options: { command?: "serve" | "build" } = {}): VitePlugin {
+const TEST_DEV_CONFIG = {
+  serverUrl: "http://127.0.0.1:43127",
+  apiKey: "test-key",
+  userId: "testuser",
+  pageName: "demo",
+  appServerPort: 5182,
+};
+
+function getLocalAppworkPlugin(options: { command?: "serve" | "build"; devConfig?: Record<string, unknown> } = {}): VitePlugin {
   // @ts-ignore - localapp accepts vite UserConfig-style options
-  const plugins = localapp(options);
+  const plugins = localapp({ ...options, devConfig: options.devConfig ?? TEST_DEV_CONFIG });
   return plugins.find((p: VitePlugin) => p.name === "localapp-runtime");
 }
 
@@ -33,6 +41,24 @@ function applyProxyRequest(proxyConfig: any, method: string, url: string) {
   };
   proxyRequestHandler!(proxyReq, { method, url });
   return { headers, path: proxyReq.path };
+}
+
+function matchingProxy(config: any, requestPath: string) {
+  for (const [context, proxyConfig] of Object.entries(config.proxy)) {
+    const matches = context.startsWith("^")
+      ? new RegExp(context).test(requestPath)
+      : requestPath.startsWith(context);
+    if (matches) return proxyConfig as any;
+  }
+  throw new Error(`No proxy matched ${requestPath}`);
+}
+
+function matchingProxyIndex(config: any, requestPath: string) {
+  return Object.keys(config.proxy).findIndex((context) => (
+    context.startsWith("^")
+      ? new RegExp(context).test(requestPath)
+      : requestPath.startsWith(context)
+  ));
 }
 
 describe("vite-plugin DevShell virtual module injection", () => {
@@ -173,126 +199,153 @@ describe("vite-plugin dev auth injection", () => {
     expect(src).toContain("devConfig.apiKey");
   });
 
-  it("buildAuthConfigure returns undefined when apiKey is empty", async () => {
+  it("buildAuthConfigure returns undefined when auth and dev context are both absent", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const src = fs.readFileSync(path.resolve(__dirname, "../runtime/vite-plugin.mjs"), "utf-8");
-    expect(src).toMatch(/if\s*\(\s*!apiKey\s*\)\s*return\s+undefined/);
+    expect(src).toMatch(/if\s*\(\s*!apiKey\s*&&\s*!devConfig\.pageName\s*\)\s*return\s+undefined/);
   });
 });
 
-describe("vite-plugin mini-server routing", () => {
-  it("routes Desktop Action endpoints to the platform and ordinary APIs to the mini-server", () => {
+describe("vite-plugin canonical Server routing", () => {
+  it("routes ordinary APIs and Device Action endpoints to the same local Server", () => {
     const config = buildProxy(
       {
-        serverUrl: "https://prod.example",
+        serverUrl: "http://127.0.0.1:43127",
         apiKey: "test-key",
-        miniServerPort: 5174,
         userId: "testuser",
         pageName: "demo",
       },
-      "https://prod.example",
+      "http://127.0.0.1:43127",
     );
 
-    const desktopActions = config.proxy["/api/desktop-actions"];
-    expect(desktopActions.target).toBe("https://prod.example");
-    expect(config.proxy["/api"].target).toBe("http://127.0.0.1:5174");
+    expect(matchingProxy(config, "/api/device-actions").target).toBe("http://127.0.0.1:43127");
+    expect(matchingProxy(config, "/api/desktop-actions").target).toBe("http://127.0.0.1:43127");
+    expect(config.proxy["/api"].target).toBe("http://127.0.0.1:43127");
+    expect(config.proxy["/api"].rewrite("/api/tasks")).toBe("/serve/testuser/demo/api/tasks");
   });
 
-  it("rewrites only exact POST creation and adds canonical auth headers", () => {
+  it("rewrites only exact POST Device Action creation and adds canonical auth headers", () => {
     const config = buildProxy(
       {
         apiKey: "test-key",
-        miniServerPort: 5174,
         userId: "testuser",
         pageName: "demo",
       },
       "https://prod.example",
     );
-    const desktopActions = config.proxy["/api/desktop-actions"];
+    const deviceActions = matchingProxy(config, "/api/device-actions");
 
     const create = applyProxyRequest(
-      desktopActions,
+      deviceActions,
       "POST",
-      "/api/desktop-actions?source=dev",
+      "/api/device-actions?source=dev",
     );
     expect(create.path).toBe(
-      "/serve/testuser/demo/api/desktop-actions?source=dev",
+      "/serve/testuser/demo/api/device-actions?source=dev",
     );
     expect(create.headers.get("X-API-Key")).toBe("test-key");
     expect(create.headers.get("Referer")).toBe("https://prod.example/testuser/demo/");
 
     for (const [method, path] of [
-      ["GET", "/api/desktop-actions"],
-      ["POST", "/api/desktop-actions/"],
-      ["GET", "/api/desktop-actions/capabilities"],
-      ["GET", "/api/desktop-actions/request-1"],
-      ["GET", "/api/desktop-actions/request-1/events"],
-      ["PATCH", "/api/desktop-actions/request-1/status"],
-      ["POST", "/api/desktop-actions/recover"],
+      ["GET", "/api/device-actions"],
+      ["POST", "/api/device-actions/"],
+      ["GET", "/api/device-actions/capabilities"],
+      ["GET", "/api/device-actions/request-1"],
+      ["GET", "/api/device-actions/request-1/events"],
+      ["PATCH", "/api/device-actions/request-1/status"],
+      ["POST", "/api/device-actions/recover"],
     ]) {
-      const forwarded = applyProxyRequest(desktopActions, method, path);
+      const forwarded = applyProxyRequest(deviceActions, method, path);
       expect(forwarded.path).toBe(path);
       expect(forwarded.headers.get("X-API-Key")).toBe("test-key");
       expect(forwarded.headers.has("Referer")).toBe(false);
     }
   });
 
-  it("routes /api/llm to production server and other /api to mini-server when miniServerPort exists", () => {
+  it("routes global APIs and page APIs to one configured Server", () => {
     const config = buildProxy(
-      { serverUrl: "https://prod.example", apiKey: "test-key", miniServerPort: 5174 },
-      "https://prod.example",
+      { serverUrl: "http://127.0.0.1:43127", apiKey: "test-key", userId: "testuser", pageName: "demo" },
+      "http://127.0.0.1:43127",
     );
 
-    expect(config.proxy["/api/llm"].target).toBe("https://prod.example");
-    expect(config.proxy["/api"].target).toBe("http://127.0.0.1:5174");
-    expect(config.proxy["/api"].rewrite).toBeUndefined();
+    expect(matchingProxy(config, "/api/llm").target).toBe("http://127.0.0.1:43127");
+    expect(matchingProxy(config, "/api/issues").target).toBe("http://127.0.0.1:43127");
+    expect(matchingProxy(config, "/api/platform").target).toBe("http://127.0.0.1:43127");
+    expect(matchingProxy(config, "/api/dev").target).toBe("http://127.0.0.1:43127");
+    expect(config.proxy["/api"].target).toBe("http://127.0.0.1:43127");
+    expect(config.proxy["/api"].rewrite("/api/tasks")).toBe("/serve/testuser/demo/api/tasks");
+    const devContext = applyProxyRequest(matchingProxy(config, "/api/dev/context"), "GET", "/api/dev/context");
+    expect(devContext.path).toBe("/api/dev/context");
+    expect(devContext.headers.get("X-API-Key")).toBe("test-key");
+    expect(devContext.headers.get("X-LocalApp-Dev-Page")).toBe("demo");
+
+    const issues = applyProxyRequest(matchingProxy(config, "/api/issues"), "GET", "/api/issues?pagePath=/testuser/demo/");
+    expect(issues.path).toBe("/api/issues?pagePath=/testuser/demo/");
+    expect(issues.headers.get("X-API-Key")).toBe("test-key");
+
+    const platformUsers = applyProxyRequest(matchingProxy(config, "/api/platform/users"), "GET", "/api/platform/users");
+    expect(platformUsers.path).toBe("/api/platform/users");
+    expect(platformUsers.headers.get("X-API-Key")).toBe("test-key");
   });
 
-  it("routes local app APIs to mini-server even when serverUrl is empty", () => {
+  it("proxies application resource URLs to the canonical Server with dev auth", () => {
     const config = buildProxy(
-      { serverUrl: "", apiKey: "", miniServerPort: 5174 },
-      "",
+      { serverUrl: "http://127.0.0.1:43127", apiKey: "test-key", userId: "testuser", pageName: "demo" },
+      "http://127.0.0.1:43127",
     );
 
-    expect(config.proxy["/api/llm"]).toBeUndefined();
-    expect(config.proxy["/api"].target).toBe("http://127.0.0.1:5174");
-    expect(config.proxy["/api"].rewrite).toBeUndefined();
+    expect(matchingProxy(config, "/serve/testuser/demo/").target).toBe("http://127.0.0.1:43127");
+    const content = applyProxyRequest(
+      matchingProxy(config, "/serve/testuser/demo/api/content/image-key"),
+      "GET",
+      "/serve/testuser/demo/api/content/image-key",
+    );
+    expect(content.path).toBe("/serve/testuser/demo/api/content/image-key");
+    expect(content.headers.get("X-API-Key")).toBe("test-key");
+    expect(content.headers.get("X-LocalApp-Dev-Page")).toBe("demo");
   });
 
-  it("keeps platform exceptions before /api fallback", () => {
+  it("keeps global exceptions before the page API fallback", () => {
     const config = buildProxy(
-      { serverUrl: "https://prod.example", apiKey: "test-key", miniServerPort: 5174 },
-      "https://prod.example",
+      { serverUrl: "http://127.0.0.1:43127", apiKey: "test-key", userId: "testuser", pageName: "demo" },
+      "http://127.0.0.1:43127",
     );
 
-    expect(Object.keys(config.proxy).slice(0, 3)).toEqual([
+    for (const endpoint of [
+      "/api/me",
+      "/api/users",
+      "/api/groups",
       "/api/llm",
+      "/api/issues",
+      "/api/platform",
+      "/api/device-actions",
       "/api/desktop-actions",
-      "/api",
-    ]);
+    ]) {
+      expect(matchingProxyIndex(config, endpoint)).toBeLessThan(Object.keys(config.proxy).indexOf("/api"));
+    }
+    expect(matchingProxy(config, "/api/messages")).toBe(config.proxy["/api"]);
   });
 
-  it("falls back to legacy serverUrl proxy when miniServerPort is missing", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("does not create a local API proxy without a canonical Server URL", () => {
+    expect(buildProxy({ serverUrl: "", apiKey: "", userId: "testuser", pageName: "demo" }, "")).toBeUndefined();
+  });
+
+  it("keeps Device Action creation before the page API fallback", () => {
     const config = buildProxy(
       { serverUrl: "https://prod.example", apiKey: "test-key", userId: "testuser", pageName: "demo" },
       "https://prod.example",
     );
 
-    expect(config.proxy["/api/me"].target).toBe("https://prod.example");
-    expect(config.proxy["/api/desktop-actions"].target).toBe("https://prod.example");
-    expect(config.proxy["/api"].target).toBe("https://prod.example");
-    expect(config.proxy["/api"].rewrite("/api/tasks")).toBe("/serve/testuser/demo/api/tasks");
-    expect(Object.keys(config.proxy).indexOf("/api/desktop-actions")).toBeLessThan(
+    expect(matchingProxyIndex(config, "/api/device-actions")).toBeLessThan(
       Object.keys(config.proxy).indexOf("/api"),
     );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("miniServerPort"));
-    warn.mockRestore();
+    expect(matchingProxyIndex(config, "/api/desktop-actions")).toBeLessThan(
+      Object.keys(config.proxy).indexOf("/api"),
+    );
   });
 
-  it("uses the same exact creation exception in legacy mode", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("uses the same exact creation exception for the legacy alias", () => {
     const config = buildProxy(
       {
         apiKey: "legacy-key",
@@ -301,7 +354,7 @@ describe("vite-plugin mini-server routing", () => {
       },
       "https://prod.example/base",
     );
-    const desktopActions = config.proxy["/api/desktop-actions"];
+    const desktopActions = matchingProxy(config, "/api/desktop-actions");
 
     const create = applyProxyRequest(desktopActions, "POST", "/api/desktop-actions");
     expect(create.path).toBe(
@@ -329,7 +382,6 @@ describe("vite-plugin mini-server routing", () => {
     expect(config.proxy["/api"].rewrite("/api/tasks")).toBe(
       "/serve/owner name/desktop/app/api/tasks",
     );
-    warn.mockRestore();
   });
 });
 
@@ -347,18 +399,40 @@ describe("vite-plugin dependency prebundling", () => {
 });
 
 describe("vite-plugin dev server address", () => {
-  it("uses the CLI-selected app port without discarding user server options", () => {
+  it("fails clearly when canonical Server development configuration is incomplete", () => {
+    expect(() => buildDevServer({})).toThrow(/dev-config\.json.*serverUrl.*userId.*pageName.*apiKey.*appServerPort/i);
+  });
+
+  it("forces the credential-injecting Vite listener to loopback", () => {
     const server = buildDevServer(
-      { serverUrl: "https://prod.example", miniServerPort: 15174, appServerPort: 5182 },
+      TEST_DEV_CONFIG,
       { host: "0.0.0.0", open: false },
     );
 
     expect(server).toMatchObject({
-      host: "0.0.0.0",
+      host: "127.0.0.1",
       open: false,
       port: 5182,
       strictPort: true,
+      allowedHosts: ["localhost", "127.0.0.1"],
     });
-    expect(server.proxy["/api"].target).toBe("http://127.0.0.1:15174");
+    expect(server.proxy["/api"].target).toBe("http://127.0.0.1:43127");
+  });
+
+  it.each([
+    "https://127.0.0.1:43127",
+    "http://localhost:43127",
+    "http://192.0.2.10:43127",
+    "http://user:password@127.0.0.1:43127",
+    "http://127.0.0.1:43127/base",
+    "http://127.0.0.1:43127?target=remote",
+    "http://127.0.0.1:43127#fragment",
+    "http://127.0.0.1:0",
+    "http://127.0.0.1:65536",
+    "http://127.0.0.1",
+  ])("rejects a non-canonical credential proxy target: %s", (serverUrl) => {
+    expect(() => buildDevServer({ ...TEST_DEV_CONFIG, serverUrl })).toThrow(
+      /serverUrl.*http:\/\/127\.0\.0\.1:<nonzero-port>/i,
+    );
   });
 });

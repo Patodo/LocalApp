@@ -42,9 +42,11 @@ describe("Serve edge cases", () => {
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_0"\r\n\r\nindex.html\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_1"\r\n\r\nassets/main.js\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_2"\r\n\r\nassets/main.css\r\n`;
+    body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_3"\r\n\r\nassets/pdf.worker.mjs\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="index.html"\r\nContent-Type: text/html\r\n\r\n${html}\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="main.js"\r\nContent-Type: application/javascript\r\n\r\nconsole.log("hello");\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="main.css"\r\nContent-Type: text/css\r\n\r\nbody { margin: 0; }\r\n`;
+    body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="pdf.worker.mjs"\r\nContent-Type: application/javascript\r\n\r\nexport const workerVersion = "test";\r\n`;
     body += `--${boundary}--\r\n`;
 
     await fetch(`${baseUrl}/api/upload`, {
@@ -71,6 +73,12 @@ describe("Serve edge cases", () => {
 
     it("serves raw non-HTML files with correct MIME type", async () => {
       const res = await fetch(`${baseUrl}/serve/${userId}/${pageName}/assets/main.js`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/javascript");
+    });
+
+    it("serves module worker assets with a JavaScript MIME type", async () => {
+      const res = await fetch(`${baseUrl}/serve/${userId}/${pageName}/assets/pdf.worker.mjs`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toBe("application/javascript");
     });

@@ -6,7 +6,7 @@
 
 ### Requirement: GitHub Release 是客户端发行真源
 
-每个正式版本 SHALL 通过 GitHub Release 发布受支持平台的 CLI、Windows Desktop、`SHA256SUMS` 和 `release-manifest.json`。公开源码仓库 MUST NOT 跟踪这些发行二进制。
+每个正式版本 SHALL 通过 GitHub Release 发布受支持平台的 CLI、可选原生托盘桥接器、`SHA256SUMS` 和 `release-manifest.json`。公开源码仓库 MUST NOT 跟踪这些发行二进制。
 
 #### Scenario: 发布正式版本
 - **WHEN** 维护者推送符合发行规则的版本 tag
@@ -19,12 +19,12 @@
 
 #### Scenario: 清单覆盖发行资产
 - **WHEN** release workflow 准备发布资产
-- **THEN** 每个 CLI 和 Desktop 资产在清单中恰有一个匹配条目
+- **THEN** 每个 CLI 和原生托盘桥接器资产在清单中恰有一个匹配条目
 - **AND** 文件大小和 SHA-256 与实际资产一致
 
 ### Requirement: Server 镜像发布到 GHCR
 
-正式 Server 镜像 SHALL 使用版本 tag 和不可变 commit SHA tag 推送到 GHCR。镜像 MUST NOT 包含 registration key 或跨平台 CLI/Desktop 发行二进制。
+正式 Server 镜像 SHALL 使用版本 tag 和不可变 commit SHA tag 推送到 GHCR。镜像 MUST NOT 包含 registration key 或跨平台 CLI/托盘发行二进制。
 
 #### Scenario: 构建正式镜像
 - **WHEN** release workflow 构建 Server 镜像

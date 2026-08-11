@@ -1,161 +1,126 @@
 ## Purpose
 
-This spec describes the expected behavior, acceptance criteria, and integration boundaries for the server-config capability in LocalApp.
+定义所有部署形态共享的 canonical Server 配置、秘密文件、回环默认值和安全网络重绑定。
 
 ## Requirements
 
-### Requirement: 服务器配置下发端点
+### Requirement: 一套 Server 配置模型服务所有部署
 
-服务器 SHALL 提供 `GET /api/config` 端点（需鉴权），返回 `templateRepoUrl` 和 `gitDownloadUrl`（可选）。配置来源 SHALL 为环境变量 > config.toml > 默认值的合并结果。
+Node 包、可选托盘桥接器、局域网主机、容器和公网部署 SHALL 使用同一 `ServerConfig`。配置 SHALL 包含 data directory、listen host/port、public URL、workspace directory、JWT key file、master key file、存储 provider、外部工具与运行预算。部署形态只能改变配置值，不得选择另一套应用服务实现。
 
-#### Scenario: 获取配置
-- **WHEN** 发送 `GET /api/config`（携带有效 API Key）
-- **THEN** 返回 `{"templateRepoUrl": "...", "gitDownloadUrl": "..." | null}`，HTTP 200
+#### Scenario: 新 Server 使用默认配置
 
-#### Scenario: 未鉴权
-- **WHEN** 发送 `GET /api/config`（无 API Key 或无效 Key）
-- **THEN** 返回 `{"error": "Unauthorized"}`，HTTP 401
+- **WHEN** `localapp-server start` 在新 data directory 启动且没有监听覆盖
+- **THEN** Server SHALL 监听 `127.0.0.1`
+- **AND** SHALL 使用该 data directory 下的数据库、应用、内容和 workspace 根
 
-### Requirement: TEMPLATE_REPO_URL 环境变量为必配项
+#### Scenario: 托盘启动 Server
 
-服务器 SHALL 在启动时将 `TEMPLATE_REPO_URL` 作为可选配置项处理。未配置时，服务器 SHALL 正常启动，`GET /api/config` 端点返回空字符串作为 `templateRepoUrl` 字段值。使用远程模板克隆功能（如 `init` 命令的非 builtin 模式）时，若 `TEMPLATE_REPO_URL` 未配置，服务端 SHALL 返回明确的错误信息。
+- **WHEN** 可选托盘桥接器启动其 bundled Server
+- **THEN** bundled Server SHALL 读取同一配置模型
+- **AND** 应用 API 和 Web control plane SHALL 与直接 Node 启动一致
 
-#### Scenario: 未配置 TEMPLATE_REPO_URL
-- **WHEN** 服务器启动时 `TEMPLATE_REPO_URL` 环境变量未设置且 config.toml 中 `template.repo_url` 为空或未配置
-- **THEN** 服务器正常启动，`GET /api/config` 返回 `{"templateRepoUrl": "", "gitDownloadUrl": null}`
+### Requirement: 配置来源与优先级
 
-#### Scenario: 已配置 TEMPLATE_REPO_URL（通过环境变量）
-- **WHEN** 服务器启动时 `TEMPLATE_REPO_URL` 环境变量已设置为有效 Git 仓库 URL
-- **THEN** 正常启动，`/api/config` 返回该 URL
+Server SHALL 先解析 `DATA_DIR`，再读取 data directory 中的持久配置。管理员可修改的公开设置 SHALL 持久化到 `server.json`；其它部署设置 MAY 从 `config.toml` 读取。显式环境变量 SHALL 覆盖持久值，持久值 SHALL 覆盖内置默认值。无效配置 SHALL fail fast 并报告文件路径或字段，不得输出秘密值。
 
-#### Scenario: 已配置 TEMPLATE_REPO_URL（通过 config.toml）
-- **WHEN** 服务器启动时 config.toml 中 `template.repo_url` 已设置为有效 Git 仓库 URL
-- **THEN** 正常启动，`/api/config` 返回该 URL
+#### Scenario: 环境变量覆盖持久监听端口
 
-#### Scenario: CLI 收到空 templateRepoUrl 时回退到内置模板
-- **WHEN** `GET /api/config` 返回 `templateRepoUrl` 为空字符串且 CLI 执行 `init`（非 builtin 模式）
-- **THEN** CLI 自动回退到内置模板，正常完成项目初始化
+- **WHEN** `LISTEN_PORT` 与 `server.json.listenPort` 同时存在
+- **THEN** Server SHALL 使用环境变量端口
 
-### Requirement: 服务器从 config.toml 加载配置
+#### Scenario: 配置文件不存在
 
-服务器 SHALL 在启动时从 `{DATA_DIR}/config.toml` 读取 TOML 格式的配置文件。若文件不存在，SHALL 使用内置默认值继续运行。
+- **WHEN** 新 data directory 没有 `server.json` 或 `config.toml`
+- **THEN** Server SHALL 使用安全默认值正常进入 setup-only 状态
 
-#### Scenario: config.toml 存在且有效
-- **WHEN** `{DATA_DIR}/config.toml` 存在且包含有效的 TOML 内容
-- **THEN** 服务器使用 config.toml 中的值作为配置（未被环境变量覆盖的部分）
+#### Scenario: 配置文件无效
 
-#### Scenario: config.toml 不存在
-- **WHEN** `{DATA_DIR}/config.toml` 不存在
-- **THEN** 服务器使用内置默认值正常启动，不报错
+- **WHEN** 持久配置无法解析或字段越界
+- **THEN** Server SHALL 在监听前退出并输出结构化错误
 
-#### Scenario: config.toml 格式无效
-- **WHEN** `{DATA_DIR}/config.toml` 存在但 TOML 格式无效
-- **THEN** 服务器输出错误信息并拒绝启动，错误信息 SHALL 包含文件路径和解析失败原因
+### Requirement: data directory 和 workspace 边界
 
-### Requirement: 配置优先级为环境变量 > config.toml > 默认值
+`DATA_DIR` SHALL 在读取其它配置前确定。相对 `workspaceDir` SHALL 解析到该 data directory 内，绝对路径、`..` 穿越和 symlink escape SHALL 被拒绝。Web Studio SHALL 只访问 `<data-dir>/<workspaceDir>/<workspace-id>`。
 
-服务器 SHALL 对每个配置项按以下优先级查找：环境变量 > config.toml 中的对应字段 > 内置默认值。找到第一个非空值即使用。对于布尔配置项，环境变量值 `"true"` / `"false"` 字符串 SHALL 转换为布尔值。
+#### Scenario: 合法 workspace 设置
 
-`allow_register`、`registration_key` 和 `auto_register_pattern` 配置项 SHALL NOT 参与运行时行为。服务器读取旧 config.toml 中的这些字段时 SHALL 忽略并输出一次不含字段值的弃用警告。
+- **WHEN** `workspaceDir` 为 `workspaces`
+- **THEN** Server SHALL 使用 `<data-dir>/workspaces`
 
-#### Scenario: 环境变量覆盖 config.toml
-- **WHEN** 环境变量 `PORT=4000` 且 config.toml 中 `server.port = 3000`
-- **THEN** 服务器监听端口 4000
+#### Scenario: workspace 越界
 
-#### Scenario: config.toml 覆盖默认值
-- **WHEN** 环境变量 `PORT` 未设置且 config.toml 中 `server.port = 4000`
-- **THEN** 服务器监听端口 4000
+- **WHEN** 配置尝试把 workspace 指向 data directory 外
+- **THEN** Server SHALL 拒绝配置且不创建越界目录
 
-#### Scenario: 使用内置默认值
-- **WHEN** 环境变量 `PORT` 未设置且 config.toml 中未配置 `server.port`
-- **THEN** 服务器监听端口 3000（内置默认值）
+### Requirement: Server 自动生成实例秘密
 
-#### Scenario: 环境变量覆盖 admin_default_password
-- **WHEN** 环境变量 `ADMIN_DEFAULT_PASSWORD=mypassword` 且 config.toml 中未配置 `auth.admin_default_password`
-- **THEN** bootstrap admin 默认密码为 `mypassword`
-- **AND** 普通用户创建和密码重置不使用该值
+未显式提供 JWT secret 时，Server SHALL 在 `jwtKeyFile` 一次性生成高熵签名密钥；peer credential 和其它受保护数据 SHALL 使用独立 `masterKeyFile`。Unix 上秘密文件 SHALL 使用限制权限。系统设置 API、日志和 readiness SHALL NOT 返回这些秘密。
 
-#### Scenario: 旧自动注册配置被忽略
-- **WHEN** 旧配置包含 `AUTO_REGISTER_PATTERN`、`auth.auto_register_pattern` 或 `registration_key`
-- **THEN** 服务器忽略这些值并正常启动
-- **AND** 输出一次不包含配置值的弃用警告
+#### Scenario: clean start 生成密钥
 
-### Requirement: DATA_DIR 的确定先于配置文件读取
+- **WHEN** 新 data directory 中没有 JWT 或 master key 文件
+- **THEN** Server SHALL 创建两个独立秘密文件
+- **AND** 后续重启 SHALL 复用它们
 
-服务器 SHALL 先从环境变量 `DATA_DIR` 或默认值 `"./data"` 确定数据目录，再从该目录读取 config.toml。config.toml 中的 `server.data_dir` 字段 SHALL NOT 影响已确定的 DATA_DIR。
+#### Scenario: Web 查询系统设置
 
-#### Scenario: config.toml 中配置了不同的 data_dir
-- **WHEN** 环境变量 `DATA_DIR` 未设置（使用默认 `./data`），且 config.toml 中 `server.data_dir = "/other/data"`
-- **THEN** 服务器使用 `./data` 作为数据目录，忽略 config.toml 中的 `server.data_dir`
+- **WHEN** admin 请求系统设置
+- **THEN** 响应 SHALL 包含公开监听、URL 和 workspace 配置
+- **AND** SHALL NOT包含 JWT、master key、存储凭据或 Device control token
 
-### Requirement: 统一配置模块消除硬编码重复
+### Requirement: clean setup 不由配置创建固定用户
 
-服务器 SHALL 通过统一的配置模块（`lib/config.ts`）提供所有配置项的读取，各路由和插件 SHALL NOT 直接调用 `process.env` 读取配置。`DATA_DIR` 默认值 `"./data"` SHALL 只在配置模块中出现一次。
+Server 配置 SHALL NOT包含默认管理员用户名或密码，也 SHALL NOT在启动时自动创建固定用户。`BOOTSTRAP_API_KEY` MAY 作为自动化输入，在 setup 成功时绑定给用户提交的首位管理员；没有成功 setup 时不得产生用户或 API Key。
 
-#### Scenario: 路由读取配置
-- **WHEN** 任何路由或插件需要获取 `DATA_DIR` 配置
-- **THEN** 通过 `app.config.DATA_DIR` 或配置模块提供的接口获取，不直接读 `process.env.DATA_DIR`
+#### Scenario: 配置 bootstrap API Key 后启动空 Server
 
-### Requirement: 必填配置项缺少时的友好错误提示
+- **WHEN** 新 Server 设置 `BOOTSTRAP_API_KEY`
+- **THEN** Server SHALL 仍保持零用户并发布 setup URL
+- **AND** setup 创建的管理员 SHALL 获得该 API Key
 
-服务器 SHALL 在启动时检查必填配置项。若缺少，SHALL 输出错误信息指明配置方式和格式，然后拒绝启动。`TEMPLATE_REPO_URL` 不属于必填配置项。
+#### Scenario: setup 用户名由操作者决定
 
-#### Scenario: TEMPLATE_REPO_URL 未通过任何方式配置
-- **WHEN** 环境变量 `TEMPLATE_REPO_URL` 未设置且 config.toml 中 `template.repo_url` 为空或未配置
-- **THEN** 服务器正常启动（不报错、不退出）
+- **WHEN** setup 提交用户名 `owner`
+- **THEN** Server SHALL 创建 `owner`
+- **AND** SHALL NOT派生或创建固定名称管理员
 
-#### Scenario: TEMPLATE_REPO_URL 通过 config.toml 配置
-- **WHEN** 环境变量 `TEMPLATE_REPO_URL` 未设置但 config.toml 中 `template.repo_url = "https://example.com/template"`
-- **THEN** 服务器正常启动
+### Requirement: LAN 访问必须显式启用
 
-### Requirement: config.toml 配置文件格式
+非 loopback listener SHALL 要求管理员显式设置 `allowInsecureLan` 或采用 HTTPS/可信反向代理配置。Web 网络设置变更 SHALL 先验证候选地址、持久化 pending 配置、响应请求，再由 supervisor 重启 worker；新 listener 失败 SHALL 回滚旧配置。
 
-config.toml SHALL 支持以下结构：
+#### Scenario: 未确认 LAN 监听
 
-```toml
-[server]
-port = 3000
-data_dir = "./data"
+- **WHEN** 管理员尝试把 host 改为 `0.0.0.0` 但未确认 insecure LAN
+- **THEN** Server SHALL 拒绝保存
 
-[auth]
-jwt_secret = ""
-bootstrap_api_key = ""
-admin_default_password = "localadmin"
+#### Scenario: 重绑定成功
 
-[template]
-repo_url = ""
-git_download_url = ""
+- **WHEN** 候选地址可监听且管理员确认
+- **THEN** API SHALL 返回 202
+- **AND** supervisor SHALL 重启 worker 并提交新配置
 
-[admin]
-static_dir = ""
+#### Scenario: 重绑定失败
 
-[cli]
-min_version = ""
-release_manifest_url = ""
-```
+- **WHEN** 新 worker 无法监听候选地址
+- **THEN** supervisor SHALL 恢复先前配置和 listener
 
-所有字段均为可选，缺失字段使用内置默认值。`allow_register`、`registration_key` 和 `auto_register_pattern` 字段 SHALL NOT 作为有效配置存在。
+### Requirement: 配置下发端点不暴露秘密
 
-#### Scenario: 部分字段配置
-- **WHEN** config.toml 只包含 `[server]` 和 `[auth]` 部分
-- **THEN** `[template]`、`[admin]`、`[cli]` 部分使用内置默认值
+认证后的 `GET /api/config` MAY 返回应用初始化所需的 `templateRepoUrl` 与 `gitDownloadUrl`。未配置模板仓库时 SHALL 返回空值，CLI SHALL 回退 builtin template。该端点 SHALL NOT返回 Server secret、用户 API Key 或存储凭据。
 
-#### Scenario: auth 字段缺失
-- **WHEN** config.toml 中 `[auth]` 部分未配置 `admin_default_password`
-- **THEN** bootstrap admin 使用现有 `admin_default_password` 默认值
+#### Scenario: templateRepoUrl 为空
 
-#### Scenario: 配置发行清单
-- **WHEN** 环境变量 `LOCALAPP_RELEASE_MANIFEST_URL` 或 config.toml 的 `cli.release_manifest_url` 设置为 HTTPS URL
-- **THEN** Server 使用环境变量优先级解析后的 URL 获取 CLI 发行清单
+- **WHEN** Server 未配置模板仓库
+- **THEN** `/api/config` SHALL 返回空 `templateRepoUrl`
+- **AND** CLI init SHALL 使用内置模板
 
-### Requirement: CLI 支持 LOCALAPP_CONFIG_DIR 环境变量
+### Requirement: CLI 配置目录可隔离
 
-CLI SHALL 支持环境变量 `LOCALAPP_CONFIG_DIR` 覆盖默认的配置目录 `~/.localapp/work/`。设置后，CLI 从 `{LOCALAPP_CONFIG_DIR}/config.json` 读取配置。
+`LOCALAPP_CONFIG_DIR` SHALL 覆盖 CLI 默认配置目录，使测试和本地验收可把 profile 凭据放在仓库 `tmp/` 的明确子目录。
 
-#### Scenario: LOCALAPP_CONFIG_DIR 已设置
-- **WHEN** 环境变量 `LOCALAPP_CONFIG_DIR=/tmp/qw-config`
-- **THEN** CLI 从 `/tmp/qw-config/config.json` 读取 server_url 和 api_key
+#### Scenario: 使用仓库内临时配置
 
-#### Scenario: LOCALAPP_CONFIG_DIR 未设置
-- **WHEN** 环境变量 `LOCALAPP_CONFIG_DIR` 未设置
-- **THEN** CLI 从 `~/.localapp/work/config.json` 读取配置（现有行为不变）
+- **WHEN** 设置 `LOCALAPP_CONFIG_DIR=<repo>/tmp/acceptance/cli-config`
+- **THEN** CLI SHALL 只在该目录读取和写入连接配置
+- **AND** 用户默认配置 SHALL 保持不变

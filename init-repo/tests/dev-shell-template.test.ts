@@ -193,7 +193,7 @@ describe("dev-shell template", () => {
     expect(devShell).toContain("cursor-col-resize");
   });
 
-  it("数据和诊断分区接入 mini-server dev-only API", () => {
+  it("数据和诊断分区接入统一 Server 的 dev-only API", () => {
     const devShell = readTemplateFile("runtime/dev-shell.tsx");
     expect(devShell).toContain("localapp:platform_request");
     expect(devShell).toContain("localapp:platform_response");
@@ -207,6 +207,8 @@ describe("dev-shell template", () => {
     expect(devShell).toContain("/api/dev/data/snapshots");
     expect(devShell).toContain("/api/dev/diagnostics/requests");
     expect(devShell).toContain("/api/dev/business");
+    expect(devShell).toContain("重置应用数据");
+    expect(devShell).not.toContain("重置 dev.db");
   });
 
   it("DevShell 在当前页面接管登录请求并打开身份选择", () => {
@@ -463,7 +465,7 @@ describe("dev-shell template", () => {
     expect(devShell).toContain('issue?.labels?.map((label) => label.id) ?? []');
   });
 
-  it("DevShell Issue 详情从 mini-server 加载 GitHub 风格 Markdown 时间线", () => {
+  it("DevShell Issue 详情从统一 Server 加载 GitHub 风格 Markdown 时间线", () => {
     const devShell = readTemplateFile("runtime/dev-shell.tsx");
 
     expect(devShell).toContain("interface DevIssueDetail");

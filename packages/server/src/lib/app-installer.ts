@@ -32,6 +32,11 @@ import {
 import { CURRENT_PLATFORM_VERSION } from "./platform-version.js";
 import { countFiles, getDirectorySize, removeDirRecursive } from "./file-utils.js";
 import {
+  ensureVersionMigrationSnapshot,
+  materializeVersionMigrationSnapshot,
+  VersionMigrationSnapshotError,
+} from "./app-version-migrations.js";
+import {
   getPageDir,
   getPageMetaPath,
   readPageMeta,
@@ -196,6 +201,7 @@ async function installInspectedPackage(
   if (existing?.status === "needs-migration-repair") {
     throw new AppInstallError("APP_MIGRATION_REPAIR_REQUIRED", "App is marked needs-migration-repair. Repair platform migrations before installing.", 409);
   }
+  if (existing) await backfillRetainedVersionMigrationSnapshots(pageDir, existing);
   const knownIdentity = existing?.packageIdentities?.[inspected.version];
   const matchingVersion = existing?.versions.find((entry) => entry.appVersion === inspected.version);
   const knownDigest = matchingVersion?.digest ?? knownIdentity?.digest;
@@ -258,7 +264,7 @@ async function installInspectedPackage(
       ? JSON.parse(previousManifest.toString("utf8")) as Record<string, unknown>
       : null;
     await extractAppPackage(inspected, extractedDir);
-    materializeStagedVersion(extractedDir, stagedVersionDir, sourceManifest);
+    materializeStagedVersion(extractedDir, stagedVersionDir, sourceManifest, inspected);
     const parsed = validateStagedApplication(stagedVersionDir, sourceManifest, inspected.metadata.platformVersion);
     const baseMeta = existing ?? createEmptyMeta(inspected.name, input.ownerId);
     const platformManifest = readManifestState(pageDir, baseMeta).platformManifest;
@@ -722,19 +728,24 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function activateVersionLocked(
+async function activateVersionLocked(
   dataDir: string,
   pageDir: string,
   meta: PageMeta,
   localVersion: number,
   recordPrevious: boolean,
-): ActivationOutcome {
+): Promise<ActivationOutcome> {
   const target = meta.versions.find((entry) => entry.version === localVersion);
   if (!target || !target.appVersion || !target.digest) {
     throw new AppInstallError("APP_VERSION_NOT_FOUND", `Application version ${localVersion} was not found`, 404);
   }
   const versionDir = path.join(pageDir, "versions", `v${localVersion}`);
   assertVersionHealthy(versionDir);
+  if (target.packagePath) {
+    await ensureVersionMigrationSnapshot(pageDir, meta.name, target).catch((error) => {
+      throw asInstallMigrationError(error, meta.name, localVersion);
+    });
+  }
   const sourceManifest = target.manifest ?? readManifestState(pageDir, meta).sourceManifest;
   const effectiveManifest = mergeManifests(sourceManifest, readManifestState(pageDir, meta).platformManifest);
   const updated = materializeManifest(meta, effectiveManifest);
@@ -757,7 +768,12 @@ function activateVersionLocked(
   };
 }
 
-function materializeStagedVersion(extractedDir: string, stagedVersionDir: string, manifest: Record<string, unknown>): void {
+function materializeStagedVersion(
+  extractedDir: string,
+  stagedVersionDir: string,
+  manifest: Record<string, unknown>,
+  inspected: InspectedAppPackage,
+): void {
   const distDir = path.join(extractedDir, "dist");
   assertVersionHealthy(distDir);
   fs.mkdirSync(stagedVersionDir, { recursive: true });
@@ -768,7 +784,27 @@ function materializeStagedVersion(extractedDir: string, stagedVersionDir: string
     const source = path.join(extractedDir, root);
     if (fs.existsSync(source)) fs.cpSync(source, path.join(stagedVersionDir, root), { recursive: true });
   }
+  materializeVersionMigrationSnapshot(extractedDir, stagedVersionDir, inspected);
   assertVersionHealthy(stagedVersionDir);
+}
+
+async function backfillRetainedVersionMigrationSnapshots(pageDir: string, meta: PageMeta): Promise<void> {
+  for (const version of meta.versions) {
+    if (!version.appVersion || !version.digest || !version.packagePath) continue;
+    try {
+      await ensureVersionMigrationSnapshot(pageDir, meta.name, version);
+    } catch (error) {
+      throw asInstallMigrationError(error, meta.name, version.version);
+    }
+  }
+}
+
+function asInstallMigrationError(error: unknown, appName: string, localVersion: number): AppInstallError {
+  if (error instanceof AppInstallError) return error;
+  const message = error instanceof VersionMigrationSnapshotError
+    ? error.message
+    : `Cannot prepare migrations for application ${appName} version ${localVersion}: ${error instanceof Error ? error.message : String(error)}`;
+  return new AppInstallError("APP_MIGRATIONS_UNAVAILABLE", message, 409, undefined, { cause: error });
 }
 
 function validateStagedApplication(

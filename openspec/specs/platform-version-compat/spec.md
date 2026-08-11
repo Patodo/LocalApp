@@ -1,7 +1,7 @@
 # platform-version-compat Specification
 
 ## Purpose
-TBD - created by archiving change local-mini-server-and-sql-migrations. Update Purpose after archive.
+定义应用 manifest 的平台版本范围，以及 CLI 检查、应用包构建和 canonical Server 安装阶段的一致兼容性校验。
 ## Requirements
 ### Requirement: manifest.json 声明 platformVersion
 
@@ -16,13 +16,13 @@ TBD - created by archiving change local-mini-server-and-sql-migrations. Update P
 
 #### Scenario: 缺少 platformVersion 时 CLI 提示
 - **WHEN** 用户在 manifest.json 中遗漏 platformVersion 字段
-- **AND** 执行 `localapp upload` 或 `localapp db validate`
+- **AND** 执行 `localapp check`、`localapp build --package` 或 `localapp db validate`
 - **THEN** CLI 打印警告 "manifest.json missing platformVersion. Defaulting to current platform version '^1.0'."
 - **AND** 继续执行,不阻断
 
-### Requirement: server 检查 platformVersion 兼容性
+### Requirement: Server 检查 platformVersion 兼容性
 
-server 端 SHALL 在 upload 接收 manifest 后,parse `platformVersion` 字段并与自身版本比较。主版本号不匹配 SHALL 拒绝 upload。
+Server SHALL 在 `.localapp` 安装 staging 阶段解析 `platformVersion` 并与自身版本比较。版本范围不匹配 SHALL 拒绝安装并保持当前版本不变。
 
 semver 兼容规则:
 - 应用声明 `^1.0`,server 版本 1.x → 兼容
@@ -33,18 +33,18 @@ semver 兼容规则:
 #### Scenario: 兼容的 platformVersion
 - **WHEN** 应用 manifest 声明 `platformVersion: "^1.0"`
 - **AND** 当前 server 版本 1.3
-- **THEN** server 接受 upload,正常部署
+- **THEN** Server 接受应用包并正常安装
 
 #### Scenario: 主版本不兼容拒绝
 - **WHEN** 应用 manifest 声明 `platformVersion: "^1.0"`
 - **AND** 当前 server 版本 2.0
-- **THEN** server 拒绝 upload,返回错误 "Platform version mismatch. App requires ^1.0, server is 2.0. Please upgrade your app to support platform 2.0."
+- **THEN** Server 拒绝安装并返回错误 "Platform version mismatch. App requires ^1.0, server is 2.0. Please upgrade your app to support platform 2.0."
 - **AND** CLI 打印错误退出
 
 #### Scenario: 范围语法不合法
 - **WHEN** manifest 声明 `platformVersion: "1.0"`(非合法 range)
 - **THEN** CLI 在 validate 阶段提示 "Invalid platformVersion range"
-- **AND** 阻断 upload
+- **AND** 阻断包构建或安装
 
 ### Requirement: localapp platform version 命令
 
@@ -67,22 +67,16 @@ semver 兼容规则:
 - **THEN** CLI 打印兼容状态 `Compatible: ✗`
 - **AND** 提示 "Run `localapp platform upgrade-guide` to learn how to migrate"
 
-### Requirement: server 升级时的统一迁移
+### Requirement: Server 升级时迁移平台数据库
 
-server 维护 `platform-migrations/` 目录(在 server 仓库内,非应用项目)。每次 server 启动时 SHALL 检查所有 app.db 的 `_localapp_applied_platform_migrations` 表,应用未应用的 platform migration。
+Server 维护自己的 platform migrations，并在启动时对 Server-owned 平台数据库执行。平台 migration SHALL 只影响用户、群组、角色、应用注册、任务和其它平台状态，不得修改应用业务表；应用 migration 也不得修改平台数据库。
 
-platform migration SHALL 只影响平台表(users、groups、roles),不影响应用表。
+#### Scenario: Server 启动时应用 platform migration
+- **WHEN** Server 升级且平台数据库存在尚未执行的 migration
+- **THEN** Server SHALL 在开始监听前事务执行并记录该 migration
+- **AND** 应用数据库 SHALL 保持不变
 
-#### Scenario: server 启动时应用 platform migration
-- **WHEN** server 启动,发现 1.3 版本的 `013_add_user_bio.sql` 未应用到某 app.db
-- **THEN** server 在该 app.db 上运行该 platform migration
-- **AND** 记录到 `_localapp_applied_platform_migrations`
-- **AND** 继续启动流程
-
-#### Scenario: platform migration 失败时 server 拒绝启动
-- **WHEN** server 启动时某 app.db 应用 platform migration 失败
-- **THEN** server 打印警告 "Failed to apply platform migration to <userId>/<pageName>"
-- **AND** 标记该 app 为 "needs-migration-repair"
-- **AND** 该 app 的 upload 被拒绝,直到管理员手动修复
-- **AND** server 整体继续启动(不影响其他 app)
-
+#### Scenario: platform migration 失败时启动失败
+- **WHEN** Server 无法完成或验证自己的 platform migration
+- **THEN** Server SHALL fail fast 并输出不含秘密的结构化错误
+- **AND** SHALL NOT 以部分迁移的平台状态开始提供请求

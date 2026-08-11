@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ZipArchive } from "archiver";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import initSqlJs from "sql.js";
 import { PassThrough } from "node:stream";
 import path from "node:path";
 import {
@@ -370,9 +371,126 @@ describe("atomic application package installation", () => {
       const retainedPath = path.join(dataDir, owner, name, version.packagePath);
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
       expect(sha256(fs.readFileSync(retainedPath))).toBe(version.digest);
+      expect(JSON.parse(fs.readFileSync(path.join(
+        dataDir,
+        owner,
+        name,
+        "versions/v1/.localapp/migrations.snapshot.json",
+      ), "utf8"))).toMatchObject({
+        schemaVersion: 1,
+        appVersion: "1.0.0",
+        packageDigest: version.digest,
+        files: [],
+      });
       const hidden = await fetch(`${baseUrl}/serve/${owner}/${name}/${version.packagePath}`);
       expect(hidden.status).toBe(404);
     }
+  });
+
+  it("retains active migrations for data reset without exposing their SQL as app resources", async () => {
+    const packageBytes = await fixturePackage({
+      name: "migration-reset-app",
+      version: "1.0.0",
+      migrations: [["001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);"]],
+    });
+    expect((await installFixturePackage(packageBytes, ownerCookie)).status).toBe(201);
+
+    const migrationPath = path.join(
+      dataDir,
+      "packageowner",
+      "migration-reset-app",
+      "versions/v1/.localapp/migrations/001_items.sql",
+    );
+    expect(fs.readFileSync(migrationPath, "utf8")).toContain("CREATE TABLE items");
+    const hidden = await fetch(
+      `${baseUrl}/serve/packageowner/migration-reset-app/.localapp/migrations/001_items.sql`,
+      { headers: { Cookie: ownerCookie } },
+    );
+    expect(hidden.status).toBe(404);
+  });
+
+  it("backfills a retained legacy migration snapshot before upgrade so rollback and factory reset use that version", async () => {
+    const name = "legacy-migration-snapshot-app";
+    const firstMigration = "CREATE TABLE version_one_records (id INTEGER PRIMARY KEY);";
+    const v1 = await fixturePackage({
+      name,
+      version: "1.0.0",
+      migrations: [["001_version_one.sql", firstMigration]],
+    });
+    const v2 = await fixturePackage({
+      name,
+      version: "2.0.0",
+      migrations: [
+        ["001_version_one.sql", firstMigration],
+        ["002_version_two.sql", "CREATE TABLE version_two_records (id INTEGER PRIMARY KEY);"],
+      ],
+    });
+    expect((await installFixturePackage(v1, ownerCookie)).status).toBe(201);
+
+    const pageDir = path.join(dataDir, "packageowner", name);
+    const legacyMetadataDir = path.join(pageDir, "versions/v1/.localapp");
+    fs.rmSync(legacyMetadataDir, { recursive: true, force: true });
+    expect(fs.existsSync(legacyMetadataDir)).toBe(false);
+
+    expect((await installFixturePackage(v2, ownerCookie)).status).toBe(201);
+    expect(fs.readFileSync(path.join(legacyMetadataDir, "migrations/001_version_one.sql"), "utf8")).toBe(firstMigration);
+    expect(JSON.parse(fs.readFileSync(path.join(legacyMetadataDir, "migrations.snapshot.json"), "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      appVersion: "1.0.0",
+      packageDigest: readMeta("packageowner", name).versions[0].digest,
+      files: [{ path: "001_version_one.sql", sha256: sha256(Buffer.from(firstMigration)) }],
+    });
+
+    const rolledBack = await fetch(`${baseUrl}/api/me/apps/${name}/rollback`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie },
+    });
+    expect(rolledBack.status).toBe(200);
+    expect((await rolledBack.json()).data).toMatchObject({ localVersion: 1, appVersion: "1.0.0" });
+
+    fs.writeFileSync(path.join(legacyMetadataDir, "migrations/001_version_one.sql"), "corrupt");
+
+    const reset = await fetch(`${baseUrl}/api/me/pages/${name}/data/factory-reset`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmName: name }),
+    });
+    expect(reset.status).toBe(200);
+    expect(fs.readFileSync(path.join(legacyMetadataDir, "migrations/001_version_one.sql"), "utf8")).toBe(firstMigration);
+
+    const SQL = await initSqlJs();
+    const database = new SQL.Database(fs.readFileSync(path.join(pageDir, "app.db")));
+    const tables = database.exec("SELECT name FROM sqlite_master WHERE type = 'table'")[0]?.values.flat().map(String) ?? [];
+    database.close();
+    expect(tables).toContain("version_one_records");
+    expect(tables).not.toContain("version_two_records");
+  });
+
+  it("reports a missing retained migration package as a version-state conflict before factory reset", async () => {
+    const name = "missing-migration-package-app";
+    const packageBytes = await fixturePackage({
+      name,
+      version: "1.0.0",
+      migrations: [["001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);"]],
+    });
+    expect((await installFixturePackage(packageBytes, ownerCookie)).status).toBe(201);
+
+    const pageDir = path.join(dataDir, "packageowner", name);
+    const meta = readMeta("packageowner", name);
+    const databaseBefore = sha256(fs.readFileSync(path.join(pageDir, "app.db")));
+    fs.rmSync(path.join(pageDir, "versions/v1/.localapp"), { recursive: true, force: true });
+    fs.rmSync(path.join(pageDir, meta.versions[0].packagePath), { force: true });
+
+    const reset = await fetch(`${baseUrl}/api/me/pages/${name}/data/factory-reset`, {
+      method: "POST",
+      headers: { Cookie: ownerCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmName: name }),
+    });
+
+    expect(reset.status).toBe(409);
+    expect(await reset.json()).toMatchObject({ success: false, code: "APP_MIGRATIONS_UNAVAILABLE" });
+    expect(sha256(fs.readFileSync(path.join(pageDir, "app.db")))).toBe(databaseBefore);
+    expect(fs.existsSync(path.join(pageDir, "backups")) ? fs.readdirSync(path.join(pageDir, "backups")) : []).toEqual([]);
   });
 
   it("rejects a version route name that escapes the authenticated owner's app directory", async () => {

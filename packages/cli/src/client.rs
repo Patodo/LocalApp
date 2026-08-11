@@ -208,7 +208,6 @@ impl Client {
             .map_err(|error| format!("Failed to parse response: {error}"))?;
         Ok((status, body))
     }
-
 }
 
 pub fn collect_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {

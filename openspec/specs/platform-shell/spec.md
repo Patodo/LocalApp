@@ -175,7 +175,7 @@ Platform Shell 导航栏 SHALL 在 `manifest.notify.enabled === true` 时渲染 
 
 ### Requirement: PlatformShell 使用 raw resource base 加载应用
 
-`PlatformShell` SHALL 在正式入口 `/{userId}/{name}` 内运行，并通过服务端注入或等价方式获得 raw app resource base。该 raw app resource base SHALL 指向 `/serve/{userId}/{name}/`，仅用于读取上传应用的 `index.html`、静态资源和应用级 API，不改变浏览器正式地址。
+`PlatformShell` SHALL 在正式入口 `/{userId}/{name}` 内运行，并通过服务端注入或等价方式获得 raw app resource base。该 raw app resource base SHALL 指向 `/serve/{userId}/{name}/`，仅用于读取已安装应用的 `index.html`、静态资源和应用级 API，不改变浏览器正式地址。
 
 #### Scenario: 正式入口注入 raw resource base
 - **WHEN** 用户访问 `/test-owner/team-workload/`
@@ -202,7 +202,7 @@ Platform Shell 导航栏 SHALL 在 `manifest.notify.enabled === true` 时渲染 
 
 ### Requirement: PlatformShell 模板路由独立于裸应用资源路径
 
-`packages/web` SHALL 使用独立的 PlatformShell 模板路由导出生产 shell HTML。该模板路由 SHALL NOT 使用 `/serve/[userId]/[name]`，因为 `/serve` 在平台中保留给上传应用的裸资源服务。推荐模板路由为 `/platform-shell/[userId]/[name]`。
+`packages/web` SHALL 使用独立的 PlatformShell 模板路由导出生产 shell HTML。该模板路由 SHALL NOT 使用 `/serve/[userId]/[name]`，因为 `/serve` 在平台中保留给已安装应用的裸资源服务。推荐模板路由为 `/platform-shell/[userId]/[name]`。
 
 #### Scenario: 静态导出生成独立 shell 模板
 - **WHEN** 在 `packages/web` 中运行生产构建
@@ -218,15 +218,15 @@ Platform Shell 导航栏 SHALL 在 `manifest.notify.enabled === true` 时渲染 
 
 ### Requirement: Next dev shell 预览仅面向平台 Shell 开发
 
-`packages/web` 的 Next dev shell 预览路径 SHALL 仅用于平台开发者调试 `PlatformShell` 组件热更新。应用开发者本地预览 SHALL 使用 `localapp dev` 注入的 DevShell；上传后的正式验证 SHALL 使用 server 上的 `/{userId}/{name}`。
+`packages/web` 的 Next dev shell 预览路径 SHALL 仅用于平台开发者调试 `PlatformShell` 组件热更新。应用开发者本地预览 SHALL 使用 `localapp dev` 注入的 DevShell；安装后的正式验证 SHALL 使用 Server 上的 `/{userId}/{name}`。
 
 #### Scenario: 平台开发者调试 Shell
 - **WHEN** 平台开发者修改 `packages/web/components/shell/`
 - **THEN** 可访问 `http://localhost:3001/platform-shell/{userId}/{name}` 查看 Shell 热更新
 - **AND** 该路径 SHALL NOT 被 init-repo 或应用协作 skill 描述为应用开发者的默认验收入口
 
-#### Scenario: 上传后正式验证
-- **WHEN** 应用开发者上传应用后需要验证生产形态
+#### Scenario: 安装后正式验证
+- **WHEN** 应用开发者安装应用后需要验证正式形态
 - **THEN** 验证入口 SHALL 为 server 上的 `/{userId}/{name}`
 - **AND** 不要求访问 `http://localhost:3001/serve/{userId}/{name}/`
 

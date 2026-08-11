@@ -16,6 +16,7 @@ pub mod new_page;
 pub mod pages;
 pub mod peer;
 pub mod platform;
+pub(crate) mod project_config;
 pub mod server;
 pub mod sync;
 pub mod update;

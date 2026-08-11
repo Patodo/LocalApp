@@ -773,7 +773,7 @@ const PLATFORM_NAV_SHELL_MODEL = {
 const DEV_MENU_BUTTON_CLASS =
   "flex w-full items-center justify-between gap-3 rounded px-2 py-1.5 text-left text-xs text-localapp-dev-foreground hover:bg-localapp-dev-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-localapp-dev-focus";
 const DEV_CONTEXT_SETUP_HINT =
-  "请使用 npm run dev 或 localapp dev 启动开发环境。当前 Dev Toolkit 未连接到本地 mini-server，裸 vite/npm run dev:vite 会绕过 mini-server。";
+  "请使用 npm run dev 或 localapp dev 启动开发环境。当前 Dev Toolkit 未连接到项目的统一 LocalApp Server；裸 vite/npm run dev:vite 不会启动 Server。";
 
 function deriveDevShellNavModel() {
   return {
@@ -1151,7 +1151,7 @@ async function readDevJson<T = any>(res: Response, label: string): Promise<T> {
   try {
     return await res.json();
   } catch {
-    throw new Error(`${label} did not return JSON. Expected JSON from the local mini-server. ${DEV_CONTEXT_SETUP_HINT}`);
+    throw new Error(`${label} did not return JSON. Expected JSON from the local LocalApp Server. ${DEV_CONTEXT_SETUP_HINT}`);
   }
 }
 
@@ -5934,7 +5934,7 @@ function DevToolkitSidebar({
   };
   const resetData = () => run(async () => {
     await postDevAction("/api/dev/data/reset");
-    setDataMessage("dev.db reset complete");
+    setDataMessage("应用数据已由本地 Server 重置");
   });
   const createSnapshot = () => run(async () => {
     const data = await postDevAction("/api/dev/data/snapshots");
@@ -6066,7 +6066,7 @@ function DevToolkitSidebar({
         <section className="space-y-2">
           <h3 className="text-[11px] font-semibold uppercase text-localapp-dev-muted-foreground">数据</h3>
           <div className="grid grid-cols-2 gap-1.5">
-            <button disabled={pending} onClick={resetData} className="rounded border border-localapp-dev-danger px-2 py-1 text-left font-medium text-localapp-dev-danger hover:bg-localapp-dev-danger-muted disabled:opacity-50">重置 dev.db</button>
+            <button disabled={pending} onClick={resetData} className="rounded border border-localapp-dev-danger px-2 py-1 text-left font-medium text-localapp-dev-danger hover:bg-localapp-dev-danger-muted disabled:opacity-50">重置应用数据</button>
             <button disabled={pending} onClick={createSnapshot} className={`${DEV_OUTLINE_BUTTON} text-left`}>保存快照</button>
           </div>
           <div className="grid grid-cols-[1fr_auto] gap-1.5">

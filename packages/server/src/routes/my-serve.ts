@@ -4,10 +4,8 @@ import path from "node:path";
 import { getUserRole } from "../lib/meta-sqlite.js";
 
 const HTML_404 = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title></head><body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:system-ui;background:#f8f9fa"><div style="text-align:center"><h1 style="font-size:2rem;color:#1a1d23">404</h1><p style="color:#6b7280">Page not found.</p><a href="/" style="color:#2563eb">Back to home</a></div></body></html>`;
-const WEB_OUT_DIR = path.resolve(__dirname, "../../../web/out");
-
-function serveNextHtml(page: string) {
-  const filePath = path.join(WEB_OUT_DIR, `${page}.html`);
+function serveNextHtml(webOutDir: string, page: string) {
+  const filePath = path.join(webOutDir, `${page}.html`);
   return async (_req: FastifyRequest, reply: FastifyReply) => {
     try {
       const html = fs.readFileSync(filePath, "utf-8");
@@ -38,7 +36,8 @@ function canonicalMyPage(req: FastifyRequest, sub: string): CanonicalMyPage | nu
   return { page, exportedPath, flight };
 }
 
-export async function myServeRoutes(app: FastifyInstance) {
+export async function myServeRoutes(app: FastifyInstance, options: { webRoot?: string } = {}) {
+  const webOutDir = options.webRoot ?? path.resolve(__dirname, "../../../web/out");
   app.get("/my", async (_req, reply) => {
     return reply.redirect("/my/info");
   });
@@ -62,7 +61,7 @@ export async function myServeRoutes(app: FastifyInstance) {
     // Next.js App Router prefetch requests /my/<page>.txt?_rsc=...
     // These files are RSC flight payloads emitted to web/out/my/<page>.txt.
     if (canonical.flight) {
-      const myDir = path.resolve(WEB_OUT_DIR, "my");
+      const myDir = path.resolve(webOutDir, "my");
       const target = path.resolve(myDir, canonical.exportedPath);
       if (!target.startsWith(myDir + path.sep)) {
         return reply.status(404).send("");
@@ -75,6 +74,6 @@ export async function myServeRoutes(app: FastifyInstance) {
       }
     }
 
-    return serveNextHtml(`my/${canonical.exportedPath}`)(req, reply);
+    return serveNextHtml(webOutDir, `my/${canonical.exportedPath}`)(req, reply);
   });
 }

@@ -8,7 +8,7 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 `/` 路径 SHALL 根据登录态渲染不同首页。未登录用户 SHALL 看到公开产品首页，不得自动重定向到 `/login?redirect=/`。公开首页 SHALL 以品牌化、视觉冲击力强的方式展示 LocalApp 的定位、登录后能力和基础使用流程；已登录用户 SHALL 看到包含三个模块的工作台首页。
 
-公开首页 MAY 说明 CLI 用途，但 MUST 将 CLI 获取、API Key 配置和上传能力描述为登录后可用，不得在公开首页提供需要鉴权的直接操作。公开首页 SHALL 避免无后续动作的装饰性控件。
+公开首页 MAY 说明 CLI 用途，但 MUST 将 CLI 获取、API Key 配置和应用安装能力描述为登录后可用，不得在公开首页提供需要鉴权的直接操作。公开首页 SHALL 避免无后续动作的装饰性控件。
 
 #### Scenario: 未登录用户看到公开首页
 - **WHEN** 未登录用户访问 `GET /`
@@ -23,8 +23,8 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 #### Scenario: 用户看到基础使用流程
 - **WHEN** 未登录用户访问 `GET /`
-- **THEN** 页面说明登录后可以管理应用、上传构建产物、获取 CLI/API Key、查看收藏或访问记录
-- **THEN** 页面展示 `localapp init`、实现应用、`localapp upload`、访问应用链接的基础流程
+- **THEN** 页面说明登录后可以管理应用、安装应用包、获取 CLI/API Key、查看收藏或访问记录
+- **THEN** 页面展示 `localapp init`、`localapp dev`、`localapp app install --target <profile>`、访问正式应用链接的基础流程
 
 #### Scenario: 未登录首页没有控制台入口
 - **WHEN** 未登录用户访问 `GET /`

@@ -1,10 +1,11 @@
-use crate::commands::check;
 use crate::commands::app::{collect_backend_files_for_manifest, collect_package_source_tree};
+use crate::commands::check;
 use crate::project::Manifest;
 use localapp_core::{AppPackageMetadata, build_app_package_from_files};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Deserialize)]
 struct ProjectPackage {
@@ -48,10 +49,33 @@ pub async fn build_package(
     project: &Path,
     output: Option<&str>,
 ) -> Result<PackageBuildResult, String> {
+    build_package_with_version(project, output, None).await
+}
+
+pub async fn build_package_for_dev(
+    project: &Path,
+    output: Option<&str>,
+) -> Result<PackageBuildResult, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Failed to read system clock: {error}"))?
+        .as_nanos();
+    let version = format!("0.0.0-dev-{}-{timestamp}", std::process::id());
+    build_package_with_version(project, output, Some(version)).await
+}
+
+async fn build_package_with_version(
+    project: &Path,
+    output: Option<&str>,
+    version_override: Option<String>,
+) -> Result<PackageBuildResult, String> {
     check::run_local_for_package(project).await?;
     let manifest = Manifest::read_validated(project)?
         .ok_or_else(|| "No manifest.json found. Run 'localapp init' first.".to_string())?;
-    let version = read_project_version(project)?;
+    let version = match version_override {
+        Some(version) => version,
+        None => read_project_version(project)?,
+    };
     let output = resolve_output(project, output, &manifest.name);
     let files = collect_canonical_package_files(project, &manifest)?;
     let summary = build_app_package_from_files(

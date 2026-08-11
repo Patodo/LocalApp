@@ -11,8 +11,8 @@ LocalApp SHALL define the stable application backend as declarative backend cont
 
 #### Scenario: 应用声明稳定后端契约
 - **WHEN** 应用通过 backend contract 声明 schema、migration、named query 和 named mutation
-- **THEN** CLI validate、CLI upload、server upload 和 production serve MUST treat those declarations as the stable backend path
-- **AND** 平台 MUST NOT require application-uploaded JavaScript backend runtime for ordinary business data access
+- **THEN** CLI validate、package build、Server install 和 application serve MUST treat those declarations as the stable backend path
+- **AND** 平台 MUST NOT require application-packaged JavaScript backend runtime for ordinary business data access
 
 #### Scenario: 复杂业务应用使用 named SQL-first
 - **WHEN** 应用需要实现列表、详情、筛选、统计、导入预览、协作状态或阶段工作量等 team-workload 级复杂功能
@@ -20,11 +20,11 @@ LocalApp SHALL define the stable application backend as declarative backend cont
 - **AND** 平台 MUST direct database writes to named mutation, transaction mutation, or platform-provided primitives
 
 ### Requirement: Custom hosted JavaScript backend is not a default stable capability
-LocalApp SHALL NOT expose application-uploaded hosted JavaScript backend actions as a default stable platform capability.
+LocalApp SHALL NOT expose application-packaged hosted JavaScript backend actions as a default stable platform capability.
 
 #### Scenario: 新应用尝试使用 hosted JS backend
 - **WHEN** 新应用包含 hosted action manifest、action bundle 或 action source
-- **THEN** validate or upload MUST fail with a clear unsupported capability error
+- **THEN** validate or package build MUST fail with a clear unsupported capability error
 - **AND** the error MUST tell the developer to use named SQL, transaction mutation, or a platform primitive
 
 #### Scenario: 文档描述 backend 能力

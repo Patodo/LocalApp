@@ -111,7 +111,7 @@ vite-plugin 在 dev 模式注入的 DevShell SHALL 包含开发工具集入口�
 #### Scenario: dev 注入工具集
 - **WHEN** 用户执行 `localapp dev`
 - **THEN** vite-plugin 注入的 DevShell SHALL 渲染开发工具入口
-- **AND** 开发工具 SHALL 能访问本地 mini-server 提供的 `/api/dev/*` API
+- **AND** 开发工具 SHALL 能访问当前统一 Server 显式开启的 `/api/dev/*` API
 
 #### Scenario: build 不注入工具集
 - **WHEN** 用户执行 `npm run build`
@@ -140,7 +140,7 @@ DevShell SHALL 使用生产 nav-shell 的结构和平台能力契约，只在最
 - **THEN** 下拉 SHALL 显示工具和开发工具入口
 
 ### Requirement: DevShell 提供 native platform host
-DevShell SHALL 在 dev 模式中作为同页 platform host 响应 SDK 平台能力请求，并使用 mini-server 的 dev-only API 提供身份、时间、数据和诊断工具。
+DevShell SHALL 在 dev 模式中作为同页 platform host 响应 SDK 平台能力请求，并使用当前统一 Server 的 dev-only API 提供身份、时间、数据和诊断工具。
 
 #### Scenario: dev confirm 使用平台弹窗
 - **WHEN** dev 应用调用 `platform.confirm(...)`

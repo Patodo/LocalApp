@@ -59,17 +59,18 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 - **THEN** 调用 `POST /api/auth/force-change-password`
 - **THEN** 成功后设置登录 cookie，并跳转到 `redirect` 查询参数指定的地址或 `/`
 
-### Requirement: 首页重定向
+### Requirement: 首页按登录态原位渲染
 
-`/` 路径 SHALL 根据登录状态重定向：已登录用户重定向到 `/profile`，未登录用户重定向到 `/login?redirect=/`。
+`/` 路径 SHALL 返回同一 Web 首页入口。未登录用户 SHALL 看到公开首页与登录模态框入口；已登录用户 SHALL 看到工作台模块。两种状态都 SHALL 保持 `/`，不得重定向到 `/login?redirect=/` 或 `/profile`。
 
 #### Scenario: 未登录用户访问首页
 - **WHEN** 未登录用户访问 `/`
-- **THEN** 重定向到 `/login?redirect=/`
+- **THEN** 返回 HTTP 200 并渲染公开首页
+- **AND** 点击登录入口 SHALL 在当前页面打开登录模态框
 
 #### Scenario: 已登录用户访问首页
 - **WHEN** 已登录用户访问 `/`
-- **THEN** 重定向到 `/profile`
+- **THEN** 返回 HTTP 200 并渲染工作台首页
 
 ### Requirement: Fastify 静态托管
 
@@ -95,11 +96,11 @@ Fastify 服务器 SHALL 托管 Next.js 的静态导出产物。`/login`、`/forc
 #### Scenario: 内部裸资源代理可用
 - **WHEN** Next dev server 运行在 3001 端口，server 运行在 3000 端口
 - **THEN** 请求 `GET /_localapp/raw/test-owner/team-workload/` SHALL 代理到 `http://localhost:3000/serve/test-owner/team-workload/`
-- **AND** 返回上传应用的裸 `index.html`
+- **AND** 返回已安装应用的裸 `index.html`
 
 ### Requirement: PlatformShell 根据环境解析裸应用资源 base
 
-`PlatformShell` SHALL 在生产正式入口中使用 `/serve/{userId}/{name}/` 加载上传应用资源；在 Next dev shell 预览中 SHALL 使用内部代理路径加载相同资源，避免跨 origin 和 `/serve` rewrite 冲突。
+`PlatformShell` SHALL 在正式入口中使用 `/serve/{userId}/{name}/` 加载已安装应用资源；在 Next dev shell 预览中 SHALL 使用内部代理路径加载相同资源，避免跨 origin 和 `/serve` rewrite 冲突。
 
 #### Scenario: 生产环境使用 /serve resource base
 - **WHEN** 用户通过 server 正式入口 `/{userId}/{name}` 打开应用

@@ -98,21 +98,24 @@ e2e 测试 SHALL 验证所有页面响应包含正确的 CSP 安全头。
 - **WHEN** 请求 `GET /admin` 或 `GET /admin/*`
 - **THEN** 由 admin-serve 路由处理，不进入 `/:userId/:name` 的 Shell 渲染逻辑
 
-### Requirement: 根路径重定向
+### Requirement: 根路径渲染统一首页
 
-`GET /` SHALL 根据用户登录状态执行重定向。已登录用户（session cookie 有效）SHALL 重定向到 `/profile`。未登录用户 SHALL 重定向到 `/login?redirect=/`。
+`GET /` SHALL 始终返回首页 HTML，不得按登录状态执行服务端重定向。未登录用户 SHALL 看到公开产品首页及登录模态框入口；已登录用户 SHALL 在同一路径看到工作台首页。
 
 #### Scenario: 已登录用户访问根路径
 - **WHEN** 携带有效 session cookie 请求 `GET /`
-- **THEN** 返回 HTTP 302，Location 为 `/profile`
+- **THEN** 返回 HTTP 200 首页 HTML
+- **AND** 客户端渲染已登录工作台内容
 
 #### Scenario: 未登录用户访问根路径
 - **WHEN** 不携带 session cookie 请求 `GET /`
-- **THEN** 返回 HTTP 302，Location 为 `/login?redirect=/`
+- **THEN** 返回 HTTP 200 公开首页 HTML
+- **AND** 登录入口 SHALL 在当前首页打开登录模态框
 
-#### Scenario: 登录后通过 fallback 回到根路径
-- **WHEN** 用户在 `/login` 页面登录成功，无 redirect 参数，JS fallback 到 `/`
-- **THEN** `/` 重定向到 `/profile`，用户最终看到个人主页
+#### Scenario: 登录后回到根路径
+- **WHEN** 用户在首页登录模态框成功登录
+- **THEN** 浏览器保持或回到 `/`
+- **AND** 首页渲染已登录工作台，不重定向到 `/profile`
 
 ### Requirement: 生产页面 native 渲染
 平台定义的生产应用入口 `GET /{userId}/{name}` 和 `GET /{userId}/{name}/` SHALL 返回 native 平台 shell 页面。该页面 SHALL 加载最新版本应用资源并在 app container 中挂载应用。
@@ -136,7 +139,7 @@ e2e 测试 SHALL 验证所有页面响应包含正确的 CSP 安全头。
 
 ### Requirement: 正式入口和裸资源入口职责分离
 
-服务端 SHALL 明确区分正式应用入口与裸应用资源入口。`GET /{userId}/{name}` 和 `GET /{userId}/{name}/` SHALL 返回带 PlatformShell 的正式应用页面，并作为用户访问、应用验收和 UI 级验证的默认入口。`GET /serve/{userId}/{name}/` 和 `GET /serve/{userId}/{name}/*` SHALL 只返回上传应用的裸 `index.html`、assets、SPA fallback 或应用 API 响应；该路径 SHALL 被视为内部 raw app resource/API route，不得在用户文档、CLI 默认输出或 agent 验收步骤中称为预览入口。
+服务端 SHALL 明确区分正式应用入口与裸应用资源入口。`GET /{userId}/{name}` 和 `GET /{userId}/{name}/` SHALL 返回带 PlatformShell 的正式应用页面，并作为用户访问、应用验收和 UI 级验证的默认入口。`GET /serve/{userId}/{name}/` 和 `GET /serve/{userId}/{name}/*` SHALL 只返回已安装应用的裸 `index.html`、assets、SPA fallback 或应用 API 响应；该路径 SHALL 被视为内部 raw app resource/API route，不得在用户文档、CLI 默认输出或 agent 验收步骤中称为预览入口。
 
 #### Scenario: 正式入口返回 PlatformShell
 - **WHEN** 已存在应用 `test-owner/team-workload`，用户请求 `GET /test-owner/team-workload/`
@@ -152,7 +155,7 @@ e2e 测试 SHALL 验证所有页面响应包含正确的 CSP 安全头。
 
 #### Scenario: 裸资源入口不返回 nav-shell
 - **WHEN** 已存在应用 `test-owner/team-workload`，用户请求 `GET /serve/test-owner/team-workload/`
-- **THEN** 响应 SHALL 为上传应用最新版本的 `index.html`
+- **THEN** 响应 SHALL 为已安装应用最新版本的 `index.html`
 - **AND** 响应 SHALL NOT 包含 PlatformShell 导航栏
 - **AND** 响应 SHALL NOT 包含 native shell 标识
 

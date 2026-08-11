@@ -1325,7 +1325,10 @@ fn contains_action_source(dir: &Path) -> Result<bool, String> {
         if path.is_dir() && contains_action_source(&path)? {
             return Ok(true);
         }
-        if matches!(path.extension().and_then(|extension| extension.to_str()), Some("ts" | "tsx" | "js" | "mjs")) {
+        if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("ts" | "tsx" | "js" | "mjs")
+        ) {
             return Ok(true);
         }
     }
@@ -1380,7 +1383,7 @@ mod tests {
         fs::create_dir_all(project.path().join(".localapp")).unwrap();
         fs::write(project.path().join("dist/index.html"), "<main>app</main>").unwrap();
         fs::write(project.path().join("dist/assets/app.js"), "export {};").unwrap();
-        fs::write(project.path().join(".localapp/dev.db"), b"local issues").unwrap();
+        fs::write(project.path().join(".localapp/user-owned.db"), b"user data").unwrap();
         fs::create_dir_all(project.path().join(".localapp/issues/attachments")).unwrap();
         fs::write(
             project
@@ -1395,7 +1398,7 @@ mod tests {
         names.sort();
 
         assert_eq!(names, vec!["assets/app.js", "index.html"]);
-        assert!(!names.iter().any(|name| name.contains("dev.db")));
+        assert!(!names.iter().any(|name| name.contains("user-owned.db")));
         assert!(!names.iter().any(|name| name.contains("issues/attachments")));
     }
 

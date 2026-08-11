@@ -1,167 +1,92 @@
 ## Purpose
 
-This spec describes the expected behavior, acceptance criteria, and integration boundaries for the content-upload capability in LocalApp.
+定义 canonical Server 为每个应用提供隔离、可验证且可预览/下载的内容存储 API。
+
 ## Requirements
-### Requirement: MinIO 服务容器
 
-docker-compose.yml SHALL 新增 MinIO 服务，暴露 API 端口 9000 和 Console 端口 9001，使用 named volume 持久化数据，配置默认的 access key 和 secret key。
+### Requirement: 应用内容上传使用应用作用域 API
 
-#### Scenario: docker-compose 启动 MinIO
-- **WHEN** 在项目根目录执行 `docker compose up -d`
-- **THEN** MinIO 容器启动，API 端口 9000 和 Console 端口 9001 可访问
+应用 SHALL 通过 `POST /serve/<owner>/<app>/api/content/upload` 上传一个 multipart 文件。SDK 在正式 Shell 中 SHALL 从应用 resource base 推导该路径；Vite 开发页请求 `/api/content/upload` 时 SHALL 改写到当前项目 Server 上已安装应用的同一路由实现。旧的全局发布上传端点 SHALL NOT 作为应用内容 API。
 
-#### Scenario: MinIO 数据持久化
-- **WHEN** MinIO 容器重启
-- **THEN** 之前上传的文件仍然存在
+#### Scenario: 正式应用上传文件
 
-### Requirement: Server S3 客户端初始化
+- **WHEN** 已认证用户在正式 `/<owner>/<app>/` 页面调用 `useUpload()`
+- **THEN** SDK SHALL POST 到该应用的 `/serve/<owner>/<app>/api/content/upload`
+- **AND** Server SHALL 返回 `{ success: true, data: { key, url } }`
 
-Server 启动时 SHALL 使用 `@aws-sdk/client-s3` 创建 S3 客户端，连接配置从 `config.toml` 或环境变量读取（`MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET`）。若指定的 bucket 不存在 SHALL 自动创建。
+#### Scenario: 开发应用上传文件
 
-#### Scenario: 从配置文件初始化
-- **WHEN** `config.toml` 包含 `[minio]` 配置节（endpoint、accessKey、secretKey、bucket）
-- **THEN** Server 启动时创建 S3 客户端并连接到指定 MinIO
+- **WHEN** `localapp dev` 页面调用 `useUpload()`
+- **THEN** Vite SHALL 把 `/api/content/upload` 转发到项目 canonical Server 的应用作用域路由
+- **AND** 响应格式、认证、限额和存储实现 SHALL 与正式安装一致
 
-#### Scenario: 从环境变量初始化
-- **WHEN** 设置环境变量 `MINIO_ENDPOINT=localhost:9000`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`
-- **THEN** Server 使用环境变量配置创建 S3 客户端
+### Requirement: 内容类型、MIME 与签名一致校验
 
-#### Scenario: 自动创建 bucket
-- **WHEN** 配置的 bucket 名称不存在
-- **THEN** Server 启动时自动创建该 bucket
+Server SHALL 按平台 capability allowlist 校验文件扩展名、声明 MIME、内容签名和大小。当前 SHALL 支持 PNG、JPEG、GIF、WebP、SVG 和 PDF；声明类型与内容不一致、类型不支持或超限 SHALL 在写入前拒绝。
 
-### Requirement: 内容上传 API
+#### Scenario: 上传合法图片
 
-`POST /api/upload` SHALL 改为接收 multipart bundle,包含:
-- `manifest` — manifest.json 内容(文件 part,filename 为 `manifest.json`,content-type 为 `application/json`)
-- `filepath_<index>` — 第 `<index>` 个 dist 文件的相对路径
-- `files` — 前端构建产物文件 part;每个 part 与同 index 的 `filepath_<index>` 对应
-- `migration_<filename>` — migration SQL 文件 part;`<filename>` 为 migration 文件名
-- `migrationChecksum_<filename>` — 对应 migration 文件内容的 SHA256 hex 字符串字段;server SHALL 拒绝缺失或不匹配的 checksum
+- **WHEN** 用户上传扩展名、MIME 和签名一致且未超限的 PNG
+- **THEN** Server SHALL 写入应用命名空间并返回 201
 
-server 端 SHALL 在防御式原子流程中处理。`localapp db validate` 已经在上传前验证 migration 能应用到生产快照,因此正常情况下 server 端不应再出现 migration 意外;但 server 仍 SHALL 防御磁盘、进程、checksum、并发等运行时异常:
-1. 验证 migration checksum(防止传输损坏)
-2. 写入 dist 到临时版本目录 `versions/.staging-v(N+1)`;此时 current 指针不切换
-3. 备份当前 app.db 到临时 backup 文件,确认可写后再进入事务
-4. BEGIN TRANSACTION
-5. 应用所有 pending migration(数字顺序)
-6. 原子提交 DB 事务
-7. DB commit 成功后,把 staging 目录 rename 为 `versions/v(N+1)` 并原子切换 current 指针
-8. 任一步失败 → ROLLBACK(若事务已开启),删除 staging 目录,不切换 current 指针,app.db 保持旧状态
+#### Scenario: 上传合法 PDF
 
-CLI 端 SHALL 在 upload 前强制 `localapp db validate` 通过(详见 db-validate-flow spec)。
+- **WHEN** 用户上传 `application/pdf` 且内容以有效 PDF signature 开始
+- **THEN** Server SHALL 保存原始字节并返回可内联预览的 URL
 
-#### Scenario: 完整 upload 流程
-- **WHEN** 用户执行 `localapp upload`,本地有 dist + 2 个 pending migrations
-- **THEN** CLI 先执行 validate(在线拉 prod snapshot 验证 migrations)
-- **AND** validate 通过后,打包 bundle(dist + migrations + manifest + checksums)
-- **AND** 上传到 server `/api/upload`
-- **AND** server 备份 app.db → 应用 migrations → 部署 dist,事务 commit
-- **AND** CLI 打印 "Upload complete. Version v<N+1> deployed."
+#### Scenario: MIME 或签名不匹配
 
-#### Scenario: upload 失败时全回滚
-- **WHEN** upload 过程中 migration SQL 应用失败
-- **THEN** server ROLLBACK 事务
-- **AND** app.db 内容不变
-- **AND** staging dist 被清理或保持不可见,current 指针不切换
-- **AND** server 返回错误详情
-- **AND** CLI 打印 "Upload failed. Both database and dist rolled back."
+- **WHEN** 文件扩展名为图片但声明为 PDF，或文件字节不匹配声明类型
+- **THEN** Server SHALL 返回稳定 400 错误 code
+- **AND** SHALL NOT创建内容对象
 
-#### Scenario: upload 不上传 dev seed
-- **WHEN** 用户执行 `localapp upload`,项目包含 `db/seeds/dev.sql`
-- **THEN** bundle 中不包含该 seed 文件
-- **AND** server 永远不执行 dev seed
+#### Scenario: 文件过大
 
-### Requirement: 内容读取 API
+- **WHEN** 文件超过平台 capability 声明的上传上限
+- **THEN** Server SHALL 返回 HTTP 413
 
-`GET /serve/<userId>/<pageName>/*` SHALL 继续提供静态文件服务,行为不变。版本管理(current 指针切换)在 upload 事务中原子完成,保证读取到的版本要么是旧版要么是新版,不存在中间状态。
+### Requirement: 内容对象按 Server 和应用隔离
 
-#### Scenario: upload 后读取到新版本
-- **WHEN** upload 成功提交事务后,用户立即访问 `/serve/<userId>/<pageName>/`
-- **THEN** server 返回新版本(current 指针已切换)的 index.html
-- **AND** 静态资源也是新版本
+对象 key SHALL 存储在当前 Server 的 `<owner>/<app>` 命名空间中。不同 Server、所有者或应用使用相同 content key 时 SHALL 仍相互隔离。普通应用包安装和 app-only peer sync SHALL NOT 携带内容对象；只有显式 app-and-data 同步可在一致性快照中整体替换该应用文件。
 
-#### Scenario: upload 失败后读取到旧版本
-- **WHEN** upload 失败回滚后,用户访问 `/serve/<userId>/<pageName>/`
-- **THEN** server 返回旧版本(current 指针未切换)
-- **AND** 行为与 upload 前完全一致
+#### Scenario: 跨应用读取被隔离
 
-### Requirement: 内容 API 路由注册
+- **WHEN** 应用 B 使用应用 A 的 content key 请求自己的内容路由
+- **THEN** Server SHALL 返回 404
+- **AND** SHALL NOT泄露应用 A 的对象元数据
 
-内容上传和读取路由 SHALL 注册在 serveRoutes 中（公开路由），与其他 `/serve/` 路由使用相同的中间件链（session 解析、visitorId 提取）。路径匹配 SHALL 在 CRUD API 路由之前检查 `content` 关键字。
+#### Scenario: 常规版本安装保留文件
 
-#### Scenario: 路由匹配优先级
-- **WHEN** 请求 `GET /serve/alice/my-app/api/content/abc123.png`
-- **THEN** 命中内容读取路由（不匹配 CRUD 的 `{resource}/{id}` 模式）
+- **WHEN** 同名应用安装新 `.localapp` 版本
+- **THEN** 已上传内容 SHALL 保留
+- **AND** 新版本 SHALL 继续使用同一应用文件命名空间
 
-#### Scenario: CRUD 路由不受影响
-- **WHEN** 请求 `GET /serve/alice/my-app/api/todos`
-- **THEN** 正常命中 CRUD 路由，不受内容路由影响
+### Requirement: 内容读取支持安全预览和原始下载
 
-### Requirement: upload 备份策略(保留前两版本)
+`GET /serve/<owner>/<app>/api/content/<key>` SHALL 返回原始字节、正确 `Content-Type`、`X-Content-Type-Options: nosniff` 和安全 `Content-Disposition`。Server SHALL 支持单段 byte range，以便 PDF 预览和大文件读取；无效 range SHALL 返回 416。SVG SHALL 额外使用 sandbox CSP。
 
-server SHALL 在每次有 pending migration 的 upload 时,执行 backup 升级流程:
-1. 若 `app.db.backup.v2` 存在,删除
-2. 若 `app.db.backup.v1` 存在,重命名为 `app.db.backup.v2`
-3. 复制当前 `app.db` 到 `app.db.backup.v1`
+#### Scenario: 读取图片
 
-backup 文件 SHALL 与 app.db 在同一目录,命名固定。
+- **WHEN** 浏览器读取已上传 PNG URL
+- **THEN** Server SHALL 返回 `image/png` 与完全相同的原始字节
+- **AND** 浏览器 MAY 内联显示
 
-#### Scenario: 首次 backup
-- **WHEN** 应用第一次有 pending migration 的 upload,目录无 backup 文件
-- **THEN** server 复制 app.db → app.db.backup.v1
-- **AND** 应用 migrations + 部署 dist
+#### Scenario: PDF range 请求
 
-#### Scenario: 第二次 backup
-- **WHEN** 应用第二次有 pending migration 的 upload,app.db.backup.v1 已存在
-- **THEN** server 把 app.db.backup.v1 重命名为 app.db.backup.v2
-- **AND** 复制当前 app.db → app.db.backup.v1
-- **AND** 应用 migrations + 部署 dist
+- **WHEN** PDF 预览器发送合法单段 `Range` header
+- **THEN** Server SHALL 返回 206、`Content-Range`、`Accept-Ranges: bytes` 和对应原始字节片段
 
-#### Scenario: 第三次 backup 自动淘汰旧版本
-- **WHEN** 应用第三次有 pending migration 的 upload,v1 和 v2 都存在
-- **THEN** server 删除 v2
-- **AND** v1 → v2(重命名)
-- **AND** 复制 app.db → v1
-- **AND** 应用 migrations + 部署 dist
+#### Scenario: 下载原始文件
 
-#### Scenario: upload 无 pending migration 不触发 backup
-- **WHEN** upload bundle 不含新 migration(或所有 migration 已应用)
-- **THEN** server 跳过 backup 步骤
-- **AND** 只部署 dist(事务内)
-- **AND** backup 文件不变
+- **WHEN** 应用使用平台下载能力下载 content URL
+- **THEN** 下载字节 SHALL 与上传 fixture 字节级一致
 
-### Requirement: 应用内容 API 在 dev/prod 路径一致
+### Requirement: 内容存储提供者不改变 API 契约
 
-应用侧文件上传 SHALL 使用 `{basePath}/content/upload`，文件读取 SHALL 使用上传结果中的 `url`。生产 serve 与 mini-server SHALL 均支持该路径。旧的 mini-server `/api/upload` MAY 作为兼容别名保留，但文档和 SDK SHALL 推荐内容 API 路径。
+Server MAY 使用本地文件系统或 S3-compatible provider 保存内容。provider、endpoint、bucket 和凭据 SHALL 由 Server 配置决定，不得写入应用包或暴露给应用页面。provider 不可用时 Server SHALL 返回明确存储错误或使用已配置的本地 fallback；不得把内容写入开发项目源码目录。
 
-#### Scenario: dev 上传路径与 SDK 一致
-- **WHEN** dev 应用通过 SDK 上传文件
-- **THEN** 请求路径 SHALL 为 `/api/content/upload`
-- **AND** mini-server SHALL 返回 `{ success: true, data: { key, url } }`
+#### Scenario: 离线本地 Server
 
-#### Scenario: prod 上传路径与 SDK 一致
-- **WHEN** 生产应用通过 SDK 上传文件
-- **THEN** 请求路径 SHALL 为 `/serve/{userId}/{pageName}/api/content/upload`
-- **AND** 生产 serve SHALL 返回 `{ success: true, data: { key, url } }`
-
-#### Scenario: 上传结果可直接展示
-- **WHEN** 应用将上传结果的 `url` 用作图片或下载链接
-- **THEN** dev 和 prod SHALL 都能通过该 URL 读取文件
-
-### Requirement: 上传产物可被 native shell 挂载
-上传的前端产物 SHALL 包含 native shell 可解析的 Vite 标准资源引用。服务端 SHALL 能从最新版本产物中定位应用入口 JS 和 CSS。
-
-#### Scenario: 上传 Vite dist 后 native 可加载
-- **WHEN** 用户上传包含 `index.html` 和 `assets/*` 的 Vite dist
-- **THEN** 服务端 SHALL 保存完整版本产物
-- **AND** native shell SHALL 能加载该版本入口资源
-
-### Requirement: 上传成功后 native 入口立即使用最新版本
-上传新版本成功后，native shell SHALL 立即使用新版本资源和 backend contract。
-
-#### Scenario: 上传后访问最新应用
-- **WHEN** 用户上传 vN 后立即访问生产页面
-- **THEN** 页面 SHALL 加载 vN 的应用资源
-- **AND** Named SQL SHALL 使用 vN 对应 backend contract 和已迁移的 app.db schema
-
+- **WHEN** Server 使用本地文件 provider 且无网络
+- **THEN** 图片和 PDF 上传、读取与下载 SHALL 正常工作
+- **AND** 对应用的响应契约 SHALL 与 S3 provider 一致

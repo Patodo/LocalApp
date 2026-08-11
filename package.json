@@ -9,6 +9,7 @@
     "dev:server": "pnpm -C packages/server-core build && concurrently -k \"pnpm -C packages/server-core build --watch --preserveWatchOutput\" \"pnpm -C packages/server dev\"",
     "package:server": "pnpm -C packages/server package",
     "test:server-package": "pnpm -C packages/server test:package",
+    "test:local-dev-package": "pnpm -C packages/server test:local-dev-package",
     "generate:capabilities": "node scripts/generate-platform-capabilities.mjs",
     "check:capabilities": "node scripts/generate-platform-capabilities.mjs --check",
     "test:platform-regression": "node scripts/agent-first-run-benchmark.mjs deterministic",

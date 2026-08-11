@@ -1,24 +1,24 @@
 schema: spec-driven
 
 context: |
-  LocalApp 是一个介于低代码与高度定制开发之间的 Agent 应用平台。应用保留 React / TypeScript 源码和业务模型，平台提供身份、权限、Named SQL、文件、通知、Issue、AI Shell、版本发布和数据运维。产品演进方向是本地优先、按需发布、支持社区分发；尚未实施的 Local Runtime、Studio 和 Community Hub 必须通过独立 OpenSpec change 引入，不得在规格中视为现有能力。
+  LocalApp 是一个本地优先、可按需发布的 Agent 应用平台。应用保留 React / TypeScript 源码和业务模型，统一 LocalApp Server 提供身份、权限、Named SQL、文件、通知、Issue、AI Shell、版本发布、数据运维、对等同步和通用 Device Actions。开发机、局域网主机、NAS、容器和公网部署运行同一个 Server 包；监听地址、数据目录和存储提供者是配置差异，不存在另一套本地后端。
 
   项目采用 pnpm monorepo，主要目录：
-  - packages/server：Fastify 平台服务入口，组合认证、上传、应用访问、设置、协作、CLI 分发等路由
-  - packages/server-core：Server 与本地 mini-server 共享的应用 API 契约、Named SQL、migration、Issue 和运行时逻辑
+  - packages/server：可独立发布的 Node.js + Fastify Server，组合 Web、认证、应用安装、应用 API、上传、协作、数据管理、对等同步、任务和 Device Actions
+  - packages/server-core：Server 使用的应用 API 契约、Named SQL、migration、Issue 和运行时逻辑
   - packages/web：Next.js 静态导出的公开首页、个人工作台、应用设置和 Platform Shell
-  - packages/cli：Rust + clap CLI，负责 init、dev、check、upload、verify、db、backend、sync 和平台管理
+  - packages/cli：Rust + clap CLI，负责 init、dev、check、build、Server profile、应用安装与对等同步
   - packages/sdk-core：零依赖 JavaScript SDK
   - packages/sdk-react：React hooks SDK
   - packages/sdk-agent：Agent、AI Shell 和应用工具注册 SDK
-  - packages/localapp-core：CLI 与 Desktop 共享的 Rust 核心
-  - packages/desktop：Windows-first Tauri Desktop 伴侣，提供通知、可信本地动作和固定 JavaScript runner
-  - init-repo：Vite + React 应用模板，包含 Dev Shell、mini-server、SDK、migration、Named SQL 示例和 Agent skills
+  - packages/localapp-core：CLI 与发布流程共享的 Rust 核心
+  - packages/desktop：可选的无窗口 Tauri 托盘桥接器，只启动同一 Server 包、注册 localapp:// Scheme，并提供打开主页和退出本地服务
+  - init-repo：Vite + React 应用模板，包含 DevShell、统一 Server 代理、SDK、migration、Named SQL 示例和 Agent skills
 
   当前技术栈：
   - TypeScript、Node.js、Fastify、Next.js、React、Vite、SQLite/sql.js、Vitest、Playwright
   - Rust、clap、reqwest、tokio、rusqlite
-  - Tauri 2、Windows NSIS/WebView2
+  - 可选 Tauri 2、Windows NSIS/WebView2
 
   当前稳定应用模型：
   - 正式应用入口为 /{owner}/{app}/，由 Platform Shell 承载导航、Issue、在线用户、收藏和登录态
@@ -26,29 +26,34 @@ context: |
   - 每个应用拥有隔离 SQLite 数据库、版本目录和文件命名空间
   - 数据结构由 migrations/*.sql 管理
   - 稳定后端采用 Named SQL first：query、mutation、transaction mutation 和平台原语
-  - Hosted JavaScript Backend Action 是 legacy 边界，不是普通业务逻辑的默认路径
-  - manifest.json 是应用自带配置，manifest.platform.json 是平台配置且优先
+  - Hosted JavaScript Backend Action 是禁用边界；本机操作使用通用 Device Actions
+  - manifest.json 是应用自带配置，manifest.platform.json 是 Server 配置且优先
   - 数据管理支持包含数据库与文件的备份、导入导出、恢复和恢复出厂设置
 
-  开发与发布主路径：
+  开发、安装与同步主路径：
   - localapp init --name <name> 创建应用和 Agent 开发上下文
-  - localapp dev 启动单应用开发态 mini-server 与 Vite Dev Shell
+  - localapp dev 在项目 tmp/ 下启动同一 Server 包、安装开发应用，并启动 Vite DevShell
   - localapp check 检查平台版本、migration、backend contract、测试、构建和 dist
-  - localapp upload --verify 原子上传并在正式路径执行隔离 smoke 验收
-  - localapp sync 更新 CLI 管理的 runtime 与 Agent skills
+  - localapp build --package 构建可移植 .localapp 包
+  - localapp app install --target <profile> 把同一应用包安装到明确的 Server
+  - localapp app sync --peer <name> 同步应用版本；显式 --with-data 才整体同步该应用数据库与文件
+  - localapp sync 更新 CLI 管理的 runtime 与 Agent skills，不同步 Server 数据
 
   身份与安全：
   - 浏览器使用服务端持久会话 Cookie
   - CLI 和程序化 API 使用 X-API-Key
+  - 每个 Server 保持独立用户、权限、数据库和文件；对端 API Key 只保存在发起同步的 Server
   - 应用权限通过 page access、ACL 和 backend contract security 声明执行
+  - localapp:// 只携带短期 Device Action ticket，不携带脚本、凭据或用户数据
   - 任何客户端提交的任意 SQL、任意服务器代码或未声明能力均不得成为默认安全路径
 
   测试与规格：
-  - OpenSpec capability 位于 openspec/specs，活动变更位于 openspec/changes
+  - OpenSpec capability 位于 openspec/specs，活动变更位于 openspec/changes；archive 只记录历史
   - 源码功能遵循 RED → GREEN → REFACTOR
   - 用户可见行为必须映射到 integration/e2e 场景
+  - 本地验收数据与生成项目全部放在仓库 tmp/ 下，不使用系统 /tmp
+  - 正式 UI 验收使用 browser:control-in-app-browser，且从 /{owner}/{app}/ 入口执行
   - pnpm test:platform-regression 是确定性 Agent 首次运行回归门禁
-  - packages/server、packages/web、init-repo 和 Desktop 分别维护聚焦测试
 
 rules:
   tasks:

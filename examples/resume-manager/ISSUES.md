@@ -4,20 +4,20 @@
 
 ## 本地开发
 
-运行 `npm run dev` 或 `localapp dev` 后，Issue 完全使用本地 mini-server：
+运行 `npm run dev` 或 `localapp dev` 后，Issue 使用项目内启动的统一 LocalApp Server：
 
-- 数据库：`.localapp/dev.db`
-- 文件和截图：`.localapp/issues/attachments/`
-- 默认身份：当前 dev context；没有平台登录时使用本地 `dev-user` owner
-- 网络要求：Issue 列表、创建、评论、附件、标签、负责人和订阅均不要求连接 LocalApp server
+- Server 根目录：`tmp/localapp-dev/server/`
+- 数据库、文件和截图：由该 Server 按应用隔离管理
+- 默认身份：该 Server 中的 `dev-user` owner；Dev Toolkit 可模拟同一 Server 内的其他用户
+- 网络要求：Issue 列表、创建、评论、附件、标签、负责人和订阅均不要求连接远程 Server
 
-Dev Toolkit 可以切换身份。权限检查以 mini-server 当前身份为准，不能通过请求 body 伪造 reporter、评论作者或订阅用户。
+Dev Toolkit 可以切换身份。权限检查以当前 LocalApp Server 的开发上下文为准，不能通过请求 body 伪造 reporter、评论作者或订阅用户。
 
-本地 Issue 和 Hosted Issue 是两套数据，不自动同步。`localapp sync --force` 只恢复 CLI runtime，不删除本地 Issue 数据或附件。同步 runtime 后按 CLI 提示重新运行包管理器安装，以刷新 `node_modules` 中的本地 runtime 链接。
+每个 Server 都有独立的 Issue 数据，不自动同步。`localapp sync --force` 只恢复 CLI runtime，不删除 `tmp/localapp-dev/server/` 中的数据或附件。同步 runtime 后按 CLI 提示重新运行包管理器安装，以刷新 `node_modules` 中的本地 runtime 链接。
 
 ## Hosted
 
-上传后的应用使用平台数据库保存 Issue 元数据，文件与截图通过平台 content storage 写入 MinIO。应用只使用 Shell 与公开 Issue API，不读取 `_issue_*` 系统表或存储 key。
+安装到任意 Server 后，应用都使用该 Server 的应用数据库保存 Issue 元数据，文件与截图通过该 Server 的 content storage 保存；远程部署可配置 MinIO。应用只使用 Shell 与公开 Issue API，不读取 `_issue_*` 系统表或存储 key。
 
 权限边界：owner 管理标签和负责人；reporter 管理自己的 Issue 内容与状态；评论只允许作者编辑或删除；每个用户只管理自己的订阅。前端隐藏按钮不是授权，服务端会逐操作检查。
 

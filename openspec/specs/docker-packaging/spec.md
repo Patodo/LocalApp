@@ -10,7 +10,7 @@ This spec describes Docker packaging requirements for LocalApp production images
 
 #### Scenario: 镜像不包含客户端发行二进制
 - **WHEN** 构建生产 Docker 镜像
-- **THEN** 镜像文件系统不包含 `localapp-cli-*`、Desktop 安装包或历史发行压缩包
+- **THEN** 镜像文件系统不包含 `localapp-cli-*`、原生托盘安装包或历史发行压缩包
 
 #### Scenario: 容器提供 CLI 版本发现
 - **WHEN** 容器配置了有效的 `LOCALAPP_RELEASE_MANIFEST_URL`

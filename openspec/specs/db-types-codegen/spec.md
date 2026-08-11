@@ -1,70 +1,60 @@
 # db-types-codegen Specification
 
 ## Purpose
-TBD - created by archiving change local-mini-server-and-sql-migrations. Update Purpose after archive.
+
+定义从项目内离线 schema 工作库生成应用业务表 TypeScript 类型的输入、输出和隔离边界，使类型生成可离线复现且不会读取或修改任何 canonical Server 的运行时应用数据。
+
 ## Requirements
-### Requirement: localapp db types 命令
 
-`localapp db types -o <file>` SHALL 从 `.localapp/dev.db` 的 schema 反向生成 TypeScript interface 文件。
+### Requirement: localapp db types 使用离线 schema 工作库
 
-实现方式:对每个 user table(排除 `_localapp_*` 内部表),执行 `PRAGMA table_info(<table>)`,根据 SQLite 类型映射 TypeScript 类型,生成 interface。
-
-SQLite → TypeScript 类型映射:
-- INTEGER → `number`
-- TEXT → `string`
-- REAL → `number`
-- NUMERIC → `number`
-- BLOB → `Uint8Array`
-- BOOLEAN → `boolean`(SQLite 存为 INTEGER 0/1,但 PRAGMA 报告 INTEGER;约定字段名以 `is_` 或 `_at` 结尾时按 BOOLEAN/timestamp 处理)
-- timestamp(TEXT ISO 8601) → `string`(字段名以 `_at` 结尾)
-
-interface 命名 SHALL 用 PascalCase 表名(如 `tasks` → `interface tasks`),字段名保持 snake_case。
+`localapp db types -o <file>` SHALL 从 `tmp/localapp-schema/schema.db` 反向生成 TypeScript interface。CLI SHALL 读取每个应用业务表的 `PRAGMA table_info`，排除 `_localapp_*` 内部表，并按 SQLite 类型生成字段类型。该命令 SHALL NOT 连接或修改开发 Server、远端 Server或已安装应用数据库。
 
 #### Scenario: 生成 interface 文件
-- **WHEN** 用户执行 `localapp db types -o src/types.ts`
-- **THEN** CLI 打开 `.localapp/dev.db`
-- **AND** 对每个 user table 执行 PRAGMA table_info
-- **AND** 生成 TypeScript interface,例如:
-  ```typescript
-  export interface tasks {
-    id: number;
-    title: string;
-    status: string;
-    created_by?: string;
-    created_at?: string;
-    updated_at?: string;
-  }
-  ```
-- **AND** 写入 `src/types.ts`
-- **AND** 打印 "Generated <N> interfaces to src/types.ts"
 
-#### Scenario: 排除内部表
-- **WHEN** dev.db 包含 `_localapp_applied_migrations` 等内部表
-- **THEN** 生成的 types.ts 不包含这些表的 interface
-- **AND** 只包含用户业务表
+- **WHEN** 用户先运行 `localapp db migrate`，再运行 `localapp db types -o src/types.ts`
+- **THEN** CLI SHALL 打开 `tmp/localapp-schema/schema.db`
+- **AND** SHALL 为每个业务表生成导出的 TypeScript interface
+- **AND** SHALL 输出生成数量和目标路径
 
-#### Scenario: 字段名以 _at 结尾映射为 timestamp
-- **WHEN** 表 tasks 有 `created_at` 字段(SQLite 类型 TEXT)
-- **THEN** 生成的 interface 中 `created_at?: string;`
-- **AND** 注释 `/** ISO 8601 timestamp */`
+#### Scenario: schema 工作库不存在
 
-#### Scenario: BLOB 字段映射
-- **WHEN** 表 attachments 有 `data` 字段(SQLite 类型 BLOB)
-- **THEN** 生成的 interface 中 `data: Uint8Array;`
+- **WHEN** 用户尚未运行 `localapp db migrate` 或 `localapp db reset`
+- **THEN** `localapp db types` SHALL 返回明确错误
+- **AND** SHALL 提示先创建离线 schema 工作库
 
-#### Scenario: 没有用户表时打印提示
-- **WHEN** dev.db 只包含 `_localapp_*` 内部表(应用尚未 CREATE TABLE)
-- **AND** 执行 `localapp db types -o src/types.ts`
-- **THEN** CLI 打印 "No user tables found in dev.db. Run localapp db migrate first."
-- **AND** 仍创建 src/types.ts,内容为空 export 注释
+#### Scenario: 没有业务表
 
-### Requirement: 平台数据类型由 SDK 内置(不走 db types)
+- **WHEN** schema 工作库只包含 `_localapp_*` 内部表
+- **THEN** CLI SHALL 创建只含说明注释的输出文件
+- **AND** SHALL 提示没有业务表
 
-`localapp db types` SHALL NOT 生成平台表(users、groups、roles)的 interface,因为平台表 schema 由 server 维护,跟 dev.db 无关。平台表类型由 `@localapp/sdk-react` 内置(`PlatformUser`、`PlatformGroup` 等)。
+### Requirement: 平台类型不从应用 schema 生成
 
-#### Scenario: db types 不包含平台表
-- **WHEN** dev.db 包含平台表(users 等,通过 server 同步,虽然实际不存在于 dev.db)
-- **AND** 执行 `localapp db types -o src/types.ts`
-- **THEN** 生成的文件不包含 `interface users` 或 `interface groups`
-- **AND** 文件顶部注释提示 "For platform data types (users, groups, roles), import from @localapp/sdk-react"
+`localapp db types` SHALL NOT 生成用户、群组、角色或其它 Server 平台类型。平台类型由 `@localapp/sdk-react` 随 Server 契约提供。
 
+#### Scenario: 生成文件引用平台类型
+
+- **WHEN** CLI 生成应用类型文件
+- **THEN** 文件头 SHALL 提示从 `@localapp/sdk-react` 导入平台类型
+- **AND** SHALL NOT 输出 `PlatformUser`、`PlatformGroup` 或 `PlatformRole` 的重复定义
+
+### Requirement: SQLite 字段类型映射确定且保留数据库命名
+
+生成器 SHALL 保留表名和列名的原始 snake_case，不做 PascalCase/camelCase 重命名。名称以 `is_` 开头的列 SHALL 生成为 `boolean`；BLOB affinity SHALL 生成为 `Uint8Array`；包含 INT、REAL、NUM、DOUBLE 或 FLOAT 的类型 SHALL 生成为 `number`；TEXT 和其它类型 SHALL 生成为 `string`。名称以 `_at` 结尾的列 SHALL 保持 `string` 并附加 ISO 8601 timestamp 注释。
+
+#### Scenario: 映射混合 SQLite 列
+
+- **WHEN** 表 `resume_files` 包含 `id INTEGER PRIMARY KEY`、`is_active INTEGER NOT NULL`、`content BLOB`、`score REAL`、`title TEXT` 和 `created_at TEXT`
+- **THEN** 生成 interface 名 SHALL 为 `resume_files`
+- **AND** 字段类型 SHALL 依次为 `number`、`boolean`、`Uint8Array`、`number`、`string` 和带 ISO 8601 注释的 `string`
+
+### Requirement: nullability 决定 TypeScript 可选字段
+
+PRIMARY KEY 或 SQLite `NOT NULL` 列 SHALL 生成必需属性；其它 nullable 列 SHALL 生成带 `?` 的可选属性。生成器 SHALL NOT 因默认值或命名约定改变该 nullability 规则。
+
+#### Scenario: 生成可选和必需属性
+
+- **WHEN** `id` 是 primary key、`title` 是 `NOT NULL`、`notes` 可为 NULL
+- **THEN** `id` 和 `title` SHALL 是必需属性
+- **AND** `notes` SHALL 生成为 `notes?: string`

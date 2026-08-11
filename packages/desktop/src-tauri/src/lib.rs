@@ -2,18 +2,21 @@ pub mod activation;
 pub mod device_control_client;
 pub mod server_process;
 
-use activation::{validate_confirmation_url, ActivationTicket};
+use activation::{ActivationTicket, validate_confirmation_url};
 use device_control_client::DeviceControlClient;
 use notify_rust::Notification;
 use server_process::{ServerLaunch, ServerProcess};
-use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::open_url;
-use uuid::Uuid;
 use url::Url;
+use uuid::Uuid;
 
 pub struct BridgeState {
     pub server: Mutex<Option<ServerProcess>>,
@@ -22,7 +25,10 @@ pub struct BridgeState {
 }
 
 pub fn tray_menu_specs() -> [(&'static str, &'static str); 2] {
-    [("tray-open-home", "打开主页"), ("tray-exit", "退出本地服务")]
+    [
+        ("tray-open-home", "打开主页"),
+        ("tray-exit", "退出本地服务"),
+    ]
 }
 
 fn notify_startup_failure(message: &str) {
@@ -102,13 +108,25 @@ fn forward_activation(app: &AppHandle, raw_url: String) {
     tauri::async_runtime::spawn(async move {
         let (ready_origin, control_token) = {
             let state = handle.state::<BridgeState>();
-            let Ok(server) = state.server.lock() else { return };
-            let Some(server) = server.as_ref() else { return };
+            let Ok(server) = state.server.lock() else {
+                return;
+            };
+            let Some(server) = server.as_ref() else {
+                return;
+            };
             (server.open_home(), state.control_token.clone())
         };
-        let Ok(client) = DeviceControlClient::new(&ready_origin, control_token) else { return };
-        let Ok(response) = client.activate(&ticket).await else { return };
-        let Ok(confirmation_url) = validate_confirmation_url(&response.confirmation_url, &ready_origin) else {
+        let Ok(client) = DeviceControlClient::new(&ready_origin, control_token) else {
+            return;
+        };
+        let Ok(response) = client.activate(&ticket).await else {
+            return;
+        };
+        let Ok(confirmation_url) = validate_confirmation_url(
+            &response.confirmation_url,
+            &ready_origin,
+            &response.request_id,
+        ) else {
             return;
         };
         let _ = open_url(&confirmation_url, None::<&str>);

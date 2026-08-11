@@ -231,17 +231,17 @@ SDK SHALL 提供 `useUpload()` Hook，返回 `{ upload: (file: File) => Promise<
 
 ### Requirement: SDK 方法必须有服务端契约
 
-`LocalAppClient` 暴露的每个公开方法 SHALL 对应一个开发态和生产态均可用的服务端契约。SDK 测试 SHALL 验证请求路径，运行时契约测试 SHALL 验证 mini-server 与生产 serve 至少覆盖同一组应用 API。
+`LocalAppClient` 暴露的每个公开方法 SHALL 对应一个开发态和正式部署均可用的统一 Server 契约。SDK 测试 SHALL 验证请求路径，Server 集成测试 SHALL 验证同一应用 API 在两种启动配置下行为一致。
 
 #### Scenario: count 方法有 dev/prod 端点
 - **WHEN** 应用调用 `client.count("posts")`
 - **THEN** SDK SHALL 请求 `{basePath}/posts/count`
-- **AND** mini-server 和生产 serve SHALL 均支持该路径
+- **AND** `localapp dev` 与正式部署的统一 Server SHALL 均支持该路径
 
 #### Scenario: upload 方法使用内容 API
 - **WHEN** 应用调用 `client.upload(file)`
 - **THEN** SDK SHALL 请求 `{basePath}/content/upload`
-- **AND** mini-server 和生产 serve SHALL 均支持该路径
+- **AND** `localapp dev` 与正式部署的统一 Server SHALL 均支持该路径
 
 #### Scenario: me 方法解析标准响应
 - **WHEN** 应用调用 `client.me()`

@@ -29,7 +29,11 @@ fn add_profile(config_dir: &Path, name: &str, server_url: &str, api_key: &str) {
             api_key,
         ],
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -54,7 +58,11 @@ fn app_install_posts_the_package_to_the_explicit_server_target() {
     let config = tempdir().unwrap();
     add_profile(config.path(), "active", &active.base_url(), "active-key");
     add_profile(config.path(), "target", &target.base_url(), "target-key");
-    assert!(cli(config.path(), &["server", "use", "active"]).status.success());
+    assert!(
+        cli(config.path(), &["server", "use", "active"])
+            .status
+            .success()
+    );
 
     let project = tempdir().unwrap();
     let package = project.path().join("profile-e2e.localapp");
@@ -67,7 +75,10 @@ fn app_install_posts_the_package_to_the_explicit_server_target() {
             platform_version: "^1.0".into(),
         },
         vec![
-            ("manifest.json".into(), br#"{"name":"profile-e2e","distDir":"dist"}"#.to_vec()),
+            (
+                "manifest.json".into(),
+                br#"{"name":"profile-e2e","distDir":"dist"}"#.to_vec(),
+            ),
             ("dist/index.html".into(), b"<main>package</main>".to_vec()),
         ],
     )
@@ -84,7 +95,11 @@ fn app_install_posts_the_package_to_the_explicit_server_target() {
             package.to_str().unwrap(),
         ],
     );
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     installed.assert();
     active_request.assert_hits(0);
     let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -133,7 +148,11 @@ fn app_sync_sends_peer_name_and_waits_for_completion() {
         .env("LOCALAPP_CONFIG_DIR", config.path())
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     start.assert();
     job.assert();
     let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

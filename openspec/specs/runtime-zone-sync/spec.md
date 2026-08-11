@@ -34,7 +34,7 @@ CLI init SHALL 在用户项目根的 `CLAUDE.md` 写入硬约束：「禁止修�
 CLI SHALL 提供 `localapp sync` 子命令，将 CLI 二进制内嵌的最新模板刷新到当前用户项目的 CLI 领地。算法 SHALL 为：
 
 1. 校验当前目录是 localapp 项目（存在 `.localapp/dev-config.json`）
-2. 校验项目未被 eject（`.localapp/dev-config.json` 中 `ejected` 不为 true）
+2. 从 `.localapp/project-config.json` 校验项目未被 eject；若发现旧 `.localapp/dev-config.json` 中的 `autoSync`/`ejected` 标记，先以“持久配置原子写入、临时配置原子清理”的顺序完成可重复迁移
 3. 删除 CLI 领地：`rm -rf .localapp/runtime/`、遍历 `.claude/skills/` 删除 `localapp*` 和 `agent-tool-patterns` 子目录
 4. 从 CLI 二进制 `include_dir!` 重新抽出 runtime 和 skills
 5. 写入新的 `.localapp/runtime/version.json`（包含 `cliVersion` 字段）
@@ -55,8 +55,14 @@ sync SHALL 幂等：连续执行两次结果完全一致。sync SHALL NOT 触碰
 - **THEN** 输出错误 `{"error": "Not a localapp project. Run 'localapp init' first."}`，退出码 1
 
 #### Scenario: sync 在已 eject 的项目执行
-- **WHEN** `.localapp/dev-config.json` 包含 `ejected: true`，执行 `localapp sync`
-- **THEN** 输出错误 `{"error": "Project has been ejected. sync is disabled. To re-enable, remove 'ejected' flag and restore runtime manually."}`，退出码 1
+- **WHEN** `.localapp/project-config.json` 包含 `ejected: true`，执行 `localapp sync`
+- **THEN** 输出错误 `{"error": "Project has been ejected. sync is permanently disabled for this project."}`，退出码 1
+
+#### Scenario: 迁移旧持久标记
+- **WHEN** 旧 `.localapp/dev-config.json` 包含 `autoSync` 或 `ejected`
+- **THEN** CLI SHALL 先原子写入 `.localapp/project-config.json`
+- **AND** 再原子移除 `dev-config.json` 中这两个字段，保留其临时运行字段
+- **AND** 任一步中断后再次执行 SHALL 幂等完成迁移且不得丢失已关闭同步或已 eject 状态
 
 #### Scenario: sync 保留用户自有 skill
 - **WHEN** `.claude/skills/my-custom-skill/` 存在，执行 `localapp sync`
@@ -110,7 +116,7 @@ CLI SHALL 支持 `localapp sync --interactive` 参数。在 interactive 模式�
 ### Requirement: localapp sync --off 关闭自动同步
 
 CLI SHALL 支持 `localapp sync --off` 参数。执行后：
-- 在 `.localapp/dev-config.json` 写入 `"autoSync": false`
+- 在 `.localapp/project-config.json` 写入 `"autoSync": false`
 - 后续 `localapp sync --quiet`（即 postinstall 钩子）SHALL 检测此字段、跳过 sync、输出 `{"success": true, "skipped": "autoSync disabled"}`
 - 显式 `localapp sync` 和 `localapp sync --interactive` 不受影响，仍可手动执行
 
@@ -118,7 +124,8 @@ CLI SHALL 支持 `localapp sync --off` 参数。执行后：
 
 #### Scenario: 关闭自动同步
 - **WHEN** 执行 `localapp sync --off`
-- **THEN** `.localapp/dev-config.json` 包含 `"autoSync": false`，输出 `{"success": true, "autoSync": false}`
+- **THEN** `.localapp/project-config.json` 包含 `"autoSync": false`，输出 `{"success": true, "autoSync": false}`
+- **AND** `.localapp/dev-config.json` SHALL NOT 包含 `autoSync`
 
 #### Scenario: 关闭后 postinstall 跳过
 - **WHEN** `autoSync: false` 时触发 `localapp sync --quiet`
@@ -130,7 +137,7 @@ CLI SHALL 支持 `localapp sync --off` 参数。执行后：
 
 #### Scenario: 重新开启自动同步
 - **WHEN** 执行 `localapp sync --on`
-- **THEN** `.localapp/dev-config.json` 的 `autoSync` 字段被移除（或设为 true），postinstall 钩子恢复工作
+- **THEN** `.localapp/project-config.json` 的 `autoSync` 字段被移除，postinstall 钩子恢复工作
 
 ### Requirement: localapp eject 命令——一次性脱钩
 
@@ -141,14 +148,15 @@ CLI SHALL 提供 `localapp eject` 子命令，将 CLI 领地的所有内容移�
 3. 用户 `package.json` 中 `@localapp/sdk`、`@localapp/sdk-react`、`@localapp/sdk-agent`、`@localapp/app-kit` 的 `file:` 引用路径改为指向 `src/_localapp_runtime/...`
 4. 用户 `package.json` 移除 `postinstall` 钩子（不再自动 sync）
 5. 用户 `tsconfig.json` 和 `vite.config.ts` 中对 runtime 的引用改为指向新位置
-6. `.localapp/dev-config.json` 写入 `"ejected": true` 永久标记
+6. `.localapp/project-config.json` 写入 `"ejected": true` 永久标记
 7. 提示用户「你已脱离自动更新轨道，runtime 改动需要自行维护」
 
 eject SHALL 不可逆——不提供 uneject 命令。eject SHALL 在执行前要求用户输入项目名确认（避免误操作）。
 
 #### Scenario: eject 完整流程
 - **WHEN** 执行 `localapp eject`，用户输入项目名确认
-- **THEN** `.localapp/runtime/` 不再存在、`src/_localapp_runtime/` 出现且内容完整；`.claude/skills/localapp-*/` 全部改名为 `custom-localapp-*/`；`package.json` 中 SDK 引用指向新路径；`dev-config.json` 包含 `"ejected": true`
+- **THEN** `.localapp/runtime/` 不再存在、`src/_localapp_runtime/` 出现且内容完整；`.claude/skills/localapp-*/` 全部改名为 `custom-localapp-*/`；`package.json` 中 SDK 引用指向新路径；`project-config.json` 包含 `"ejected": true`
+- **AND** 后续规范化重写 `.localapp/dev-config.json` 不得解除 eject 状态
 
 #### Scenario: eject 后 sync 被拒绝
 - **WHEN** eject 后执行 `localapp sync`
@@ -228,7 +236,7 @@ sync 自动 patch SHALL 仅在非 eject 模式下执行；eject 后用户自负�
 - **AND** 终端不打印任何 main.tsx 相关信息
 
 #### Scenario: eject 后 sync 不 patch main.tsx
-- **WHEN** 项目已执行过 `localapp eject`（`dev-config.json` 的 `ejected` 字段为 true）
+- **WHEN** 项目已执行过 `localapp eject`（`project-config.json` 的 `ejected` 字段为 true）
 - **AND** 执行 `localapp sync`
 - **THEN** sync 拒绝执行（按现有 eject 拒绝逻辑），main.tsx 不被检查或修改
 
@@ -239,7 +247,7 @@ sync 自动 patch SHALL 仅在非 eject 模式下执行；eject 后用户自负�
 - **AND** 其他 sync 流程正常执行
 
 ### Requirement: sync 同步 native runtime
-`localapp sync` SHALL 同步 native runtime 所需的 vite plugin、DevShell、SDK 源码、样式 preset、mini-server 和 version.json。
+`localapp sync` SHALL 同步 Vite plugin、DevShell、SDK 源码、样式 preset 和 version.json。runtime SHALL NOT 包含应用 HTTP 服务；`localapp dev` 使用可发布的统一 Server 包。
 
 #### Scenario: sync 后 runtime 为最新 native 版本
 - **WHEN** 用户执行 `localapp sync`
@@ -252,4 +260,3 @@ sync 自动 patch SHALL 仅在非 eject 模式下执行；eject 后用户自负�
 #### Scenario: runtime 不包含 iframe host
 - **WHEN** sync 完成后扫描 `.localapp/runtime`
 - **THEN** runtime SHALL NOT 包含默认 iframe wrapper 代码
-

@@ -61,7 +61,7 @@ localapp dev
 localapp check
 ```
 
-`localapp dev` 启动应用开发环境并接入派生的 Dev Shell。`localapp check` 在上传前检查平台兼容性、migration、backend contract、测试、构建结果和发布目录。
+`localapp dev` 启动应用开发环境并接入派生的 Dev Shell。`localapp check` 在应用包构建或安装前检查平台兼容性、migration、backend contract、测试、构建结果和发布目录。
 
 数据库常用命令：
 
@@ -73,6 +73,10 @@ localapp db validate
 localapp db types --output src/lib/database.types.ts
 ```
 
+这些命令只维护项目 `tmp/localapp-schema/schema.db` 下的离线 schema 工作库，用于
+migration 校验、seed 检查和类型生成，不是应用运行时后端。运行中应用的数据重置、
+快照和恢复由 Dev Toolkit 调用当前统一 Server 完成。
+
 ### 4. 安装、发布与对等同步
 
 构建并安装到一个命名 Server：
@@ -83,8 +87,8 @@ localapp app install --target local
 ```
 
 `build --package` 生成可移植的 `.localapp`，`app install` 将包提交给目标 Server。
-本地 Server 与远程 Server 使用同一套应用、认证、权限、数据库和文件实现；本地
-运行不需要单独的 MiniServer 或 Local Runtime。
+本地与远程都运行同一份 Server 包，并使用同一套应用、认证、权限、数据库和文件实现；
+两者只在监听地址、数据目录和存储配置上不同。
 
 配置目标 Server 后显式选择 profile：
 
@@ -142,7 +146,7 @@ backend/
 - Query 用于参数化读取、过滤、分页和聚合。
 - Mutation 用于经过权限校验的写入。
 - Transaction mutation 用于需要原子提交的多步业务操作。
-- 权限和参数约束写入契约，由平台在上传和运行时统一验证。
+- 权限和参数约束写入契约，由平台在应用包安装和运行时统一验证。
 
 可以从 migration 生成标准 CRUD 契约：
 
@@ -157,7 +161,7 @@ localapp backend scaffold --table work_items --security-profile owner
 
 应用包含两个配置来源：
 
-- `manifest.json`：应用源码自带配置，随版本上传。
+- `manifest.json`：应用源码自带配置，打入应用包并随版本安装。
 - `manifest.platform.json`：平台侧配置，由应用所有者在设置页维护。
 
 平台配置优先。所有者可以在设置页切换到应用自带配置；切换后 manifest 相关设置只读。应用信息、基础设置、访问控制、数据权限、通知和数据管理按页签分类。

@@ -1,31 +1,40 @@
 ## Purpose
 
-This spec describes the expected behavior, acceptance criteria, and integration boundaries for the sdk-full-chain-e2e capability in LocalApp.
+定义 SDK 在真实 `.localapp` 包、canonical Server、正式 Platform Shell 和 Named SQL API 上的全链路端到端验证。
 
 ## Requirements
 
-### Requirement: SDK detectBasePath + CRUD 全链路端到端验证
-系统 SHALL 提供端到端测试验证 SDK 的 `detectBasePath()` 路径检测和 CRUD fetch 请求在真实浏览器和 Server 环境下全链路可用。
+### Requirement: SDK basePath 与 Named SQL 全链路验证
 
-#### Scenario: SDK 在 /serve/{uid}/{name}/ 路径下正确检测 basePath
-- **GIVEN** 通过 CLI init 创建应用并通过 CLI schemas create 创建 `items` 数据表
-- **AND** 上传一个包含内联 SDK 逻辑的 HTML 页面（页面内执行 `detectBasePath()` 并将结果写入 DOM）
-- **WHEN** Playwright 访问部署页面 URL `/serve/{userId}/{name}/`
-- **THEN** 页面 DOM 中的 basePath 值为 `/serve/{userId}/{name}/api`
+端到端测试 SHALL 从 builtin template 创建应用，声明 backend contract，构建 `.localapp`，通过 `/api/me/apps/install` 安装到干净 Server，并从正式 `/<owner>/<app>/` URL 使用真实浏览器验证 SDK。
 
-#### Scenario: SDK list 返回空数据
-- **GIVEN** 同上环境，数据表为空
-- **WHEN** 页面内执行 `fetch(basePath + '/items')`
-- **THEN** 返回 status 200，body 中 `data` 为空数组
+#### Scenario: 正式 Shell 中检测应用 API basePath
 
-#### Scenario: SDK create + list 全链路
-- **GIVEN** 同上环境
-- **WHEN** 页面内先执行 `fetch(basePath + '/items', { method: 'POST', body: { title: 'hello' } })`，再执行 list
-- **THEN** create 返回 status 201，list 返回包含新数据的数组，`data[0].title` 为 `"hello"`
+- **GIVEN** 应用已安装到 `test-owner/sdk-app`
+- **WHEN** Browser 访问 `/test-owner/sdk-app/`
+- **THEN** Platform Shell SHALL 注入 `/serve/test-owner/sdk-app/` resource base
+- **AND** SDK SHALL 将应用 API basePath 解析为 `/serve/test-owner/sdk-app/api`
 
-### Requirement: 测试 HTML 构造与部署
-测试 SHALL 构造包含内联 SDK 逻辑的 HTML 文件，通过 CLI upload 部署到 Server，然后用 Playwright 访问验证。
+#### Scenario: named query 返回列表
 
-#### Scenario: 上传测试 HTML 后可访问
-- **WHEN** 将内含 SDK fetch 逻辑的 HTML 写入 dist/index.html 并通过 CLI upload 部署
-- **THEN** Playwright 访问页面 URL 返回 200，页面 DOM 中包含 SDK 执行结果
+- **GIVEN** 应用声明 `$items.list` named query 且数据为空
+- **WHEN** 页面调用 `client.list("items")`
+- **THEN** SDK SHALL 请求 named query endpoint
+- **AND** 页面 SHALL 显示空列表且 console 无错误
+
+#### Scenario: named mutation 后刷新列表
+
+- **GIVEN** 应用声明 `$items.create` 和 `$items.list`
+- **WHEN** 页面创建 title 为 `hello` 的记录并刷新
+- **THEN** mutation SHALL 返回成功结果
+- **AND** 列表 SHALL 包含新记录
+
+### Requirement: 开发与正式安装使用同一 Server 契约
+
+同一应用 SHALL 分别通过 `localapp dev` 和正式包安装运行。除 Vite 编译与代理外，两者 SHALL 使用同一 Server 路由、backend contract、身份与内容 API；测试不得使用 REST CRUD fallback 或 raw route 作为用户体验入口。
+
+#### Scenario: dev 与正式 API 一致
+
+- **WHEN** 测试在开发页和正式页执行同一组 named query、mutation、identity 和 content 操作
+- **THEN** 两边 SHALL 返回相同响应形态和权限结果
+- **AND** 不得启动模板自带 HTTP 服务

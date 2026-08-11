@@ -1,6 +1,6 @@
 ## Purpose
 
-应用层数据 API。原 RESTful CRUD 端点已全部移除，应用层数据通道统一为 named SQL（`/api/queries/:name`、`/api/mutations/:name`）。本 capability 描述应用 API 路由匹配与共享 HTTP 契约层的行为，确保 dev mini-server 与生产 server 行为一致。
+应用层数据 API。原 RESTful CRUD 端点已全部移除，应用层数据通道统一为 named SQL（`/api/queries/:name`、`/api/mutations/:name`）。本 capability 描述统一 Server 在开发与正式部署中的同一 HTTP 契约。
 
 ## Requirements
 
@@ -8,7 +8,7 @@
 
 应用 API 路由匹配（`matchAppApiRoute`）SHALL 仅识别以下端点类别：平台辅助（time/me/users/groups/groups/:id/platform/*）、内容（content/upload、content/:key）、schemas 自省（_schemas）、named SQL（queries/:name、mutations/:name）。路由匹配 SHALL NOT 识别 resource 风格的隐式 CRUD 路径（`/<resource>`、`/<resource>/:id`、`/<resource>/count`、`/<resource>/:id/transitions`、`/<resource>/:id/transitions/:name`）、raw SQL（`/db/exec`）或 legacy upload（`/upload`）。
 
-CRUD HTTP 契约的共享层 SHALL 继续被生产 server 和 dev mini-server 共享，确保两端行为一致。
+Named SQL HTTP 契约 SHALL 由唯一 Server 路由实现；开发模式不得复制或适配另一套分发逻辑。
 
 #### Scenario: 未识别路径返回 404
 
@@ -19,7 +19,7 @@ CRUD HTTP 契约的共享层 SHALL 继续被生产 server 和 dev mini-server �
 
 #### Scenario: dev 与 prod 行为一致
 
-- **WHEN** 同一应用在 dev 模式（mini-server）和 prod 模式（生产 server）下被访问
+- **WHEN** 同一应用在 `localapp dev` 和正式 Server 安装后被访问
 - **THEN** 两端 SHALL 返回相同的 API 表面
 - **AND** 都不得暴露 REST CRUD 路径
 

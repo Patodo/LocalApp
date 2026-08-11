@@ -21,7 +21,6 @@ init-repo/
 ├── runtime/
 │   ├── vite-plugin.mjs
 │   ├── dev-shell.tsx
-│   ├── mini-server.mjs                  ← 新增
 │   └── ...
 ├── manifest.json                        ← 新增 platformVersion 字段
 └── ...
@@ -37,10 +36,11 @@ init-repo/
 - **THEN** 包含 `db/seeds/dev.sql` 文件
 - **AND** 文件含示例 INSERT 语句(被注释或为少量测试数据)
 
-#### Scenario: runtime 包含 mini-server.mjs
+#### Scenario: runtime 不包含应用服务
 - **WHEN** 查看 `runtime/` 目录
-- **THEN** 包含 `mini-server.mjs` 文件
-- **AND` mini-server.mjs` 通过 `localapp dev` spawn 启动
+- **THEN** SHALL 只包含 DevShell、Vite plugin、SDK、样式和版本文件
+- **AND** SHALL NOT 包含 HTTP Server 入口
+- **AND** `localapp dev` SHALL 启动可发布的统一 Server 包
 
 #### Scenario: manifest.json 包含 platformVersion
 - **WHEN** 查看模板的 manifest.json
@@ -125,7 +125,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 #### Scenario: CLAUDE.md 包含 CLI 命令
 - **WHEN** 查看 `init-repo/CLAUDE.md`
-- **THEN** 文档包含 `localapp schemas create`、`localapp upload` 等常用命令说明
+- **THEN** 文档包含 `localapp dev`、`localapp check --json`、`localapp build --package` 和 `localapp app install --target <profile>` 等常用命令说明
 
 #### Scenario: CLAUDE.md 包含访问控制说明
 - **WHEN** 查看 `init-repo/CLAUDE.md`
@@ -139,13 +139,16 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 - **WHEN** 查看 `init-repo/vite.config.ts`
 - **THEN** 文件仅约 3-5 行：`import { defineConfig } from "vite"`、`import { localapp } from "@localapp/app-kit/vite"`、`export default defineConfig({ plugins: [localapp()] })`，**不**直接读取 dev-config 或构 proxy
 
-#### Scenario: 有 dev-config 时代理生效
-- **WHEN** `.localapp/dev-config.json` 存在且包含 `{ "serverUrl": "http://192.168.1.100:3000" }`
-- **THEN** `npm run dev` 时 `/api/me` 请求被代理到 `http://192.168.1.100:3000/api/me`（由 runtime/vite-plugin.ts 内部处理）
+#### Scenario: canonical dev-config 代理生效
+- **WHEN** `localapp dev` 写入包含 `serverUrl`、`userId`、`pageName`、`apiKey` 和 `appServerPort` 的 `.localapp/dev-config.json`
+- **THEN** `npm run dev:vite` SHALL 把 `/api/me` 等平台 API 代理到 `serverUrl`
+- **AND** SHALL 把应用 API 改写到同一 Server 的 `/serve/<userId>/<pageName>/api/*`
 
-#### Scenario: 无 dev-config 时不报错
-- **WHEN** `.localapp/dev-config.json` 不存在
-- **THEN** `npm run dev:vite` 正常启动，不配置 proxy，API 请求走本地（会 404）
+#### Scenario: dev-config 缺失或不完整时失败
+- **WHEN** 开发 Server 启动时 `.localapp/dev-config.json` 不存在或缺少任一必需字段
+- **THEN** `npm run dev:vite` SHALL 以可操作错误终止
+- **AND** SHALL 提示先运行 `localapp dev`
+- **AND** SHALL NOT 静默启动一个没有 canonical Server 后端的页面
 
 #### Scenario: 生产构建不受影响
 - **WHEN** 执行 `npm run build`
@@ -197,7 +200,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 ### Requirement: Agent 系统工具使用页面级 API 路径
 
-模板的 Agent 系统工具 SHALL NOT 重新提供通用 `queryData` 或 `listSchemas` 数据探查工具。应用数据访问 SHALL 继续通过 SDK hooks/client、registered named SQL 和应用通过 `useRegisterTools` 暴露的明确业务工具完成。模板文档 SHALL 将 `/{userId}/{name}` 描述为上传后的正式验证入口，不得要求 agent 通过 `/serve/{userId}/{name}/` 验收应用功能。
+模板的 Agent 系统工具 SHALL NOT 重新提供通用 `queryData` 或 `listSchemas` 数据探查工具。应用数据访问 SHALL 继续通过 SDK hooks/client、registered named SQL 和应用通过 `useRegisterTools` 暴露的明确业务工具完成。模板文档 SHALL 将 `/{userId}/{name}` 描述为安装后的正式验证入口，不得要求 agent 通过 `/serve/{userId}/{name}/` 验收应用功能。
 
 #### Scenario: 系统工具不提供 queryData
 - **WHEN** 应用初始化后调用 `createSystemTools()`
@@ -209,8 +212,8 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 - **THEN** 返回的系统工具列表 SHALL NOT 包含 `listSchemas`
 - **AND** schema 信息 SHALL 通过应用代码、SDK 类型或明确注册的业务工具按需暴露
 
-#### Scenario: 上传后验证使用正式 Shell route
-- **WHEN** 应用上传后需要验收用户可见功能
+#### Scenario: 安装后验证使用正式 Shell route
+- **WHEN** 应用安装后需要验收用户可见功能
 - **THEN** 模板文档 SHALL 指示访问 `/{userId}/{name}`
 - **AND** 模板文档 SHALL NOT 将 `/serve/{userId}/{name}/` 描述为默认功能验收入口
 
@@ -277,11 +280,11 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 #### Scenario: Skill 包含限制说明
 - **WHEN** AI Agent 阅读 upload skill
-- **THEN** 文档说明支持的文件类型（png、jpg、jpeg、gif、webp、svg）和 10MB 大小限制
+- **THEN** 文档说明支持的文件类型（png、jpg、jpeg、gif、webp、svg、pdf）和 10MB 大小限制
 
-### Requirement: CLAUDE.md 包含醒目的部署工作流章节
+### Requirement: CLAUDE.md 包含醒目的开发与安装工作流章节
 
-`init-repo/CLAUDE.md` SHALL 在「平台概述」之后、所有能力介绍之前，包含「开发工作流」章节。该章节 SHALL 列出 `npm run build` 和 `localapp upload` 两个步骤，并明确标注「构建后必须执行 upload」的强制性说明。
+`init-repo/CLAUDE.md` SHALL 在「平台概述」之后、所有能力介绍之前，包含「开发工作流」章节。该章节 SHALL 说明 `localapp dev` 使用项目 canonical Server，并列出 `localapp check --json` 与 `localapp app install --target <profile>` 的正式安装流程。
 
 #### Scenario: 部署章节位置
 - **WHEN** 阅读 CLAUDE.md 文档
@@ -289,7 +292,8 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 #### Scenario: 部署步骤内容
 - **WHEN** 阅读「开发工作流」章节
-- **THEN** 章节包含 `npm run build` 和 `localapp upload` 两个步骤，以及「**构建后必须执行** upload」的强调说明
+- **THEN** 章节包含 `localapp dev`、`localapp check --json` 和 `localapp app install --target <profile>`
+- **AND** 明确正式功能验收使用 Server 返回的 `/<owner>/<app>/` URL
 
 #### Scenario: 表单可访问性规范
 - **WHEN** 阅读 CLAUDE.md 中的表单代码示例
@@ -619,52 +623,33 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
 #### Scenario: 示例 migration 可执行
 - **WHEN** 用户 `localapp init my-app` 后执行 `localapp db migrate`
-- **THEN** 示例 001_init.sql 成功应用到 dev.db
+- **THEN** 示例 001_init.sql 成功应用到 `tmp/localapp-schema/schema.db` 离线工作库
 - **AND` tasks` 表存在,有相应字段
 - **AND` idx_tasks_status` 索引存在
 
 #### Scenario: 示例 seed 文件可选应用
 - **WHEN** 用户编辑 `db/seeds/dev.sql` 加入测试数据
 - **AND` localapp db reset`
-- **THEN` dev.db` 包含 seed 数据
+- **THEN` tmp/localapp-schema/schema.db` 包含 seed 数据
 - **AND` tasks` 表有示例记录
 
-### Requirement: 模板 mini-server.mjs 实现
+### Requirement: 模板通过 Vite 接入统一 Server
 
-模板 `runtime/mini-server.mjs` SHALL 实现 mini-server 入口,接受命令行参数 `--port <N> --data-dir <path> --prod-server <url> --api-key <key>`,启动 HTTP server 提供应用层 API。
+模板 SHALL 只提供 Vite plugin 和 DevShell。Vite plugin SHALL 从 `.localapp/dev-config.json` 读取唯一 Server URL，把应用 API 改写到已安装应用作用域，把平台和开发工具 API 原样转发到同一 Server，并注入认证与开发应用 header。模板 SHALL NOT 实现、缓存或 mock Server API。
 
-mini-server SHALL:
-1. 加载 `.localapp/dev.db`(不存在则创建)
-2. 应用 migrations 目录所有未应用的 migration
-3. 监听端口,处理 `/api/<resource>`、`/api/_schemas`、`/api/me`、`/api/upload` 请求
-4. 转发 `/api/platform/*` 到生产 server(带 5 分钟 TTL 缓存)
-5. 接收 SIGTERM/SIGINT 信号优雅退出
+#### Scenario: 本地开发 API 走同一 Server
+- **WHEN** 用户运行 `localapp dev` 并从 Vite 页面请求应用、用户、上传或 `/api/dev/*`
+- **THEN** 所有请求 SHALL 到达 `.localapp/dev-config.json` 中同一个 `serverUrl`
+- **AND** 应用 API SHALL 使用正式 `/serve/<owner>/<app>/api/*` 契约
+- **AND** 平台数据 SHALL 来自项目 Server 的真实用户和群组
 
-#### Scenario: mini-server 启动
-- **WHEN** localapp dev 命令 spawn `node runtime/mini-server.mjs --port 5174 ...`
-- **THEN` mini-server.mjs` 启动成功,监听指定端口
-- **AND` migrations/` 目录所有未应用 migration 已应用到 dev.db
-- **AND` stdout` 打印 "Mini-server ready on port 5174"
+### Requirement: 模板示例 main.tsx 不感知 Server 编排
 
-#### Scenario: mini-server 转发平台请求
-- **WHEN` mini-server` 收到 `/api/platform/users` 请求
-- **THEN` mini-server` 转发到 `--prod-server` 指定的 URL
-- **AND` X-API-Key` header 设为 `--api-key` 参数值
-- **AND` 缓存 5 分钟
+模板的 `src/main.tsx` SHALL 保持只 render App，不引用 Server 启动代码。统一 Server 由 CLI 在 `localapp dev` 时启动，对应用代码透明。
 
-#### Scenario: mini-server 优雅退出
-- **WHEN` mini-server` 收到 SIGTERM 或 SIGINT
-- **THEN` mini-server` 关闭 HTTP server,等待 in-flight 请求完成
-- **AND` dev.db` flush 到磁盘
-- **AND` 进程退出码 0
-
-### Requirement: 模板示例 main.tsx 不引用 mini-server
-
-模板的 `src/main.tsx` SHALL 保持现状(只 render App),不引用 mini-server。mini-server 由 CLI 在 `localapp dev` 时 spawn 启动,对应用代码透明。
-
-#### Scenario: main.tsx 不感知 mini-server
+#### Scenario: main.tsx 不包含 Server 启动代码
 - **WHEN** 查看模板的 `src/main.tsx`
-- **THEN** 文件只包含 `render(<App />)`,无 mini-server 相关引用
+- **THEN** 文件只包含 `render(<App />)`，无 Server 进程或代理配置
 - **AND** DevShell 由 vite-plugin 虚拟模块注入(详见 dev-shell-injection spec)
 
 ### Requirement: init-repo 示例遵守 native 边界

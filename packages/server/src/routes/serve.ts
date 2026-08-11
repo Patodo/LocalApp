@@ -87,6 +87,7 @@ function getMimeType(filePath: string): string {
     ".html": "text/html",
     ".css": "text/css",
     ".js": "application/javascript",
+    ".mjs": "application/javascript",
     ".json": "application/json",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -330,7 +331,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
         const appRoute = matchAppApiRoute(req.method, restPath.slice("api".length));
 
         if (appRoute.kind === "time") {
-          return { success: true, data: buildServerTime(new Date().toISOString()) };
+          return { success: true, data: buildServerTime(req.devNow ?? new Date().toISOString()) };
         }
 
         if (restPath === "api/collaboration/commit" && req.method === "POST") {
@@ -444,6 +445,10 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
       const version = req.verificationSession?.version ?? meta.currentVersion;
       const versionDir = path.join(getPageDir(dataDir(), userId, pageName), "versions", `v${version}`);
 
+      if (restPath === ".localapp" || restPath.startsWith(".localapp/")) {
+        return reply.status(404).send({ success: false, error: "File not found" });
+      }
+
       let filePath = path.join(versionDir, restPath || "index.html");
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         reply.header("Content-Security-Policy", CSP_HEADER);
@@ -530,7 +535,7 @@ async function handleCrudRequest(
         context: () => ({
           visitorId: visitor.id,
           ownerId: userId,
-          now: new Date(),
+          now: new Date(req.devNow ?? Date.now()),
         }),
       });
       const result = await runtime.execute(appRoute, req.body);

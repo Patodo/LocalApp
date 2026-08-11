@@ -5,7 +5,9 @@ use tokio::net::TcpListener;
 
 #[tokio::test]
 async fn activation_uses_only_the_authenticated_loopback_endpoint() {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind loopback");
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind loopback");
     let port = listener.local_addr().expect("local address").port();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept control request");
@@ -22,9 +24,13 @@ async fn activation_uses_only_the_authenticated_loopback_endpoint() {
         let body = r#"{"success":true,"data":{"requestId":"018f7c0e-0f8f-4b5f-8c20-7f468f808d10","status":"awaiting_trust","confirmationUrl":"http://127.0.0.1:49813/my/device-actions/?requestId=018f7c0e-0f8f-4b5f-8c20-7f468f808d10","protocolVersion":2}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
-        stream.write_all(response.as_bytes()).await.expect("write response");
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
     });
 
     let client = DeviceControlClient::new(

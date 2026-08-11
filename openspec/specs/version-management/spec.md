@@ -1,69 +1,79 @@
 ## Purpose
 
-页面版本管理与页面 CRUD 接口。支持版本自动递增、版本数量上限（10 个）自动清理，以及页面列表、详情、删除接口。
+定义 canonical Server 对已安装应用的不可变版本记录、活动指针、历史查询、回退与删除生命周期的管理，确保版本更新和同名重装不会破坏当前可用版本或遗失可审计的包身份。
 
 ## Requirements
 
-### Requirement: 版本自动递增
+### Requirement: 安装创建不可变版本记录
 
-每次上传 MUST 创建新的版本目录，版本号从 1 开始自动递增。
+每个成功安装的 `.localapp` SHALL 产生不可变版本记录。Server MAY 使用递增本地 deployment sequence 作为存储目录，同时 SHALL 保存包的稳定 `appVersion` 与 digest。只有完成 migration、backend contract 和健康检查的版本才可成为 current。
 
-#### Scenario: 首次上传
-- **WHEN** 新 pageId 首次上传
-- **THEN** 创建 `versions/v1/`，meta.json 中 `currentVersion` 为 1
+#### Scenario: 首次安装
 
-#### Scenario: 后续上传
-- **WHEN** 已有 2 个版本的页面再次上传
-- **THEN** 创建 `versions/v3/`，meta.json 中 `currentVersion` 更新为 3
+- **WHEN** 所有者首次安装应用包
+- **THEN** Server SHALL 创建第一个版本目录和版本元数据
+- **AND** SHALL 原子设置 currentVersion
 
-### Requirement: 版本数量限制
+#### Scenario: 后续安装
 
-每个页面 MUST 保留最多 10 个版本。超出时自动删除最旧的版本目录。
+- **WHEN** 同一所有者安装同名应用的新 `appVersion`
+- **THEN** Server SHALL 创建新的本地 deployment sequence
+- **AND** 旧版本 SHALL 保持不可变并可用于回滚
 
-#### Scenario: 未达上限
-- **WHEN** 页面有 8 个版本，上传第 9 个
-- **THEN** 保留 v1-v8，创建 v9，不删除任何版本
+### Requirement: 稳定版本与摘要冲突规则
 
-#### Scenario: 达到上限后上传
-- **WHEN** 页面已有 v1-v10 共 10 个版本，上传第 11 个
-- **THEN** 创建 v11，删除 v1 目录，保留 v2-v11
+相同 `appVersion` 与相同 digest 的重复安装 SHALL 幂等成功。相同 `appVersion` 与不同 digest SHALL 返回 409 且不创建或激活版本。
 
-### Requirement: meta.json 版本记录
+#### Scenario: 重复安装相同包
 
-meta.json MUST 包含完整的版本列表。
+- **WHEN** 相同包被再次安装
+- **THEN** Server SHALL 返回已有版本结果
+- **AND** SHALL NOT重复执行 migration
 
-#### Scenario: 版本记录结构
-- **WHEN** 上传新版本后读取 meta.json
-- **THEN** `versions` 数组包含所有现有版本的元信息（version、createdAt、fileCount、totalSize）
+#### Scenario: 版本摘要冲突
 
-### Requirement: 页面列表接口
+- **WHEN** 已存在 `appVersion=1.0.0` 但新包 digest 不同
+- **THEN** Server SHALL 返回 409
+- **AND** currentVersion SHALL 保持不变
 
-`GET /api/pages` SHALL 返回当前用户的所有页面列表。
+### Requirement: 版本列表、激活与回滚 API
 
-#### Scenario: 列出页面
-- **WHEN** 发送 `GET /api/pages` 携带有效 API Key
-- **THEN** 返回 `{ success: true, data: [{ pageId, currentVersion, createdAt, updatedAt }] }`
+认证所有者 SHALL 能列出应用版本、激活兼容的历史版本并请求回滚。所有操作 SHALL 执行应用权限检查，并在失败时保持当前版本与数据库一致。
 
-### Requirement: 页面详情接口
+#### Scenario: 列出版本
 
-`GET /api/pages/:pageId` SHALL 返回指定页面的详细信息。
+- **WHEN** 所有者请求 `GET /api/me/apps/:name/versions`
+- **THEN** 响应 SHALL 包含本地 sequence、`appVersion`、digest、创建时间和活动状态
 
-#### Scenario: 获取存在的页面详情
-- **WHEN** 发送 `GET /api/pages/abc123` 携带有效 API Key，页面存在
-- **THEN** 返回 `{ success: true, data: { pageId, userId, currentVersion, versionCount, versions: [...], createdAt, updatedAt } }`
+#### Scenario: 回滚当前应用
 
-#### Scenario: 获取不存在的页面详情
-- **WHEN** 发送 `GET /api/pages/nonexistent` 携带有效 API Key
-- **THEN** 返回 HTTP 404，`{ success: false, error: "Page not found" }`
+- **WHEN** 所有者请求回滚且备份完整
+- **THEN** Server SHALL 恢复前一版本及其匹配数据库状态
+- **AND** 完整性检查通过后才报告成功
 
-### Requirement: 页面删除接口
+### Requirement: 删除应用与数据是显式操作
 
-`DELETE /api/pages/:pageId` SHALL 删除页面及其所有版本和数据。
+删除应用注册/版本和永久删除应用数据库、文件、备份 SHALL 是权限受控且语义明确的操作。任何删除 SHALL 只作用于当前 Server 和目标所有者/应用，不得影响同名 peer 应用。
 
-#### Scenario: 删除存在的页面
-- **WHEN** 发送 `DELETE /api/pages/abc123` 携带有效 API Key，页面属于该用户
-- **THEN** 删除整个 `data/{userId}/abc123/` 目录（包括所有版本和 meta.json），返回 `{ success: true, data: { deleted: true, pageId: "abc123" } }`
+#### Scenario: 删除自己的应用
 
-#### Scenario: 删除他人的页面
-- **WHEN** 发送 `DELETE /api/pages/abc123` 但页面属于其他用户
-- **THEN** 返回 HTTP 403，`{ success: false, error: "Forbidden" }`
+- **WHEN** 所有者通过受支持 API 删除应用
+- **THEN** Server SHALL 删除该 Server 上目标应用的注册与版本
+- **AND** SHALL 按显式选择保留或永久删除业务数据
+
+#### Scenario: 删除他人的应用
+
+- **WHEN** 普通用户尝试删除另一所有者的应用
+- **THEN** Server SHALL 返回 403
+- **AND** 版本和数据 SHALL 保持不变
+
+### Requirement: 每个应用最多保留十个完整版本
+
+Server SHALL 为每个应用最多保留 10 个不可变版本目录及其精确 `.localapp` 包。超过上限时 SHALL 始终保护 currentVersion 和 previousVersion，并从其余历史中保留最新版本；最旧且未受保护的版本目录、包和元数据 SHALL 在新版本已持久化后清理。
+
+#### Scenario: 安装第十一个版本
+
+- **WHEN** 一个应用已有 10 个版本且成功安装第 11 个版本
+- **THEN** 版本列表 SHALL 最多包含 10 项
+- **AND** currentVersion 与 previousVersion SHALL 仍可用于验证或回滚
+- **AND** 最旧的未受保护版本 SHALL 不再占用版本目录或 retained package 存储

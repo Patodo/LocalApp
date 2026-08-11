@@ -18,7 +18,7 @@ CLI 二进制 SHALL 在编译时通过 `include_dir!` 将 init-repo 模板源码
 - **THEN** `target/init-repo-staging/` 被完全移除
 
 ### Requirement: 内置模板解压到目标目录
-CLI SHALL 将内置模板分为「用户领地」和「CLI 领地」两部分分别解压到用户指定的目标目录。解压后 SHALL 写入 `manifest.json`（含 name、description、distDir）和 `.localapp/dev-config.json`（含 serverUrl、autoSync）。
+CLI SHALL 将内置模板分为「用户领地」和「CLI 领地」两部分分别解压到用户指定的目标目录。解压后 SHALL 写入 `manifest.json`（含 name、description、distDir）和只含临时连接上下文的 `.localapp/dev-config.json`（初始化时含 `serverUrl`）。持久 `autoSync`/`ejected` 策略 SHALL 由 `.localapp/project-config.json` 承载；默认策略无需创建该文件。
 
 「用户领地」包括：`manifest.json`、`package.json`、`vite.config.ts`、`tsconfig.json`、`vitest.config.ts`、`postcss.config.js`、`components.json`、`index.html`、`CLAUDE.md`、`.gitignore`、`src/main.tsx`、`src/App.tsx`、`src/index.css`、`src/components/ui/*`、`tests/`。
 
@@ -137,4 +137,3 @@ CLI 内置 init-repo 模板 SHALL 默认生成 native runtime 兼容项目。模
 - **WHEN** 用户阅读模板 skills 或开发文档
 - **THEN** 文档 SHALL NOT 要求开发者处理 iframe sandbox 限制
 - **AND** 文档 SHALL 指导使用 `platform-runtime`
-

@@ -1,7 +1,7 @@
 # platform-data-api Specification
 
 ## Purpose
-TBD - created by archiving change local-mini-server-and-sql-migrations. Update Purpose after archive.
+定义统一 Server 的只读平台用户、群组、角色和版本 API，以及 React SDK 在开发与正式部署中的一致访问方式。
 ## Requirements
 ### Requirement: 平台公共数据只读 API
 
@@ -89,73 +89,41 @@ export interface PlatformRole {
 - **AND** SDK 下个版本发布包含新字段
 - **AND** 应用通过 `npm update @localapp/sdk-react` 获得新类型
 
-### Requirement: mini-server 转发平台数据请求(带 TTL 缓存)
+### Requirement: 开发模式读取项目 Server 的真实平台数据
 
-mini-server SHALL 在 dev 模式下转发 `/api/platform/*` 请求到生产 server。同一资源的请求 SHALL 缓存 5 分钟,减少远程调用。
+`localapp dev` SHALL 运行完整统一 Server，所以 `/api/platform/*` SHALL 直接读取该 Server 自己的用户、群组、角色和版本数据。开发模式 SHALL NOT 代理远程平台、缓存远程结果或返回静态 mock。
 
-#### Scenario: 首次请求转发到生产
-- **WHEN** dev 模式下应用请求 `/api/platform/users`
-- **THEN** mini-server 转发请求到生产 server
-- **AND** 返回结果给客户端
-- **AND** 缓存结果(以 URL + 查询参数为 key),TTL 5 分钟
+#### Scenario: 开发应用读取平台用户
+- **WHEN** 开发模式应用请求 `/api/platform/users`
+- **THEN** Vite SHALL 把请求转发到当前项目 Server
+- **AND** Server SHALL 返回自身真实用户数据
+- **AND** 请求 SHALL NOT 离开本机
 
-#### Scenario: 缓存命中直接返回
-- **WHEN** 5 分钟内再次请求 `/api/platform/users`
-- **THEN** mini-server 直接返回缓存结果
-- **AND** 不再打远程
+#### Scenario: 项目 Server 不可用
+- **WHEN** Vite 页面请求 `/api/platform/users` 但项目 Server 已退出
+- **THEN** SDK SHALL 返回可读的连接错误
+- **AND** SHALL NOT 静默回退到缓存、mock 或远程 Server
 
-#### Scenario: 缓存过期后重新拉取
-- **WHEN** 缓存超过 5 分钟,再次请求
-- **THEN** mini-server 重新转发到生产 server
-- **AND** 更新缓存
+### Requirement: 平台数据 schema 跟随 Server 版本
 
-#### Scenario: 不同查询参数独立缓存
-- **WHEN** 请求 `/api/platform/users?role=admin` 和 `/api/platform/users?role=user`
-- **THEN** mini-server 把它们作为独立 key 缓存
-- **AND** 互不影响
-
-### Requirement: 平台数据 schema 跟随 server 版本
-
-平台公共数据(users/groups/roles)的表 schema SHALL 由 server 维护,跟 server 版本绑定。平台升级时 SHALL 运行统一迁移脚本(`platform-migrations/*.sql`)应用到所有 app.db 中相应的平台表。
-
-应用开发者 SHALL NOT 在自己的 `migrations/` 目录里 ALTER 平台表(尝试时 validate 报错,因为 prod app.db 的平台表已存在,CREATE 会冲突)。
+平台公共数据(users/groups/roles) SHALL 由每个 Server 自己的平台数据库与迁移维护，并跟 Server 版本绑定。应用数据库、应用 migrations 和 `.localapp` 包 SHALL NOT 创建、修改或携带这些平台表。
 
 #### Scenario: 应用尝试创建已存在的平台表
-- **WHEN** 应用 migrations/001.sql 包含 `CREATE TABLE users (...)`
-- **AND** server 已维护 users 平台表
-- **THEN** `localapp db validate` 时该 migration 在 prod-snapshot.db 上失败
-- **AND** 错误 "table users already exists"
-- **AND** 提示用户从 migration 中移除 CREATE TABLE users
+- **WHEN** 应用 migration 或 backend contract 尝试声明保留的平台资源 `users`
+- **THEN** `localapp check` 和 Server 包安装 SHALL 拒绝该声明
+- **AND** SHALL 提示通过平台只读 API 访问用户数据
 
 #### Scenario: 平台升级时统一迁移
 - **WHEN** server 从 1.3 升级到 1.4,新增 `users.bio` 字段
-- **THEN** server 启动时运行 `platform-migrations/014_add_user_bio.sql`
-- **AND** 该 migration 应用到所有 app.db 的 users 表
+- **THEN** Server 启动时运行自己的平台 migration
+- **AND** 该 migration SHALL 只修改 Server 平台数据库
 - **AND** 应用开发者无需感知
 
-### Requirement: 开发态平台数据 API 明确代理或 mock
+### Requirement: 平台路由不得落入应用 API
 
-在 `localapp dev` 下，`/api/platform/*` SHALL 由 mini-server 处理。mini-server SHALL 优先代理配置的生产 server 并注入 API Key；当代理不可用或未配置时，mini-server SHALL 返回稳定 mock 数据或明确错误，不得落入应用 CRUD。
-
-#### Scenario: 代理平台用户
-- **WHEN** dev 应用请求 `GET /api/platform/users`
-- **AND** dev-config 中配置了可用 serverUrl 和 apiKey
-- **THEN** mini-server SHALL 代理到生产 server
-- **AND** 缓存成功响应
-
-#### Scenario: 平台代理不可用
-- **WHEN** dev 应用请求 `GET /api/platform/users`
-- **AND** 生产 server 不可达
-- **THEN** mini-server SHALL 返回稳定 mock 数据或明确 JSON 错误
-- **AND** 不得将 `platform` 当作应用资源
-
-#### Scenario: 未配置 API key 时不访问远端平台
-- **WHEN** dev 应用请求 `GET /api/platform/users`
-- **AND** dev-config 中 `apiKey` 为空
-- **THEN** mini-server SHALL 直接返回本地 mock 用户列表
-- **AND** SHALL NOT 请求 `serverUrl`
+Vite 和 Server SHALL 在应用 `/api/*` 改写之前优先识别 `/api/platform/*`。平台资源 SHALL 始终由 Server 全局只读路由处理，不得被当作应用 Named SQL 名称或静态资源。
 
 #### Scenario: 保留平台资源
-- **WHEN** dev 应用请求 `/api/platform/groups`、`/api/platform/roles` 或 `/api/platform/version`
-- **THEN** mini-server SHALL 使用平台数据处理路径
-- **AND** 返回与生产平台数据 API 同构的 `{ success, data }`
+- **WHEN** 开发应用请求 `/api/platform/groups`、`/api/platform/roles` 或 `/api/platform/version`
+- **THEN** Vite SHALL 保持全局路径并转发到当前 Server
+- **AND** Server SHALL 返回标准 `{ success, data }` 或明确认证/404 JSON 错误

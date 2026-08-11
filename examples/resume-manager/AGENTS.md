@@ -14,6 +14,8 @@ localapp app install --target <server-profile>
 
 安装命令会构建当前项目并把应用包写入指定 Server。应用功能必须从正式 `/<owner>/<app>/` 路径验收；raw `/serve/` 路径仅用于 API 或静态资源诊断。使用应用内 Browser 检查 DOM、console、核心交互和权限，不以构建成功代替验收。
 
+`localapp db reset/migrate/status/types` 只维护 `tmp/localapp-schema/schema.db` 下的离线 schema 工作库，用于 migration、seed 和类型生成，不是运行时后端。运行中应用的数据重置、快照和恢复由 Dev Toolkit 调用当前统一 Server 完成。
+
 ## 通用 Device Actions
 
 需要在“当前点击按钮的这台电脑”执行本机操作时，使用 SDK 的 `device.run()`。请求只声明完成任务所需的最小权限，例如 `filesystemWrite: [selectedRoot]`；不要把凭据、脚本或目标路径塞进 `localapp://` scheme。激活前向用户展示标题、描述、权限和将要修改的路径。

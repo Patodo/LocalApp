@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 
 use crate::config::Config;
 use crate::scripts::script_invokes_localapp_dev;
@@ -197,7 +197,7 @@ fn try_install_nodejs() -> Result<(), String> {
 }
 
 fn print_nodejs_fallback() {
-    eprintln!("\n请安装 Node.js v22+ LTS:");
+    eprintln!("\n请安装 Node.js v24+ LTS:");
     eprintln!("  https://nodejs.org");
     eprintln!("安装完成后重新运行命令。\n");
 }
@@ -231,10 +231,18 @@ fn run_cmd(pm: &str, args: &[&str], cwd: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn install_args(pm: &str) -> Vec<&'static str> {
+    if pm == "pnpm" {
+        vec!["install", "--ignore-workspace"]
+    } else {
+        vec!["install"]
+    }
+}
+
 pub fn run_install(cwd: &Path) -> Result<(), String> {
     let pm = detect();
     eprintln!("  Using {} to install dependencies...", pm);
-    run_cmd(pm, &["install"], cwd)
+    run_cmd(pm, &install_args(pm), cwd)
 }
 
 pub fn run_build(cwd: &Path) -> Result<(), String> {
@@ -267,8 +275,8 @@ fn package_has_script(cwd: &Path, script: &str) -> Result<bool, String> {
     }
     let content = fs::read_to_string(&package_path)
         .map_err(|error| format!("Failed to read package.json: {error}"))?;
-    let package: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|error| format!("Invalid package.json: {error}"))?;
+    let package: serde_json::Value =
+        serde_json::from_str(&content).map_err(|error| format!("Invalid package.json: {error}"))?;
     Ok(package
         .get("scripts")
         .and_then(|scripts| scripts.get(script))
@@ -297,15 +305,15 @@ fn select_dev_script(cwd: &Path) -> Result<&'static str, String> {
         .map(str::trim);
     if !has_vite_script && dev_script.is_some_and(script_invokes_localapp_dev) {
         return Err(
-            "package.json scripts.dev calls 'localapp dev' but scripts.dev:vite is missing. Run 'localapp sync' to repair the local runtime scripts."
+            "package.json scripts.dev calls 'localapp dev' but scripts.dev:vite is missing. Run 'localapp sync' to repair the CLI-owned development scripts."
                 .to_string(),
         );
     }
     Ok(if has_vite_script { "dev:vite" } else { "dev" })
 }
 
-/// Spawn dev server with inherited stdio. Caller must wait on the child.
-pub fn spawn_dev() -> Result<Child, String> {
+/// Build the dev server command with inherited stdio. The caller owns process-tree setup and spawn.
+pub fn dev_command() -> Result<Command, String> {
     let pm = detect();
     let cwd = std::env::current_dir().map_err(|e| format!("Failed to get cwd: {e}"))?;
     let script = select_dev_script(&cwd)?;
@@ -316,18 +324,29 @@ pub fn spawn_dev() -> Result<Child, String> {
         (pm, vec!["run", script])
     };
 
-    Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&args)
         .current_dir(cwd)
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| format!("Failed to start {} run {script}: {e}", pm))
+        .stderr(Stdio::inherit());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    Ok(command)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pnpm_install_ignores_an_unrelated_parent_workspace() {
+        assert_eq!(install_args("pnpm"), vec!["install", "--ignore-workspace"]);
+        assert_eq!(install_args("npm"), vec!["install"]);
+    }
 
     #[test]
     fn select_dev_script_prefers_dev_vite_when_present() {

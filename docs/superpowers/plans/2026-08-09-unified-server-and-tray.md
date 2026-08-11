@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24+, TypeScript, Fastify 4, Next.js 15 static export, Vitest 4, Playwright, sql.js, Rust 2024, Tauri 2, pnpm, Cargo.
 
-**Implementation status (2026-08-11):** Tasks 1–14 are implemented and committed on `main`. The two real applications build from the builtin template, install through the formal Server package endpoint, and pass the deterministic local acceptance suite. Task 15 is partially complete: the bundled Tauri Server and formal Browser UI have been exercised locally, while the in-app Browser security policy blocked dispatching the external `localapp://` navigation needed to complete the final native-activation observation. The SDD progress ledger records the exact evidence and remaining boundary.
+**Implementation status (2026-08-12):** Tasks 1–14 are implemented and committed on `main`. Task 16 implementation, Browser journeys within the permitted security boundary, active-spec reconciliation, the full local verification matrix, and two independent rereviews are complete; both reviewers returned clean after their findings were repaired, and this plan accompanies the Task 16 integration commit. Task 15 remains partially complete only in Browser attribution: the Browser security policy blocks dispatching the external `localapp://` navigation needed for the final native-activation observation, and no alternate surface or direct invocation is used to bypass it; deterministic Device Action acceptance verifies the resulting current-computer installation.
 
 **Completed implementation ledger:**
 
@@ -28,6 +28,8 @@
 | Task 14 — two real local applications | `67e29c3` | `pnpm test:real-apps`, owner boundary, upload/download, and Device Action acceptance |
 
 Task 15 remains intentionally open only for the cross-distribution Browser/native-Scheme observation described below; it is not treated as complete by the automated activation tests.
+
+Task 16 is intentionally listed after the original acceptance task because it records an integration gap discovered during Browser self-verification. Its implementation must land before Task 15 can be considered otherwise ready.
 
 ## Global Constraints
 
@@ -51,7 +53,7 @@ Task 15 remains intentionally open only for the cross-distribution Browser/nativ
 - Device Action execution uses the bundled Node runtime's permission system, minimal environment, bounded logs/time, process-tree cancellation, and no inherited Server secrets. Child-process permission is disclosed as arbitrary current-OS-user code execution until containers are introduced.
 - All generated data, Server data directories, acceptance downloads, and installed test SKILLs live below `<repo>/tmp`; never use `/tmp` for this plan's manual or Browser acceptance.
 - Final UI acceptance must use `browser:control-in-app-browser`, formal `/<owner>/<app>/` routes, and local loopback URLs only.
-- Every newly initialized application includes pinned `react-pdf@10.4.1`, `pdfjs-dist@6.1.200`, and `yet-another-react-lightbox@3.32.1` dependencies plus guidance for upload, preview, and download.
+- Every newly initialized application includes mutually compatible pinned `react-pdf@10.4.1`, `pdfjs-dist@5.4.296`, and `yet-another-react-lightbox@3.32.1` dependencies plus guidance for upload, preview, and download.
 - Delete legacy commands and product surfaces directly; do not add compatibility aliases or a migration phase.
 - Follow red-green-refactor for every behavior change. No production implementation precedes its failing test.
 
@@ -198,7 +200,7 @@ git commit -m "feat(server): add reusable startup and first-run setup"
 - Produces: `ServerConfigStore.read()`, async `validate(candidate)`, and `write(candidate)`.
 - Extends: `BuildServerOptions` with an injectable `restartController: RestartController` for route tests and worker supervision.
 - Produces: `GET /api/system/status`, `GET /api/system/settings`, and admin-only `PUT /api/system/settings/network`.
-- Produces: worker readiness message `{ type: "ready"; url: string; setupUrl?: string }` on IPC or stdout.
+- Produces: worker readiness message `{ type: "ready"; url: string; listenUrl: string; setupUrl?: string }` on IPC or stdout. `url` is user-facing; `listenUrl` is derived from the actual listener and is the only local control address.
 - Produces: restart exit code `75`; `localapp-server start` restarts the worker only for this code.
 
 - [x] **Step 1: Write failing configuration and rebind tests**
@@ -1046,7 +1048,7 @@ Expected: FAIL because the minimal menu, Scheme parser, loopback client, and uni
 
 Keep `tauri-plugin-deep-link` and `tauri-plugin-single-instance`. Register `localapp://`, accept only the versioned Device Action ticket shape, reject source schemes other than HTTP(S), userinfo, fragments, control characters, unknown/duplicate fields, non-canonical UUIDs, non-base64url nonces, and any executable content or credential field. The bridge never fetches an action and never decides whether an HTTP origin is trusted; Task 10's local Server source policy makes that decision before network access.
 
-Generate a cryptographically random control token for each Server child. Pass it only through `LOCALAPP_DEVICE_CONTROL_TOKEN`; do not persist or log it. Forward a parsed ticket to `POST http://127.0.0.1:<ready-port>/api/device-control/activations` in `x-localapp-device-control`. If activation arrives before readiness, start or await the child once, then forward. Duplicate OS deliveries are safe because the Server consumes the ticket idempotently. If the response contains a confirmation URL, open it only after verifying that its origin equals the child's ready origin and its normalized path is below `/my/device-actions/`.
+Generate a cryptographically random control token for each Server child. Pass it only through `LOCALAPP_DEVICE_CONTROL_TOKEN`; do not persist or log it. Forward a parsed ticket to `POST http://127.0.0.1:<ready-port>/api/device-control/activations` in `x-localapp-device-control`. If activation arrives before readiness, start or await the child once, then forward. Duplicate OS deliveries are safe because the Server consumes the ticket idempotently. If the response contains a confirmation URL, open it only after verifying the exact ready origin, exact `/my/device-actions/` path, one matching `requestId`, and no userinfo, fragment, extra path, or unknown/duplicate query.
 
 - [x] **Step 4: Replace the Desktop application destructively**
 
@@ -1166,7 +1168,7 @@ git commit -m "refactor: remove local runtime and legacy client workflows"
 - Modify: `packages/localapp-template/tests/smoke_init.rs`
 
 **Interfaces:**
-- Newly initialized applications include `react-pdf@10.4.1`, `pdfjs-dist@6.1.200`, and `yet-another-react-lightbox@3.32.1`.
+- Newly initialized applications include mutually compatible `react-pdf@10.4.1`, `pdfjs-dist@5.4.296`, and `yet-another-react-lightbox@3.32.1`.
 - pnpm projects receive `public-hoist-pattern[]=pdfjs-dist` so the PDF worker resolves consistently.
 - Every generated repository exposes the same `AGENTS.md` guidance to coding agents and documents generic `device.run()` without SKILL-specific Server APIs.
 - All local examples, generated apps, Server state, uploads, and downloads are placed below the repository `tmp/` directory.
@@ -1176,7 +1178,7 @@ git commit -m "refactor: remove local runtime and legacy client workflows"
 ```ts
 test("template includes supported PDF and image preview packages", () => {
   expect(template.dependencies["react-pdf"]).toBe("10.4.1");
-  expect(template.dependencies["pdfjs-dist"]).toBe("6.1.200");
+  expect(template.dependencies["pdfjs-dist"]).toBe("5.4.296");
   expect(template.dependencies["yet-another-react-lightbox"]).toBe("3.32.1");
 });
 
@@ -1316,7 +1318,7 @@ git commit -m "feat(examples): add skill market and resume manager"
 
 ### Task 15: Run cross-distribution acceptance and Browser self-verification
 
-**Current boundary:** The packaged Tauri bridge starts its bundled Server on loopback and the in-app Browser renders the formal SKILL market URL with login and permission disclosure. The Browser tool blocks the external `localapp://` navigation as a browser security action, so the final “Web click → native bridge → trust → success” observation still requires a user-level activation in an environment that permits the registered Scheme. No Browser or OS security boundary is bypassed by the test harness.
+**Current boundary:** The packaged Server serves the formal SKILL market URL, while the packaged Tauri bridge is covered by its bundle and Rust bridge tests. The in-app Browser renders the market with login and permission disclosure but blocks the external `localapp://` navigation as a browser security action, so the final “Web click → native bridge → trust → success” observation still requires a user-level activation in an environment that permits the registered Scheme. No Browser or OS security boundary is bypassed by the test harness.
 
 **Partial implementation record:** The deterministic packaged application acceptance is covered by `packages/server/tests/e2e-unified/real-apps.spec.ts`, and the Tauri bundle, Rust bridge tests, and formal Browser UI inspection passed locally. The broader packaged two-peer/Studio Browser suite remains separate from the user-requested two-application acceptance and is not falsely marked complete.
 
@@ -1387,15 +1389,15 @@ Expected: every command exits `0` with no unexpected warnings or skipped require
 
 Start the packaged source Server and native bridge locally under `<repo>/tmp/unified-acceptance`. Use the explicitly required `browser:control-in-app-browser` skill, read its in-app Browser documentation once, and interact only through visible/semantic Browser state. Log in, open the formal SKILL marketplace URL, inspect a SKILL, click install, follow the `localapp://` activation, approve first-publisher trust in the local Server Web page, and observe success in the source page. Assert the expected `SKILL.md` exists below `<repo>/tmp/unified-acceptance/installed-skills` with the expected digest, a repeated identical action does not re-prompt, and an expanded permission does re-prompt. Capture page state and check browser errors/warnings after each major transition.
 
-- [ ] **Step 6: Verify resume upload, previews, and download in the application Browser**
+- [x] **Step 6: Verify visible resume upload, previews, and download in the application Browser**
 
-Using the same in-app Browser and formal application URL, open the resume manager, create a resume, upload the deterministic PNG and PDF fixtures, open the image lightbox, navigate/render the PDF preview, download both originals into `<repo>/tmp/unified-acceptance/downloads`, and compare their bytes with the fixtures. Refresh and log in again to prove metadata and content persist. Verify replacement/deletion and an unauthorized file request. Confirm there is no blank page, failed module request, uncaught exception, or browser error/warn log.
+Using the same in-app Browser and formal application URL, open the resume manager, upload the deterministic PNG and PDF fixtures, open the image lightbox, render the PDF preview, and download both originals into `<repo>/tmp/unified-acceptance/downloads` for byte comparison. Confirm there is no blank page, failed module request, uncaught exception, or browser error/warn log. The deterministic `test:real-apps` suite, rather than Browser attribution, covers owner filtering, deletion, persistence, and byte-for-byte content integrity.
 
 - [ ] **Step 7: Verify the Server Web control plane and two-peer synchronization in the application Browser**
 
 Use the in-app Browser to verify first setup, login, users, applications, Studio, task execution, peers, application-only sync, explicit app-plus-data confirmation, backup/rollback status, Device Action history/trust revocation, and LAN setting presentation. Confirm application resources load under `/serve/<owner>/<app>/` while navigation uses `/<owner>/<app>/`. Re-run both apps after synchronization.
 
-- [ ] **Step 8: Verify the destructive-removal boundary**
+- [x] **Step 8: Verify the destructive-removal boundary**
 
 Run:
 
@@ -1407,11 +1409,11 @@ rg -n "@localapp/local-runtime|localapp-local-runtime|localapp local install|Com
 
 Expected: the first two checks succeed and `rg` returns no production references. Historical specifications/plans and deletion assertions in tests are intentionally outside this production scan.
 
-- [ ] **Step 9: Request final code review and resolve every finding**
+- [x] **Step 9: Request final code review and resolve every finding**
 
 Request a fresh, most-capable reviewer over the complete design, plan, commit range, two packaged distributions, Device Action threat boundary, sync rollback behavior, and both application journeys. For each actionable finding, write a reproducing test first, apply the smallest owning-module fix, rerun the focused and full matrices, and repeat review until no findings remain.
 
-- [ ] **Step 10: Commit acceptance coverage and final integration fixes**
+- [x] **Step 10: Commit acceptance coverage and final integration fixes**
 
 ```bash
 git add -A
@@ -1421,3 +1423,73 @@ git commit -m "test: verify unified server distributions end to end"
 - [x] **Step 11: Stop local processes and preserve the acceptance record**
 
 Stop both packaged Servers and the native bridge gracefully. Keep committed source fixtures and the Browser acceptance record; remove only generated runtime subdirectories below `<repo>/tmp/unified-acceptance` after byte comparisons and log capture are complete. Never touch unrelated user content already present under `tmp/`.
+
+---
+
+### Task 16: Remove the last development-only backend and run local development on the canonical Server
+
+**Current implementation record:** Implementation, independent rereview, local verification, and the canonical runtime integration commit are complete. The real CLI resolved the published Server artifact, initialized a fresh builtin app, installed it through `/api/me/apps/install`, and ran it through Vite with canonical platform, application, Named SQL, Dev Toolkit, snapshot/restore, CSRF, and joint-shutdown checks. The in-app Browser rendered the SKILL market and resume manager at formal Server URLs with clean consoles; PNG Lightbox, PDF preview, and byte-identical downloads passed. The Browser security policy blocked only the external `localapp://` handoff, which was not bypassed; deterministic Device Action acceptance completed the same request and installed the fixture below repository `tmp/`. Final review repairs additionally separate actual `listenUrl` from public display URL, clean complete Unix/Windows descendant trees (including atomic suspended creation before Windows Job assignment), protect Windows credentials with a current-user DACL, persist project policy outside replaceable dev context, strictly validate native confirmation URLs, backfill checksum-recorded historical migration snapshots from retained packages, path-bind Vite platform exceptions, and reject every credential proxy target except the exact listener-derived loopback URL. Both final reviewers returned clean after these repairs.
+
+**Files:**
+- Modify: `packages/cli/src/commands/dev.rs`
+- Create: `packages/cli/src/commands/project_config.rs`
+- Modify: `packages/cli/src/commands/build.rs`
+- Modify: `packages/cli/src/commands/db.rs`
+- Create: `packages/server/src/routes/dev.ts`
+- Modify: `packages/server/src/server.ts`
+- Modify: `packages/server/src/lib/request-logger.ts`
+- Create: `packages/server/src/lib/app-version-migrations.ts`
+- Modify: `packages/server/src/lib/app-installer.ts`
+- Modify: `packages/server/src/lib/app-data-service.ts`
+- Create: `packages/server/tests/integration/dev-routes.test.ts`
+- Modify: `init-repo/runtime/vite-plugin.mjs`
+- Modify: `init-repo/runtime/dev-shell.tsx`
+- Delete: `init-repo/runtime/mini-server.mjs`
+- Delete: `init-repo/tests/mini-server.test.ts`
+- Modify: active application-development guidance and specifications
+
+**Interfaces:**
+- `localapp dev` launches the packaged `localapp-server` executable with `DATA_DIR=<project>/tmp/localapp-dev/server`, loopback/random-port startup, bootstrap API Key, and `LOCALAPP_DEV_TOOLS=1`.
+- The CLI builds a unique development package version and installs it through the formal application package endpoint before starting Vite.
+- `.localapp/dev-config.json` contains one `serverUrl`; there is no second service port.
+- `.localapp/project-config.json` contains durable `autoSync`/`ejected` policy; replacement of dev-config cannot reset it.
+- readiness exposes a user-facing `url` and listener-derived `listenUrl`; local development accepts only strict loopback `listenUrl`.
+- `/api/dev/*` is an authenticated, explicitly gated route set on the canonical Server and is absent from normal startup.
+- CLI schema inspection uses `<project>/tmp/localapp-schema/schema.db` as an offline workbench, never as an application-serving database.
+- package-backed versions retain checksum-recorded migration snapshots, including explicit empty sets; missing historical snapshots are rebuilt only from their retained digest-verified package.
+
+- [x] **Step 1: Write and run failing canonical-development tests**
+
+Cover canonical Server command construction and project-local data paths in Rust; one-target proxying in the Vite plugin; gated development routes, context lifetime, and current-user diagnostics in Server integration tests. Confirm the old behavior fails each new assertion before implementation.
+
+- [x] **Step 2: Replace development startup with formal Server installation**
+
+Start the packaged Server, initialize `dev-user` once, build a uniquely versioned package, install it through `/api/me/apps/install`, write the single-Server dev config, and supervise Server/Vite lifecycle together. Refresh embedded runtime dependencies exactly and clear stale Vite optimization output.
+
+- [x] **Step 3: Move Dev Toolkit helpers into the canonical Server**
+
+Register identity/time context, real Server user search, application-data reset/snapshot/restore, diagnostics, and business metadata only when `LOCALAPP_DEV_TOOLS=1`. Scope context to data root/user/application, clear it on close, and filter diagnostics to the authenticated user.
+
+- [x] **Step 4: Delete the template service and stale dual-backend wording**
+
+Delete the template HTTP implementation and its dedicated test suite. Make Vite proxy all APIs to the same Server, remove the second-port config, and update active UI/guidance wording to describe a project-local canonical Server.
+
+- [x] **Step 5: Separate offline schema tooling from runtime data**
+
+Move CLI migration/type scratch state to `tmp/localapp-schema/schema.db`, label it an offline schema workbench, and make Dev Toolkit reset/snapshot/restore wording explicitly Server-owned.
+
+- [x] **Step 6: Run full local development and distribution verification**
+
+Run all CLI, template, Server, packaged-Server, real-application, template smoke, and Tauri bridge suites. Rebuild artifacts and prove a fresh `localapp dev` reaches `/api/me`, `/api/dev/context`, application Named SQL/content APIs, and clean shutdown without a template service file.
+
+- [x] **Step 7: Complete both formal packaged-Server Browser journeys that do not cross a blocked security boundary**
+
+Use only `browser:control-in-app-browser`. At the applications' formal packaged-Server URLs, verify the SKILL market DOM, installation disclosure, enabled action button, and clean console; record the policy-blocked external Scheme activation without workaround. Verify the resume manager upload/image preview/PDF preview/download journey and compare downloaded bytes. Attribute Device Action execution, deletion, owner isolation, and the real `localapp dev` lifecycle to their deterministic automated suites, not to Browser observations.
+
+- [x] **Step 8: Reconcile active specs, evidence, and application-development guidance**
+
+Replace active dual-backend capabilities with canonical Server development requirements, update the acceptance record with exact commands/counts and the latest Browser evidence, run a production-reference scan, and ensure historical archives are clearly excluded.
+
+- [x] **Step 9: Commit the canonical development runtime**
+
+After verification and review, stage only intended tracked changes and commit on `main` with an explicit canonical-development message.

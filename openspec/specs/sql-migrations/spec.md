@@ -1,143 +1,84 @@
 # sql-migrations Specification
 
 ## Purpose
-TBD - created by archiving change local-mini-server-and-sql-migrations. Update Purpose after archive.
+
+定义应用 migration 文件格式、离线 schema 工作库行为，以及统一 Server 安装时的 migration 契约。
+
 ## Requirements
+
 ### Requirement: migration 文件格式与命名
 
-应用项目的 `migrations/` 目录 SHALL 包含数字递增命名的 SQL 文件:`001_<description>.sql`、`002_<description>.sql`,扩展名 `.sql`。文件名前缀数字 SHALL 从 001 开始递增;同一数字不允许重复。推荐连续递增,但允许为后续人工整理保留跳号。
+应用项目的 `migrations/` SHALL 包含以三位数字递增命名的 SQLite SQL 文件，例如 `001_init.sql`、`002_add_priority.sql`。同一数字不得重复。migration SHALL 为纯 SQL；引擎负责事务边界，文件不得包含 `ATTACH DATABASE`、`DETACH DATABASE` 或破坏事务模式的 pragma。
 
-migration 文件内容 SHALL 为纯 SQL(SQLite 方言),不包含 frontmatter、注释指令、模板语法。SQL 注释(`-- ...`)允许,但不强制要求元数据字段。
+#### Scenario: 合法 migration 链
 
-每个 migration 文件 SHALL 在事务中执行(`BEGIN; ... COMMIT;`),由 migration 引擎自动包裹。migration 内 SHALL NOT 包含 `ATTACH DATABASE`、`DETACH DATABASE`、`PRAGMA journal_mode = WAL` 等破坏事务的 SQL。
+- **WHEN** 项目包含 `001_init.sql` 和 `002_add_priority.sql`
+- **THEN** CLI 与 Server SHALL 按数字前缀顺序应用
+- **AND** 每个 migration SHALL 在独立事务中提交或回滚
 
-#### Scenario: migration 文件命名规则
-- **WHEN** 查看 `migrations/` 目录
-- **THEN** 文件名形如 `001_init.sql`、`002_add_priority.sql`,数字递增
-- **AND** 每个文件以 `.sql` 为扩展名
+#### Scenario: migration 包含不安全语句
 
-#### Scenario: migration 文件内容为纯 SQL
-- **WHEN** 打开任一 migration 文件
-- **THEN** 内容是 SQLite 方言 SQL(如 CREATE TABLE、ALTER TABLE、INSERT)
-- **AND** 文件不包含 frontmatter、模板语法或 YAML 元数据
-
-#### Scenario: migration 禁止破坏事务的 SQL
-- **WHEN** migration 文件包含 `ATTACH DATABASE` 或 `DETACH DATABASE`
-- **THEN** `localapp db validate` 拒绝该 migration,输出错误 "Migration <filename> contains ATTACH/DETACH which breaks transaction"
-- **AND** upload 流程被阻断
-
-#### Scenario: migration 顺序按文件名数字递增
-- **WHEN** 应用多个 migration 文件
-- **THEN** 按文件名前缀数字升序应用(001 先于 002,002 先于 003)
-- **AND** 同一数字不允许多个文件(冲突时报错)
+- **WHEN** migration 包含 `ATTACH DATABASE` 或 `DETACH DATABASE`
+- **THEN** `localapp check` 和包安装 SHALL 拒绝该 migration
+- **AND** SHALL NOT 修改目标数据库
 
 ### Requirement: migration 应用记录
 
-每个 dev.db / app.db SHALL 包含 `_localapp_applied_migrations` 表,记录已应用的 migration:
+离线 schema 工作库与每个 Server 应用数据库 SHALL 使用 `_localapp_applied_migrations` 记录文件名、SHA-256 checksum 和应用时间。已记录且 checksum 相同的 migration SHALL 跳过；已记录文件 checksum 变化 SHALL 视为错误。
 
-```sql
-CREATE TABLE _localapp_applied_migrations (
-  filename TEXT PRIMARY KEY,
-  checksum TEXT NOT NULL,
-  applied_at TEXT NOT NULL
-);
-```
+#### Scenario: migration 首次应用
 
-checksum 字段 SHALL 为 migration 文件内容的 SHA256 hash,防止文件被篡改。
+- **WHEN** 引擎成功应用 `002_add_priority.sql`
+- **THEN** SHALL 写入该文件名、checksum 和应用时间
 
-#### Scenario: 应用 migration 后记录写入
-- **WHEN** migration 引擎应用 `002_add_priority.sql`(内容 hash 为 abc123...)
-- **THEN** `_localapp_applied_migrations` 表新增一行 `{ filename: "002_add_priority.sql", checksum: "abc123...", applied_at: "<timestamp>" }`
+#### Scenario: 已应用 migration 被修改
 
-#### Scenario: 已应用的 migration 不再重复应用
-- **WHEN** `localapp db migrate` 检测到 `002_add_priority.sql` 已在 `_localapp_applied_migrations` 中
-- **THEN** 跳过该 migration,不重复执行
+- **WHEN** 已记录的 migration 文件 checksum 与当前内容不同
+- **THEN** CLI 检查和 Server 安装 SHALL 拒绝继续
+- **AND** SHALL 提示新增 migration 而不是篡改历史文件
 
-#### Scenario: 已应用 migration 文件被修改时拒绝
-- **WHEN** 用户修改了已应用的 `001_init.sql`(checksum 变化)
-- **AND** 执行 `localapp db migrate` 或 `localapp db validate`
-- **THEN** CLI 拒绝继续,输出错误 "Migration 001_init.sql was modified after being applied"
-- **AND** 提示用户恢复文件或手动处理
+### Requirement: db 命令维护离线 schema 工作库
 
-### Requirement: localapp db migrate 命令
+`localapp db migrate`、`status`、`reset`、`types` 和默认 `shell` SHALL 只操作项目 `tmp/localapp-schema/schema.db`。该数据库 SHALL 用于 migration 编译、seed、类型生成和人工 schema 检查，不得作为任何应用运行时数据库。
 
-`localapp db migrate` SHALL 应用 `migrations/` 目录下所有未应用的 migration 文件到 `.localapp/dev.db`,按文件名数字顺序执行。每个 migration 在独立事务中应用,失败则该 migration 回滚并停止后续应用。
+#### Scenario: 应用未执行 migrations
 
-#### Scenario: 应用未应用的 migrations
-- **WHEN** 用户执行 `localapp db migrate`,dev.db 有 3 个未应用的 migration(004、005、006)
-- **THEN** CLI 按顺序应用 004、005、006
-- **AND** 每个应用成功后打印 "Applied 004_xxx.sql"
-- **AND** 完成后打印 "3 migrations applied"
+- **WHEN** 用户执行 `localapp db migrate`
+- **THEN** CLI SHALL 创建或打开 `tmp/localapp-schema/schema.db`
+- **AND** SHALL 按顺序应用所有 pending migrations
 
-#### Scenario: 没有未应用的 migration
-- **WHEN** 用户执行 `localapp db migrate`,所有 migration 已应用
-- **THEN** CLI 打印 "No pending migrations"
-- **AND** 不修改 dev.db
+#### Scenario: 查看 migration 状态
 
-#### Scenario: migration 应用失败时停止
-- **WHEN** 应用 005 时 SQL 语法错误
-- **THEN** 005 在事务中回滚,dev.db 不变
-- **AND** CLI 打印错误信息含失败 SQL 行号
-- **AND** 后续 006 不再应用
-
-### Requirement: localapp db status 命令
-
-`localapp db status` SHALL 输出当前 migration 状态:已应用的 migration 列表(按时间)+ 未应用的 migration 列表(按文件名顺序)。
-
-#### Scenario: 显示 migration 状态
 - **WHEN** 用户执行 `localapp db status`
-- **THEN** 输出两个区块
-- **AND** "Applied migrations" 区块列出已应用文件名 + checksum + 应用时间
-- **AND** "Pending migrations" 区块列出未应用文件名
+- **THEN** CLI SHALL 从 schema 工作库列出已应用和 pending migration
+- **AND** SHALL NOT 查询开发 Server 的业务数据库
 
-### Requirement: localapp db reset 命令
+#### Scenario: 重建 schema 工作库
 
-`localapp db reset` SHALL 删除 `.localapp/dev.db`,从头创建,应用所有 migrations,然后应用 `db/seeds/dev.sql`(如果存在)。该命令 SHALL 提示用户确认(默认否),输入项目名才能继续。
+- **WHEN** 用户执行 `localapp db reset`
+- **THEN** CLI SHALL 只删除并重建 `tmp/localapp-schema/schema.db`
+- **AND** SHALL 应用全部 migrations 和可选 `db/seeds/dev.sql`
+- **AND** SHALL NOT修改 `tmp/localapp-dev/server/` 或其它 Server 数据
 
-#### Scenario: reset 后重建 dev.db
-- **WHEN** 用户执行 `localapp db reset`,输入项目名确认
-- **THEN** CLI 删除 `.localapp/dev.db`(如存在)
-- **AND** 创建空 dev.db
-- **AND** 按顺序应用 `migrations/` 目录所有 migration
-- **AND** 如果存在 `db/seeds/dev.sql`,执行该 seed 文件
-- **AND** 打印 "Reset complete. <N> migrations applied, seed applied."
+#### Scenario: 打开 SQLite shell
 
-#### Scenario: reset 时没有 seed 文件
-- **WHEN** 用户执行 `localapp db reset`,项目无 `db/seeds/dev.sql`
-- **THEN** CLI 跳过 seed 步骤
-- **AND** 打印 "Reset complete. <N> migrations applied. No seed file."
-
-#### Scenario: reset 用户确认失败
-- **WHEN** 用户执行 `localapp db reset`,但输入的项目名与 manifest.json 不匹配
-- **THEN** CLI 拒绝执行,退出码 1
-- **AND** 不修改任何文件
-
-### Requirement: localapp db shell 命令
-
-`localapp db shell` SHALL 启动 sqlite3 CLI,连接 `.localapp/dev.db`,供用户手动调试。
-
-#### Scenario: 进入 sqlite shell
 - **WHEN** 用户执行 `localapp db shell`
-- **THEN** CLI 启动 `sqlite3 .localapp/dev.db`(若系统已安装 sqlite3)
-- **AND** 用户可在 shell 内执行任意 SQL
+- **THEN** CLI SHALL 启动 `sqlite3 tmp/localapp-schema/schema.db`
+- **AND** schema 工作库不存在时 SHALL 返回明确提示
 
-#### Scenario: sqlite3 未安装
-- **WHEN** 用户执行 `localapp db shell`,但系统未安装 sqlite3 命令
-- **THEN** CLI 打印错误 "sqlite3 command not found. Install it or use localapp db types to inspect schema."
-- **AND** 退出码 1
+### Requirement: Server 从应用包应用 migrations
 
-### Requirement: db/seeds/dev.sql 仅 dev 模式应用
+`.localapp` 包 SHALL 包含 migrations，但不包含 schema 工作库或 dev seed。统一 Server SHALL 在安装 staging 阶段把 pending migrations 应用于该 Server 自己的目标应用数据库，并在成功检查后激活版本。失败 SHALL 由应用安装器恢复数据库和旧版本。
 
-`db/seeds/dev.sql` 文件 SHALL 仅在 `localapp db reset` 时应用到 dev.db。upload 流程 SHALL NOT 上传该文件到生产 server,生产 server SHALL NOT 执行该 seed 文件。
+#### Scenario: 安装带新 migration 的应用版本
 
-#### Scenario: seed 文件不被上传
-- **WHEN** 用户执行 `localapp upload`,项目包含 `db/seeds/dev.sql`
-- **THEN** 上传 bundle 不包含该 seed 文件
-- **AND** 生产 server 永远不执行 dev seed
+- **WHEN** 用户执行 `localapp app install --target production`
+- **AND** 包内包含目标尚未执行的 migration
+- **THEN** 目标 Server SHALL 在自己的应用数据库中事务执行 migration
+- **AND** 成功后才原子激活新版本
 
-#### Scenario: seed 文件包含测试数据
-- **WHEN** 用户在 `db/seeds/dev.sql` 写入 `INSERT INTO tasks (title) VALUES ('测试任务1'), ('测试任务2');`
-- **AND** 执行 `localapp db reset`
-- **THEN** dev.db 的 tasks 表包含这两条测试记录
-- **AND** 生产 app.db 不受影响
+#### Scenario: 开发 Server 安装 migration
 
+- **WHEN** `localapp dev` 安装开发应用包
+- **THEN** 项目 Server SHALL 使用同一安装器应用 migration
+- **AND** 离线 schema 工作库的记录和数据 SHALL NOT 被复制到 Server

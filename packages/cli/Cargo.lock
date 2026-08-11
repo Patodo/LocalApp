@@ -1437,8 +1437,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "dialoguer",
+ "getrandom 0.4.2",
  "httpmock",
  "include_dir",
+ "libc",
  "localapp-core",
  "localapp-template",
  "portable-pty",
@@ -1450,6 +1452,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

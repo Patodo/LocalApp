@@ -268,7 +268,7 @@ function LeaveRowDeclarative({ leave }: { leave: Leave }) {
 
 - Identity：切换申请人、负责人、审批人和未登录用户，确认 `recordAccess` 只返回当前视角应看到的记录。
 - Time：固定 ISO 时间，执行包含 `"now"` 的 transition，确认时间字段、进度和截止日期视图稳定可复现。
-- Data：用 reset 重建 `.localapp/dev.db` 并应用 `db/seeds/dev.sql`，用 snapshot/restore 快速回到关键业务状态。
+- Data：通过 Dev Toolkit 让当前统一 Server 重置应用数据库，并用 snapshot/restore 快速回到关键业务状态。
 - Diagnostics：查看 `manifest.business` 展示的 `recordAccess`、`defaultFields`、`transitions`、`enums` 是否与预期一致。
 
 Dev Toolkit 操作后会触发 SDK hooks 自动刷新；不要通过前端硬编码过滤来模拟后端权限。

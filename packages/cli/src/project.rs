@@ -183,7 +183,9 @@ pub fn validate_manifest_collaboration(
             ));
         }
         if !declared_mutations.is_empty()
-            && !declared_mutations.iter().any(|name| name == &resource.mutation)
+            && !declared_mutations
+                .iter()
+                .any(|name| name == &resource.mutation)
         {
             return Err(format!(
                 "collaboration.resources.{resource_name}.mutation references unknown backend mutation: {}",
@@ -389,7 +391,8 @@ mod issue_template_tests {
 
     #[test]
     fn preserves_issue_templates_when_manifest_is_serialized_for_upload() {
-        let manifest: Manifest = serde_json::from_str(r###"{
+        let manifest: Manifest = serde_json::from_str(
+            r###"{
           "name": "template-app",
           "issues": {
             "templates": [{
@@ -402,12 +405,20 @@ mod issue_template_tests {
               "labels": ["triage"]
             }]
           }
-        }"###).unwrap();
+        }"###,
+        )
+        .unwrap();
 
         let serialized = serde_json::to_value(&manifest).unwrap();
         assert_eq!(serialized["issues"]["templates"][0]["id"], "bug-report");
-        assert_eq!(serialized["issues"]["templates"][0]["titlePrefix"], "[Bug] ");
-        assert_eq!(serialized["issues"]["templates"][0]["labels"], serde_json::json!(["triage"]));
+        assert_eq!(
+            serialized["issues"]["templates"][0]["titlePrefix"],
+            "[Bug] "
+        );
+        assert_eq!(
+            serialized["issues"]["templates"][0]["labels"],
+            serde_json::json!(["triage"])
+        );
     }
 }
 

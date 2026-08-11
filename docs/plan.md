@@ -1,5 +1,7 @@
 # LocalApp - 总体方案
 
+> **历史文档（已废弃）**：本文记录早期上传/CRUD 平台方案，不再描述当前产品。现行架构与实施状态以 [统一 Server 设计](./superpowers/specs/2026-08-09-unified-server-and-tray-design.md) 和 [统一 Server 实施计划](./superpowers/plans/2026-08-09-unified-server-and-tray.md) 为准；不得从本文恢复 `localapp upload`、独立 MiniServer 或 Local Runtime。
+
 ## 项目概述
 
 一个轻量级前端页面托管平台。用户通过 CLI 上传前端页面，服务器返回可访问链接，页面可直接使用内置的 CRUD API 进行数据操作。

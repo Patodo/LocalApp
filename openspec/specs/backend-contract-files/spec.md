@@ -7,7 +7,7 @@ This spec describes backend contract files as the source of truth for applicatio
 
 #### Scenario: 使用默认 backend root
 - **WHEN** manifest 声明 `"backend": { "root": "backend" }`
-- **THEN** validate、upload、mini-server 和生产 server MUST 从 `backend/` 发现应用后端契约文件
+- **THEN** validate、package install 和统一 Server MUST 从 `backend/` 发现应用后端契约文件
 
 #### Scenario: backend root 不存在
 - **WHEN** manifest 声明的 backend root 不存在
@@ -18,7 +18,7 @@ This spec describes backend contract files as the source of truth for applicatio
 
 #### Scenario: 使用 include patterns
 - **WHEN** manifest 声明 `backend.include`
-- **THEN** validate 和 upload MUST 只收集匹配 include 的 backend 契约文件
+- **THEN** validate 和 package build MUST 只收集匹配 include 的 backend 契约文件
 
 #### Scenario: include 未匹配文件
 - **WHEN** include pattern 未匹配任何 backend 契约文件
@@ -36,15 +36,15 @@ This spec describes backend contract files as the source of truth for applicatio
 - **THEN** validate MUST 失败并提示补充 `$schema`
 
 ### Requirement: Backend contract packaging
-上传应用时，CLI SHALL 将 backend 契约文件作为版本化应用元数据上传，并且不把未声明的 backend 外文件作为契约处理。
+构建 `.localapp` 时，CLI SHALL 将 backend 契约文件作为版本化应用元数据写入包，并且不把未声明的 backend 外文件作为契约处理。统一 Server SHALL 只从已校验包读取该版本契约。
 
-#### Scenario: 上传包含 backend 契约
-- **WHEN** `localapp upload` 处理声明了 backend 的项目
-- **THEN** 上传 payload MUST 包含已校验的 backend 契约文件和契约 manifest
+#### Scenario: 应用包包含 backend 契约
+- **WHEN** `localapp build --package` 处理声明了 backend 的项目
+- **THEN** `.localapp` MUST 包含已校验的 backend 契约文件和契约 manifest
 
 #### Scenario: 未声明文件不进入契约
 - **WHEN** 项目中存在未被 backend root 或 include 覆盖的 JSON 文件
-- **THEN** CLI MUST NOT 将该文件作为 backend 契约上传
+- **THEN** CLI MUST NOT 将该文件作为 backend 契约打包
 
 ### Requirement: Backend contract consistency validation
 系统 SHALL 在 validate 阶段检查 schema、SQL、migration 和权限配置之间的一致性。
@@ -63,12 +63,12 @@ This spec describes backend contract files as the source of truth for applicatio
 #### Scenario: backend root contains action source
 - **WHEN** manifest 声明 `"backend": { "root": "backend" }`
 - **AND** 项目包含 `backend/actions/leave.ts`
-- **THEN** validate and upload MUST fail
+- **THEN** validate and package build MUST fail
 - **AND** the error MUST recommend named SQL, transaction mutation, or platform primitives
 
-#### Scenario: upload contains action manifest or bundle
+#### Scenario: package contains action manifest or bundle
 - **WHEN** backend files include `actions.manifest.json` or `actions.bundle.mjs`
-- **THEN** CLI upload and server upload MUST reject the version before saving it
+- **THEN** CLI package validation and Server package installation MUST reject the version before saving it
 - **AND** the current app version MUST remain unchanged
 
 #### Scenario: backend root contains mixed files

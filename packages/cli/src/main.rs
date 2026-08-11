@@ -78,7 +78,7 @@ enum Commands {
     },
     /// 创建新页面并关联到当前项目
     New,
-    /// 在上传前检查平台能力、数据库、backend、测试、构建和 dist
+    /// 在应用包构建或安装前检查平台能力、数据库、backend、测试、构建和 dist
     Check {
         /// 只向 stdout 输出一个机器可读 JSON 报告
         #[arg(long)]
@@ -294,15 +294,15 @@ enum PlatformAction {
 
 #[derive(Subcommand)]
 enum DbAction {
-    /// 从 .localapp/dev.db 生成 TypeScript 类型
+    /// 从项目 tmp/ 下的离线 schema 工作库生成 TypeScript 类型
     Types {
         /// 输出文件路径
         #[arg(short, long)]
         output: String,
     },
-    /// 重建 .localapp/dev.db, 应用 migrations 和可选 dev seed
+    /// 重建离线 schema 工作库并应用 migrations 和可选 dev seed；不修改 Server 数据
     Reset,
-    /// Apply pending migrations to .localapp/dev.db
+    /// Apply pending migrations to the offline schema workbench
     Migrate,
     /// 拉取生产快照并验证本地 migrations
     Validate,
@@ -312,7 +312,7 @@ enum DbAction {
         #[arg(long)]
         command: Option<String>,
     },
-    /// 显示 migration 状态
+    /// 显示离线 schema 工作库的 migration 状态
     Status,
     /// 从 server backup 恢复 app.db
     Restore {
@@ -418,13 +418,8 @@ async fn main() {
                 with_data,
                 confirm_app,
             } => {
-                commands::app::sync(
-                    &peer,
-                    target.as_deref(),
-                    with_data,
-                    confirm_app.as_deref(),
-                )
-                .await
+                commands::app::sync(&peer, target.as_deref(), with_data, confirm_app.as_deref())
+                    .await
             }
         },
         Commands::New => commands::new_page::run().await,
@@ -702,25 +697,20 @@ mod tests {
 
     #[test]
     fn parses_unified_app_commands_and_rejects_removed_commands() {
-        assert!(Cli::try_parse_from([
-            "localapp",
-            "app",
-            "install",
-            "--target",
-            "local",
-        ])
-        .is_ok());
-        assert!(Cli::try_parse_from([
-            "localapp",
-            "app",
-            "sync",
-            "--peer",
-            "office",
-            "--with-data",
-            "--confirm-app",
-            "notes",
-        ])
-        .is_ok());
+        assert!(Cli::try_parse_from(["localapp", "app", "install", "--target", "local",]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "localapp",
+                "app",
+                "sync",
+                "--peer",
+                "office",
+                "--with-data",
+                "--confirm-app",
+                "notes",
+            ])
+            .is_ok()
+        );
         assert!(Cli::try_parse_from(["localapp", "local", "install", "x.localapp"]).is_err());
         assert!(Cli::try_parse_from(["localapp", "upload"]).is_err());
     }

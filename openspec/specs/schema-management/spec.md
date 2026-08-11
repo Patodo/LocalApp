@@ -34,13 +34,13 @@ server 端 SHALL 读取 manifest.business,在 CRUD API 执行时强制执行业�
 
 #### Scenario: manifest.json 包含 business 块
 - **WHEN** 用户在 dev 模式创建记录,manifest.business.tasks.defaultFields 含 `created_by: { defaultFrom: "currentUser.id" }`
-- **THEN** mini-server 自动填充 `created_by = "dev-user"`
+- **THEN** 开发模式的统一 Server 自动填充 `created_by = "dev-user"`
 - **AND** 行为与生产一致(只是 userId 不同)
 
 #### Scenario: recordAccess 强制执行
 - **WHEN** 用户尝试 update 不属于自己的记录
 - **AND** manifest.business.tasks.recordAccess.update = "owner"
-- **THEN** mini-server / 生产 server 拒绝(403)
+- **THEN** 开发与正式部署的统一 Server 均拒绝(403)
 - **AND** 错误信息 "Access denied. Only owner can update."
 
 #### Scenario: transition 校验
@@ -71,7 +71,7 @@ transitions 元数据 SHALL 移到 manifest.business.<table>.transitions 数组,
 
 ### Requirement: 校验 transition 定义
 
-server SHALL 在 manifest.json 上传时(validate 阶段)校验 business.<table>.transitions 定义:
+Server SHALL 在 manifest.json 包构建和安装(validate 阶段)校验 business.<table>.transitions 定义:
 - from 和 to 必须是 enum 中声明的合法值
 - access 字段必须是 "owner" / "any" / "<role>" 之一
 - set 字段(可选)必须是合法字段名 + 值

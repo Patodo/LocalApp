@@ -134,11 +134,11 @@ localapp pages delete [name]       # 删除页面
 
 ### DB / Migration
 ```bash
-localapp db reset                 # 重建本地 dev.db，应用 migrations 和 dev seed
+localapp db reset                 # 重建 tmp/localapp-schema/schema.db 离线工作库
 localapp db validate              # 拉生产快照验证 pending migrations
-localapp db status                # 查看已应用/待应用 migrations
+localapp db status                # 查看离线工作库已应用/待应用 migrations
 localapp db restore --backup v1   # 从 server backup 恢复 app.db
-localapp db types -o src/types.ts # 从 dev.db 生成 TypeScript 类型
+localapp db types -o src/types.ts # 从离线 schema 工作库生成 TypeScript 类型
 ```
 
 ### Backend Contract
@@ -216,7 +216,7 @@ const post = await query("posts.withAuthor", { id: 1 });
 
 - Identity：切换 `dev-user` / `alice` / `bob` / 未登录，验证当前用户、`:currentUserId` 注入和 named SQL 的 access 校验。
 - Time：切换真实时间或固定 ISO 时间，验证 `:now` 系统变量注入、截止日期和进度视图。
-- Data：reset `.localapp/dev.db`，创建/恢复 snapshot；reset 会重新应用 migrations 和 `db/seeds/dev.sql`。
+- Data：通过当前统一 Server 重置应用数据库、创建/恢复 snapshot；这些操作不使用 CLI 的离线 schema 工作库。
 - Diagnostics：查看最近 API 请求和 `manifest.business` 业务规则。
 
 身份、时间、reset/restore 后会触发 `localapp:dev-context-changed`，SDK 数据 hooks 会自动刷新订阅资源。

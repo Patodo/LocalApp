@@ -4,6 +4,9 @@ import { listUsers } from "./lib/meta-sqlite.js";
 
 export interface WorkerReadyMessage {
   type: "ready";
+  /** Actual TCP listener for local supervisors; never derived from publicUrl. */
+  listenUrl: string;
+  /** Canonical URL intended for user-facing links. */
   url: string;
   setupUrl?: string;
   workerPid: number;
@@ -50,8 +53,10 @@ export async function runWorker(): Promise<void> {
   await app.listen({ host: listenHost, port: app.config.listenPort });
   const address = app.addresses()[0];
   if (!address || typeof address === "string") throw new Error("Expected TCP listener");
-  const url = setupRequired ? `http://127.0.0.1:${address.port}` : (app.config.publicUrl || `http://${listenHost}:${address.port}`);
-  const message: WorkerReadyMessage = { type: "ready", url, workerPid: process.pid };
+  const addressHost = address.address.includes(":") ? `[${address.address}]` : address.address;
+  const listenUrl = `http://${addressHost}:${address.port}`;
+  const url = setupRequired ? listenUrl : (app.config.publicUrl || listenUrl);
+  const message: WorkerReadyMessage = { type: "ready", listenUrl, url, workerPid: process.pid };
   if (setupRequired) {
     const issued = setupTokens.issue();
     message.setupUrl = `${url}/setup?token=${encodeURIComponent(issued.token)}`;

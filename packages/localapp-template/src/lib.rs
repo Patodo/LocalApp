@@ -751,10 +751,7 @@ mod tests {
             parsed["dependencies"]["@localapp/server-core"].as_str(),
             Some("file:./.localapp/runtime/server-core"),
         );
-        assert_eq!(
-            parsed["dependencies"]["unified"].as_str(),
-            Some("^11.0.5"),
-        );
+        assert_eq!(parsed["dependencies"]["unified"].as_str(), Some("^11.0.5"),);
         assert_eq!(
             parsed["dependencies"]["remark-parse"].as_str(),
             Some("^11.0.0"),

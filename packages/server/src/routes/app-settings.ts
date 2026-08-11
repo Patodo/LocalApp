@@ -99,6 +99,7 @@ function dataError(reply: FastifyReply, caught: unknown) {
   }
   if (!(caught instanceof AppDataError)) throw caught;
   const status = caught.code === "APP_DATA_OPERATION_BUSY" || caught.code === "APP_DATA_MAINTENANCE"
+    || caught.code === "APP_MIGRATIONS_UNAVAILABLE"
     ? 409
     : caught.code.endsWith("NOT_FOUND")
       ? 404

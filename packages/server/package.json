@@ -14,6 +14,7 @@
     "start": "node dist/cli.js start",
     "package": "pnpm -C ../server-core build && pnpm -C ../web build && node scripts/build-server-package.mjs",
     "test:package": "node --test scripts/build-server-package.node-test.mjs",
+    "test:local-dev-package": "cargo build --manifest-path ../cli/Cargo.toml && pnpm -C ../server-core build && pnpm -C ../web build && node --test scripts/localapp-dev-package.node-test.mjs",
     "test": "vitest run",
     "test:runner-protocol": "node --test tests/runner-protocol.node-test.mjs",
     "clean": "rimraf dist"

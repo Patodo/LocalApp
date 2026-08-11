@@ -100,29 +100,28 @@ JWT cookie MUST 设置以下属性：`HttpOnly`、`SameSite=Lax`、`Path=/`。�
 - **WHEN** 任何 `provider='local'` 的用户通过 `POST /api/auth/login` 登录
 - **THEN** 登录流程不检查 `provider` 字段，仅验证用户名和密码
 
-### Requirement: 用户数据初始化
+### Requirement: 空 Server 使用单次 setup 创建首位管理员
 
-服务器启动时 MUST 确保 `users` 表存在于 meta.sqlite 中。若配置了 `bootstrap_api_key`，SHALL 确保 admin 用户存在：若不存在则创建，若已存在则确保 role 为 admin。Admin 用户 SHALL 使用 `provider='local'`、`password` 为 `admin_default_password` 配置值的 bcrypt 哈希、`must_change_password=1`。若 admin 用户已存在且已有密码，SHALL NOT 覆盖密码。
+Server 启动时 MUST 确保用户 schema 存在，但用户数量为零时 SHALL 保持空状态。worker SHALL 生成短时、单次 setup token 并在 loopback readiness 中提供 setup URL；`POST /api/setup/initialize` SHALL 仅从 loopback 接受该 token、用户名和密码，并在事务中创建首位管理员。成功后 SHALL 撤销所有 setup token。
 
-#### Scenario: 首次启动 — 创建 admin
-- **WHEN** 配置了 `bootstrap_api_key`，且 admin 用户不存在
-- **THEN** 创建 admin 用户（`provider='local'`，密码为 `bcrypt(admin_default_password)`，`must_change_password=1`，`role='admin'`）
+#### Scenario: 首次 setup 成功
+- **WHEN** 空 Server 从 loopback 提交有效 token、合法用户名和密码
+- **THEN** 创建的用户 SHALL 使用 bcrypt 密码哈希并具有 `admin` 角色
+- **AND** setup token SHALL 立即失效
 
-#### Scenario: admin 已存在且无密码
-- **WHEN** 配置了 `bootstrap_api_key`，admin 用户已存在但密码为空
-- **THEN** 更新 admin 密码为 `bcrypt(admin_default_password)`，设置 `must_change_password=1`、`role='admin'`
+#### Scenario: setup token 重放
+- **WHEN** 客户端再次提交已使用或过期 token
+- **THEN** Server SHALL 返回 410
+- **AND** SHALL NOT创建第二个用户
 
-#### Scenario: admin 已存在且有密码
-- **WHEN** 配置了 `bootstrap_api_key`，admin 用户已存在且密码非空
-- **THEN** 仅确保 `role='admin'`，不覆盖密码和 `must_change_password`
+#### Scenario: 非 loopback setup
+- **WHEN** setup 请求来自非 loopback 地址
+- **THEN** Server SHALL 返回 403
 
-#### Scenario: 未配置 bootstrap_api_key
-- **WHEN** 未配置 `bootstrap_api_key`
-- **THEN** 不创建 admin 用户
-
-#### Scenario: 已有表缺少 must_change_password 列
-- **WHEN** `users` 表已存在但缺少 `must_change_password` 列
-- **THEN** 通过 `ALTER TABLE` 添加 `must_change_password INTEGER NOT NULL DEFAULT 0` 列
+#### Scenario: 已完成 setup
+- **WHEN** Server 已存在至少一个用户
+- **THEN** setup status SHALL 报告 `required: false`
+- **AND** initialize SHALL NOT创建或修改用户
 
 ### Requirement: 用户认证支持角色
 用户供应和登录流程 SHALL 感知 `role` 字段。
@@ -153,11 +152,11 @@ Admin 路由（重置密码等）和 Profile 路由（修改密码等）SHALL NO
 
 ### Requirement: 开发态 /api/me 使用标准响应形态
 
-mini-server 的 `GET /api/me` SHALL 返回与生产 server 一致的 `{ success: true, data: User | null }` 响应形态。返回用户 SHALL 包含 SDK `User` 类型允许的字段：`id`、`name`、`role`、`displayName`、`avatarUrl`、`bio`。
+统一 Server 的 `GET /api/me` SHALL 在开发与正式部署返回同一 `{ success: true, data: User | null }` 响应形态。返回用户 SHALL 包含 SDK `User` 类型允许的字段：`id`、`name`、`role`、`displayName`、`avatarUrl`、`bio`。
 
 #### Scenario: 默认 dev 用户
 - **WHEN** dev 应用请求 `GET /api/me`
-- **THEN** mini-server SHALL 返回 `{ success: true, data: { id: "dev-user", name: "Dev User", role: "owner", ... } }`
+- **THEN** 项目统一 Server SHALL 返回其真实 `dev-user` 用户，Dev Toolkit 模拟身份时返回选中的 Server 用户
 
 #### Scenario: 切换 dev 用户
 - **WHEN** Dev Toolkit 将当前 dev context user 切换为 `alice`

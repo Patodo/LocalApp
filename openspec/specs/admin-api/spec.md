@@ -22,9 +22,9 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 - **AND** 返回 `{ success: true, data: { deleted: true, id } }`
 - **AND** 不能删除自己（admin 不能删除自己），返回 400
 
-#### Scenario: 删除系统保护账户被拒绝
-- **WHEN** admin 发送 `DELETE /api/admin/users/localadmin`
-- **THEN** 返回 HTTP 400，`{ success: false, error: "Cannot delete protected user" }`
+#### Scenario: 删除最后一个管理员被拒绝
+- **WHEN** 删除目标会使 Server 不再有任何 admin
+- **THEN** 返回 HTTP 400，`{ success: false, error: "Cannot delete the last admin" }`
 - **AND** 用户记录、API keys、数据目录均不变
 
 ### Requirement: 管理员修改用户角色
@@ -40,7 +40,6 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 - **WHEN** admin 发送 `PATCH /api/admin/users/bob/role` 携带 `{ role: "user" }`
 - **AND** 当前系统中有至少 2 个 admin
 - **AND** `bob` 不是当前登录的 admin 自己
-- **AND** `bob` 不是系统保护账户
 - **THEN** 更新 `users.role='user'` WHERE id='bob'
 - **AND** 返回 `{ success: true, data: { id: "bob", role: "user" } }`
 
@@ -53,11 +52,6 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 - **WHEN** admin 发送 `PATCH /api/admin/users/ghost/role` 携带 `{ role: "admin" }`
 - **AND** `ghost` 不在 users 表中
 - **THEN** 返回 HTTP 404，`{ success: false, error: "User not found" }`
-
-#### Scenario: 系统保护账户不可降级
-- **WHEN** admin 发送 `PATCH /api/admin/users/localadmin/role` 携带 `{ role: "user" }`
-- **THEN** 返回 HTTP 400，`{ success: false, error: "Cannot demote protected user" }`
-- **AND** localadmin 的 role 仍为 `admin`
 
 #### Scenario: 不能降级自己
 - **WHEN** admin（id='alice'）发送 `PATCH /api/admin/users/alice/role` 携带 `{ role: "user" }`

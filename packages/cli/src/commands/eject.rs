@@ -1,3 +1,4 @@
+use crate::commands::project_config;
 use crate::project::Manifest;
 use crate::scripts::script_invokes_localapp_dev;
 use std::fs;
@@ -88,7 +89,7 @@ pub fn eject_at(project_dir: &Path, prompt: impl Prompt) -> Result<(), String> {
     update_package_json_for_eject(project_dir)?;
 
     // 7. 写入 ejected: true
-    write_ejected_flag(&dev_config_path)?;
+    project_config::mark_ejected(project_dir)?;
 
     println!(r#"{{"success": true, "ejected": true, "runtimePath": "src/_localapp_runtime"}}"#);
     eprintln!();
@@ -139,23 +140,6 @@ fn update_package_json_for_eject(project_dir: &Path) -> Result<(), String> {
 
     let serialized = serde_json::to_string_pretty(&pkg).unwrap_or_default();
     fs::write(&pkg_path, serialized).map_err(|e| format!("Failed to write package.json: {e}"))?;
-    Ok(())
-}
-
-fn write_ejected_flag(dev_config_path: &Path) -> Result<(), String> {
-    let content = fs::read_to_string(dev_config_path).unwrap_or_default();
-    let mut parsed: serde_json::Value = if content.is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(&content).map_err(|e| format!("Invalid dev-config.json: {e}"))?
-    };
-    let obj = parsed
-        .as_object_mut()
-        .ok_or_else(|| "dev-config.json must be an object".to_string())?;
-    obj.insert("ejected".to_string(), serde_json::Value::Bool(true));
-    let serialized = serde_json::to_string_pretty(&parsed).unwrap();
-    fs::write(dev_config_path, serialized)
-        .map_err(|e| format!("Failed to write dev-config: {e}"))?;
     Ok(())
 }
 
@@ -379,8 +363,26 @@ mod tests {
 
         eject_at(&project, PromptCorrect).unwrap();
 
-        let config = fs::read_to_string(project.join(".localapp/dev-config.json")).unwrap();
+        let config = fs::read_to_string(project.join(".localapp/project-config.json")).unwrap();
         assert!(config.contains("\"ejected\": true"));
+        let dev_config_path = project.join(".localapp/dev-config.json");
+        fs::write(
+            &dev_config_path,
+            r#"{"serverUrl":"http://127.0.0.1:43123","userId":"dev-user","pageName":"test-app","apiKey":"secret","appServerPort":5173}"#,
+        )
+        .unwrap();
+
+        struct SyncPrompt;
+        impl crate::commands::sync::Prompt for SyncPrompt {
+            fn confirm(&self) -> Result<bool, String> {
+                Ok(true)
+            }
+        }
+        let error = crate::commands::sync::sync_at(&project, true, false, SyncPrompt)
+            .expect_err("eject must remain permanent after dev-config replacement");
+        assert!(error.contains("ejected"));
+        let dev_config = fs::read_to_string(dev_config_path).unwrap();
+        assert!(!dev_config.contains("ejected"));
     }
 
     #[test]

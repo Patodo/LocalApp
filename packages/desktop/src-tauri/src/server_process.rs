@@ -43,10 +43,16 @@ impl ServerLaunch {
             .join(if cfg!(windows) { "node.exe" } else { "node" });
         let entrypoint = resource_directory.join("server/bin/localapp-server.mjs");
         if !node.is_file() {
-            return Err(format!("Bundled Node.js runtime is unavailable: {}", node.display()));
+            return Err(format!(
+                "Bundled Node.js runtime is unavailable: {}",
+                node.display()
+            ));
         }
         if !entrypoint.is_file() {
-            return Err(format!("Bundled Server is unavailable: {}", entrypoint.display()));
+            return Err(format!(
+                "Bundled Server is unavailable: {}",
+                entrypoint.display()
+            ));
         }
         let mut launch = Self::command(
             node,
@@ -62,7 +68,9 @@ impl ServerLaunch {
             ],
             Duration::from_secs(20),
         );
-        launch.environment.insert("LOCALAPP_DEVICE_CONTROL_TOKEN".into(), control_token);
+        launch
+            .environment
+            .insert("LOCALAPP_DEVICE_CONTROL_TOKEN".into(), control_token);
         Ok(launch)
     }
 }
@@ -160,7 +168,12 @@ impl ServerProcess {
     }
 
     pub async fn stop(&mut self) -> Result<(), String> {
-        if self.child.try_wait().map_err(|error| error.to_string())?.is_some() {
+        if self
+            .child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
             return Ok(());
         }
         terminate_child(&mut self.child).await;
@@ -171,7 +184,10 @@ impl ServerProcess {
 fn validate_ready_url(value: &str) -> Result<String, String> {
     let url = Url::parse(value).map_err(|_| "Server returned an invalid ready URL")?;
     if url.scheme() != "http"
-        || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]" | "::1"))
+        || !matches!(
+            url.host_str(),
+            Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
+        )
         || url.username() != ""
         || url.password().is_some()
         || url.path() != "" && url.path() != "/"

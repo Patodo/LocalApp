@@ -8,7 +8,10 @@ use localapp_desktop::tray_menu_specs;
 fn tray_menu_contains_only_open_home_and_exit() {
     assert_eq!(
         tray_menu_specs(),
-        [("tray-open-home", "打开主页"), ("tray-exit", "退出本地服务")]
+        [
+            ("tray-open-home", "打开主页"),
+            ("tray-exit", "退出本地服务")
+        ]
     );
 }
 
@@ -25,7 +28,14 @@ async fn server_process_opens_ready_url_and_stops_child() {
     ))
     .await
     .expect("server child should become ready");
-    assert!(process.ready().await.expect("ready state").url.starts_with("http://127.0.0.1:"));
+    assert!(
+        process
+            .ready()
+            .await
+            .expect("ready state")
+            .url
+            .starts_with("http://127.0.0.1:")
+    );
     process.stop().await.expect("server child should stop");
     assert!(!process.is_running());
 }

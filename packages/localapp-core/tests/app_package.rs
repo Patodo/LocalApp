@@ -10,6 +10,7 @@ fn fixture_project() -> tempfile::TempDir {
     fs::create_dir_all(project.path().join("migrations")).unwrap();
     fs::create_dir_all(project.path().join("backend/resources/items")).unwrap();
     fs::create_dir_all(project.path().join(".localapp/uploads")).unwrap();
+    fs::create_dir_all(project.path().join("tmp/localapp-schema")).unwrap();
     fs::write(
         project.path().join("manifest.json"),
         r#"{"name":"local-notes","platformVersion":">=0.1.0"}"#,
@@ -35,7 +36,11 @@ fn fixture_project() -> tempfile::TempDir {
         r#"{"$schema":"https://localapp.dev/schemas/backend/queries.schema.json","queries":{}}"#,
     )
     .unwrap();
-    fs::write(project.path().join(".localapp/dev.db"), b"private database").unwrap();
+    fs::write(
+        project.path().join("tmp/localapp-schema/schema.db"),
+        b"private database",
+    )
+    .unwrap();
     fs::write(
         project.path().join(".localapp/uploads/private.txt"),
         b"private file",

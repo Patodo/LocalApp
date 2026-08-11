@@ -14,6 +14,10 @@ import { AppDataError } from "./app-data-errors.js";
 import { withAppDataMaintenance } from "./app-data-maintenance.js";
 import { validateCandidateSchema } from "./app-data-schema.js";
 import {
+  resolveApplicationMigrationsDir,
+  VersionMigrationSnapshotError,
+} from "./app-version-migrations.js";
+import {
   deleteObject,
   getObject,
   listAppObjects,
@@ -70,6 +74,17 @@ function backupDataPath(pageDir: string, id: string, format: AppBackupFormat): s
 
 function backupMetaPath(pageDir: string, id: string): string {
   return path.join(backupDir(pageDir), `${id}.json`);
+}
+
+async function currentMigrationsDir(pageDir: string, application: AppDataIdentity): Promise<string> {
+  try {
+    return await resolveApplicationMigrationsDir(pageDir, application);
+  } catch (error) {
+    if (error instanceof VersionMigrationSnapshotError) {
+      throw new AppDataError(error.code, error.message);
+    }
+    throw error;
+  }
 }
 
 function isBackupId(id: string): boolean {
@@ -252,7 +267,7 @@ async function prepareArchive(input: {
   });
   await validateCandidateSchema({
     candidatePath: prepared.databasePath,
-    migrationsDir: path.join(input.pageDir, "migrations"),
+    migrationsDir: await currentMigrationsDir(input.pageDir, input.application),
     archiveVersion: prepared.manifest.application.version,
     currentVersion: input.application.version,
   });
@@ -432,11 +447,15 @@ export async function resetApplicationData(input: {
   const limits = input.limits ?? DEFAULT_ARCHIVE_LIMITS;
   const storage = input.storage ?? defaultStorage;
   return withAppDataMaintenance(input.pageDir, async () => {
+    const migrationsDir = await currentMigrationsDir(input.pageDir, input.application);
     const safety = await createManagedBackupUnlocked({ ...input, limits, storage, source: "automatic", reason: "factory-reset" });
     const candidatePath = path.join(operationDir(input.pageDir), `factory-reset-${crypto.randomUUID()}.db`);
     const rollbackDir = path.join(operationDir(input.pageDir), `factory-reset-rollback-${crypto.randomUUID()}`);
     try {
-      await applyPendingMigrations({ dbPath: candidatePath, migrationsDir: path.join(input.pageDir, "migrations") });
+      await applyPendingMigrations({
+        dbPath: candidatePath,
+        migrationsDir,
+      });
       await applyPreparedData({ pageDir: input.pageDir, application: input.application, databasePath: candidatePath, files: [], storage });
       return { safetyBackupId: safety.id };
     } catch (caught) {

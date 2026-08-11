@@ -2,11 +2,7 @@ use std::path::Path;
 
 fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let project_root = Path::new(&manifest_dir)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+    let project_root = Path::new(&manifest_dir).parent().unwrap().parent().unwrap();
     let cargo_toml_path = Path::new(&manifest_dir).join("Cargo.toml");
     let cli_version = std::env::var("CARGO_PKG_VERSION").unwrap();
     println!("cargo:rustc-env=LOCALAPP_CLI_VERSION={cli_version}");

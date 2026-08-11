@@ -6,12 +6,12 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 ### Requirement: manifest.json db 配置
 
-manifest.json SHALL 扩展 `db` 字段，包含 `mode`（`crud` 或 `sql`）、`sqlAccess`（访问级别）、`defaultAccess`（CRUD 默认权限）。CLI 的 Manifest struct MUST 新增 `db` 字段。`localapp upload` 时 MUST 将 `db` 配置作为 `dbConfig` form field 发送。服务端 MUST 将 `dbConfig` 存入 meta.json 的 `db` 字段。
+manifest.json SHALL 支持 `db` 字段，包含 `mode`（`crud` 或 `sql`）、`sqlAccess`（访问级别）、`defaultAccess`（CRUD 默认权限）。CLI 构建 `.localapp` 时 MUST 保留并校验该配置；统一 Server 安装包时 MUST 将它作为版本 manifest 的一部分持久化。
 
 #### Scenario: 完整 manifest.json db 配置
 
 - **WHEN** manifest.json 包含 `{ "name": "app", "description": "", "distDir": "dist", "db": { "mode": "sql", "sqlAccess": "owner", "defaultAccess": { "read": "public", "create": "authenticated", "update": "authenticated", "delete": "owner" } } }`
-- **THEN** CLI upload 时将 `dbConfig` 作为 JSON 字符串发送，服务端存入 meta.json
+- **THEN** CLI SHALL 将完整配置写入包内 manifest，Server 安装后 SHALL 从活动版本读取该配置
 
 #### Scenario: 最小 db 配置
 
@@ -21,7 +21,7 @@ manifest.json SHALL 扩展 `db` 字段，包含 `mode`（`crud` 或 `sql`）、`
 #### Scenario: 无 db 字段
 
 - **WHEN** manifest.json 不包含 `db` 字段（仅有 name, description, distDir）
-- **THEN** CLI 不发送 `dbConfig`，服务端 meta.json 不写入 `db` 字段，行为等同于 `mode: "crud"`
+- **THEN** 包内 manifest 不包含 `db` 字段，Server 行为 SHALL 等同于 `mode: "crud"`
 
 ### Requirement: db.mode 开关
 
@@ -100,29 +100,29 @@ manifest.json SHALL 支持顶层 `notify` 字段，控制 app 的通知能力开
 - **WHEN** manifest.json 不含 `notify` 字段
 - **THEN** 与 `enabled: false` 等价（Level 0 默认关闭）
 
-### Requirement: notify 配置上传与持久化
+### Requirement: notify 配置打包与持久化
 
-CLI upload MUST 将 manifest.json 中合法的 `notify` 字段作为 `notifyConfig` multipart 字段上传。Server SHALL 校验该字段后写入页面 `meta.json` 的顶层 `notify` 字段。页面 meta API SHALL 返回 `notify` 字段供 Platform Shell 条件渲染订阅按钮。
+CLI package build MUST 将 manifest.json 中合法的 `notify` 字段保留在 `.localapp` manifest 中。Server SHALL 在安装时校验并持久化该版本配置。页面 meta API SHALL 返回 `notify` 字段供 Platform Shell 条件渲染订阅按钮。
 
-#### Scenario: upload 携带 notifyConfig
+#### Scenario: 应用包携带 notify 配置
 
-- **WHEN** manifest.json 含 `notify = { enabled: true }` 且用户运行 `localapp upload`
-- **THEN** CLI 请求 `/api/upload` 时包含 `notifyConfig` multipart field
-- **THEN** server 将 `{ enabled: true }` 写入该页面的 `meta.json.notify`
+- **WHEN** manifest.json 含 `notify = { enabled: true }` 且用户构建并安装 `.localapp`
+- **THEN** 包内 manifest SHALL 保留该字段
+- **THEN** Server SHALL 将 `{ enabled: true }` 作为活动版本配置持久化
 
 #### Scenario: 页面 meta 返回 notify
 
 - **WHEN** Platform Shell 请求 `/api/pages/alice/leave-app/meta`
 - **THEN** 响应 data 中包含 `notify` 字段（若页面未配置则缺省或为 `{ enabled: false }`）
 
-#### Scenario: upload 未携带 notifyConfig
+#### Scenario: 包内未声明 notify
 
-- **WHEN** 旧版 CLI 或旧 app 上传时不包含 `notifyConfig`
+- **WHEN** 应用包 manifest 不包含 `notify`
 - **THEN** server 不写入 `meta.notify`，行为等同于 `notify.enabled = false`
 
 ### Requirement: notify 字段类型校验
 
-Server SHALL 在上传/加载 manifest 时校验 `notify` 字段的结构。非法配置 SHALL 视为 notify 关闭并记录警告日志。
+Server SHALL 在包安装/加载 manifest 时校验 `notify` 字段的结构。非法配置 SHALL 视为 notify 关闭并记录警告日志。
 
 #### Scenario: enabled 字段类型错误
 
@@ -153,8 +153,8 @@ manifest SHALL support a `backend` section that declares where application backe
 
 ### Requirement: Manifest backend declaration is packaged
 
-上传时，平台 SHALL preserve manifest backend declaration alongside resolved backend contract metadata for the uploaded app version.
+构建和安装 `.localapp` 时，平台 SHALL preserve manifest backend declaration alongside resolved backend contract metadata for the installed app version.
 
-#### Scenario: uploaded app has backend declaration
-- **WHEN** an app with backend declaration is uploaded
-- **THEN** production server MUST be able to resolve the uploaded backend contract without reading the developer working directory
+#### Scenario: installed app has backend declaration
+- **WHEN** an app with backend declaration is installed from a package
+- **THEN** Server MUST be able to resolve the installed backend contract without reading the developer working directory

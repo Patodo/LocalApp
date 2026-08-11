@@ -115,6 +115,7 @@ test("supervisor replaces the worker after a network rebind", async () => {
   try {
     const first = await nextReady(child, messages);
     assert.equal(first.url, `http://127.0.0.1:${initialPort}`);
+    assert.equal(first.listenUrl, `http://127.0.0.1:${initialPort}`);
     assert.ok(Number.isInteger(first.workerPid));
     assert.ok(first.setupUrl);
     const setup = new URL(first.setupUrl);
@@ -137,14 +138,79 @@ test("supervisor replaces the worker after a network rebind", async () => {
     assert.equal(JSON.parse(await readFile(path.join(dataDir, "server.json"), "utf8")).listenPort, initialPort);
     const second = await nextReady(child, messages);
     assert.equal(second.url, `http://127.0.0.1:${replacementPort}`, stderr.join(""));
+    assert.equal(second.listenUrl, `http://127.0.0.1:${replacementPort}`, stderr.join(""));
     assert.notEqual(second.workerPid, first.workerPid);
     assert.equal(JSON.parse(await readFile(path.join(dataDir, "server.json"), "utf8")).listenPort, replacementPort);
-    assert.equal((await fetch(`${second.url}/health`)).status, 200);
+    assert.equal((await fetch(`${second.listenUrl}/health`)).status, 200);
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(messages.filter((message) => message.type === "ready").length, 0, "supervisor emitted an unexpected additional worker readiness message");
   } finally {
     output.close();
     await terminateProcessGroup(child);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("readiness separates a saved public URL from the actual listener after restart", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "localapp-supervisor-public-url-"));
+  const initialPort = await availablePort();
+  let firstChild;
+  let firstOutput;
+  let restarted;
+  let restartedOutput;
+  try {
+    const firstMessages = [];
+    firstChild = spawn(process.execPath, ["packages/server/dist/cli.js", "start", "--data-dir", dataDir, "--host", "127.0.0.1", "--port", String(initialPort)], {
+      cwd: path.resolve(import.meta.dirname, "../../.."),
+      env: { ...process.env, BOOTSTRAP_API_KEY: "supervisor-test-api-key" },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    firstOutput = createInterface({ input: firstChild.stdout });
+    firstOutput.on("line", (line) => {
+      try {
+        const message = JSON.parse(line);
+        if (firstChild.listenerCount("ready") > 0) firstChild.emit("ready", message);
+        else firstMessages.push(message);
+      } catch {}
+    });
+    const first = await nextReady(firstChild, firstMessages);
+    const setup = new URL(first.setupUrl);
+    assert.equal((await fetch(`${first.listenUrl}/api/setup/initialize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: setup.searchParams.get("token"), username: "owner", password: "correct-horse-battery" }),
+    })).status, 201);
+    firstOutput.close();
+    await terminateProcessGroup(firstChild);
+
+    const saved = JSON.parse(await readFile(path.join(dataDir, "server.json"), "utf8"));
+    await writeFile(path.join(dataDir, "server.json"), JSON.stringify({ ...saved, publicUrl: "https://public.example" }));
+
+    const restartedMessages = [];
+    restarted = spawn(process.execPath, ["packages/server/dist/cli.js", "start", "--data-dir", dataDir, "--host", "127.0.0.1", "--port", "0"], {
+      cwd: path.resolve(import.meta.dirname, "../../.."),
+      env: { ...process.env, BOOTSTRAP_API_KEY: "supervisor-test-api-key" },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    restartedOutput = createInterface({ input: restarted.stdout });
+    restartedOutput.on("line", (line) => {
+      try {
+        const message = JSON.parse(line);
+        if (restarted.listenerCount("ready") > 0) restarted.emit("ready", message);
+        else restartedMessages.push(message);
+      } catch {}
+    });
+    const ready = await nextReady(restarted, restartedMessages);
+    assert.equal(ready.url, "https://public.example");
+    assert.match(ready.listenUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.equal((await fetch(`${ready.listenUrl}/health`)).status, 200);
+  } finally {
+    firstOutput?.close();
+    restartedOutput?.close();
+    if (firstChild) await terminateProcessGroup(firstChild);
+    if (restarted) await terminateProcessGroup(restarted);
     await rm(dataDir, { recursive: true, force: true });
   }
 });

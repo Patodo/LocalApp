@@ -16,7 +16,7 @@ describe("cli-db", () => {
     await env.cleanup();
   });
 
-  it("generates TypeScript interfaces from .localapp/dev.db", async () => {
+  it("generates TypeScript interfaces from the schema workbench database", async () => {
     const { dir, cleanup } = await createTmpProjectDir({
       "manifest.json": JSON.stringify({ name: "db-types-test", distDir: "dist", platformVersion: "^1.0" }),
     });
@@ -114,7 +114,7 @@ describe("cli-db", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Validate OK. 2 migrations ready to apply.");
-      await expect(fs.stat(path.join(dir, ".localapp", "prod-snapshot.db"))).resolves.toBeTruthy();
+      await expect(fs.stat(productionSnapshotPath(dir))).resolves.toBeTruthy();
       const marker = JSON.parse(await fs.readFile(path.join(dir, ".localapp", ".last-validated"), "utf8"));
       expect(marker.checksums).toHaveProperty("001_init.sql");
       expect(marker.checksums).toHaveProperty("002_add_status.sql");
@@ -140,7 +140,7 @@ describe("cli-db", () => {
     }
   });
 
-  it("keeps prod-snapshot.db when validate fails", async () => {
+  it("keeps the production snapshot when validate fails", async () => {
     const { dir, cleanup } = await createTmpProjectDir({
       "manifest.json": JSON.stringify({ name: "db-validate-fail-test", description: "", distDir: "dist", platformVersion: "^1.0" }),
       "migrations/001_bad.sql": "CREATE TABLE broken (id INTEGER;",
@@ -156,7 +156,7 @@ describe("cli-db", () => {
 
       expect(result.exitCode).toBe(1);
       expect(JSON.parse(result.stderr).error).toContain("Validation FAILED");
-      await expect(fs.stat(path.join(dir, ".localapp", "prod-snapshot.db"))).resolves.toBeTruthy();
+      await expect(fs.stat(productionSnapshotPath(dir))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, ".localapp", ".last-validated"))).rejects.toBeTruthy();
     } finally {
       await cleanup();
@@ -244,7 +244,7 @@ describe("cli-db", () => {
     }
   });
 
-  it("opens sqlite3 shell for dev.db", async () => {
+  it("opens sqlite3 shell for the schema workbench database", async () => {
     const { dir, cleanup } = await createTmpProjectDir({
       "manifest.json": JSON.stringify({ name: "db-shell-test", distDir: "dist", platformVersion: "^1.0" }),
       "migrations/001_init.sql": "CREATE TABLE tasks (id INTEGER PRIMARY KEY);",
@@ -266,9 +266,9 @@ async function writeDevDb(projectDir: string, sql: string): Promise<void> {
   const db = new SQL.Database();
   try {
     db.run(sql);
-    const localappDir = path.join(projectDir, ".localapp");
-    await fs.mkdir(localappDir, { recursive: true });
-    await fs.writeFile(path.join(localappDir, "dev.db"), Buffer.from(db.export()));
+    const dbPath = schemaWorkbenchPath(projectDir);
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    await fs.writeFile(dbPath, Buffer.from(db.export()));
   } finally {
     db.close();
   }
@@ -288,10 +288,18 @@ async function writeSqliteFile(filePath: string, sql: string): Promise<void> {
 
 async function readDevDbRows(projectDir: string, sql: string): Promise<unknown[][]> {
   const SQL = await initSqlJs();
-  const db = new SQL.Database(await fs.readFile(path.join(projectDir, ".localapp", "dev.db")));
+  const db = new SQL.Database(await fs.readFile(schemaWorkbenchPath(projectDir)));
   try {
     return db.exec(sql)[0]?.values ?? [];
   } finally {
     db.close();
   }
+}
+
+function schemaWorkbenchPath(projectDir: string): string {
+  return path.join(projectDir, "tmp", "localapp-schema", "schema.db");
+}
+
+function productionSnapshotPath(projectDir: string): string {
+  return path.join(projectDir, "tmp", "localapp-schema", "production-snapshot.db");
 }

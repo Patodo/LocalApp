@@ -40,7 +40,7 @@ async function readPlatformDataResponse<T>(res: Response, resource: string): Pro
     return (await res.json()) as ApiResponse<T[]>;
   } catch {
     throw new LocalAppError(
-      `Expected JSON from /api/platform/${resource}. If this is local development, start with npm run dev or localapp dev so requests reach the local mini-server.`,
+      `Expected JSON from /api/platform/${resource}. If this is local development, start with npm run dev or localapp dev so requests reach the project's LocalApp Server.`,
       res.status,
     );
   }

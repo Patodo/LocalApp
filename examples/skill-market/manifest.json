@@ -6,11 +6,7 @@
     "mode": "crud",
     "sqlAccess": "authenticated"
   },
-  "backend": {
-    "root": "backend"
-  },
   "requires": {
-    "backend": "named-sql",
     "identity": [
       "currentUser",
       "pageOwner"

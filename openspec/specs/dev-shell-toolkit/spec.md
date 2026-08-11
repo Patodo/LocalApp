@@ -15,7 +15,7 @@ DevShell SHALL 在 `localapp dev` 模式下提供开发工具控制台，包含�
 - **THEN** DevShell SHALL 在顶栏最左侧显示 `DEV` 按钮
 - **AND** 点击 `DEV` SHALL 展开下拉菜单
 - **AND** 下拉菜单 SHALL 包含开发工具入口
-- **AND** 开发工具控制台 SHALL 能读取本地 mini-server 的 `/api/dev/context`
+- **AND** 开发工具控制台 SHALL 能读取当前项目统一 Server 的 `/api/dev/context`
 
 #### Scenario: 工具列表入口位于 DEV 下拉
 - **WHEN** 应用或系统注册了 AI 工具
@@ -58,36 +58,36 @@ DevShell SHALL 为 `DEV` 按钮提供可访问的下拉菜单交互。菜单 SHA
 
 ### Requirement: DevShell 支持切换模拟身份
 
-DevShell SHALL 支持通过 `/api/dev/context` 在预置用户、自定义用户和未登录状态之间切换。模拟身份 SHALL 影响 `/api/me`、CRUD visitor、`defaultFrom: "currentUser.id"`、`recordAccess` 和 transitions 的权限判断。
+DevShell SHALL 支持通过 `/api/dev/context` 在当前 Server 中真实存在的用户和未登录状态之间切换。模拟身份 SHALL 影响 `/api/me`、Named SQL 的 `currentUser`、`defaultFrom: "currentUser.id"` 和后端权限判断。上下文更新端点本身始终使用启动开发环境的真实 Server API Key，以便从未登录模拟状态切回。
 
 #### Scenario: 切换预置用户
 - **WHEN** 开发者在 DevShell 中选择预置用户 `alice`
 - **THEN** DevShell SHALL 更新 `/api/dev/context`
 - **AND** 后续 `/api/me` SHALL 返回 `alice`
-- **AND** 后续 CRUD、defaultFrom、recordAccess 和 transition SHALL 使用 `alice` 作为当前 visitor
+- **AND** 后续 Named SQL、defaultFrom 和后端权限 SHALL 使用 `alice` 作为当前 visitor
 
 #### Scenario: 切换未登录状态
 - **WHEN** 开发者在 DevShell 中选择未登录状态
 - **THEN** 后续 `/api/me` SHALL 返回未登录响应
 - **AND** 需要当前用户的 `defaultFrom`、recordAccess 或 transition SHALL 按未登录 visitor 执行
 
-#### Scenario: 使用自定义用户
-- **WHEN** 开发者输入自定义用户 id、name、displayName 或 role
-- **THEN** DevShell SHALL 将该用户写入 `/api/dev/context`
-- **AND** mini-server SHALL 使用该自定义用户执行业务 API
+#### Scenario: 拒绝不存在的用户
+- **WHEN** 开发者尝试选择当前 Server 中不存在的用户 ID
+- **THEN** `/api/dev/context` SHALL 返回 400
+- **AND** SHALL NOT 创建临时用户或接受客户端提交的 role
 
 ### Requirement: DevShell 支持切换开发时间
 
-DevShell SHALL 支持真实时间模式和固定 ISO 时间模式。固定时间 SHALL 影响 mini-server 中业务逻辑使用的 `now`，包括 transition `set` 和其它本地后端写入。
+DevShell SHALL 支持真实时间模式和固定 ISO 时间模式。固定时间 SHALL 影响统一 Server 应用 API 的 `/api/time` 和 Named SQL 系统变量 `now`。
 
 #### Scenario: 设置固定 ISO 时间
 - **WHEN** 开发者在 DevShell 中设置固定时间 `2026-07-01T09:00:00.000Z`
 - **THEN** DevShell SHALL 更新 `/api/dev/context`
-- **AND** 后续 mini-server 业务写入中的 `now` SHALL 使用该固定时间
+- **AND** 后续 Named SQL 中的 `now` SHALL 使用该固定时间
 
 #### Scenario: 恢复真实时间
 - **WHEN** 开发者在 DevShell 中切回真实时间模式
-- **THEN** mini-server SHALL 使用当前系统时间解析 `now`
+- **THEN** 统一 Server SHALL 使用当前系统时间解析 `now`
 - **AND** 后续写入 SHALL 不再使用之前的固定时间
 
 ### Requirement: DevShell 在上下文变化后刷新应用数据
@@ -106,21 +106,22 @@ DevShell SHALL 在身份或时间上下文更新成功后派发 `localapp:dev-co
 
 ### Requirement: DevShell 提供本地数据工具
 
-DevShell SHALL 提供本地数据 reset、snapshot 和 restore 工具。mini-server SHALL 只在项目 `.localapp/` 范围内操作 `.localapp/dev.db` 和 `.localapp/dev-snapshots/`。
+DevShell SHALL 提供应用数据 reset、snapshot 和 restore 工具。这些操作 SHALL 调用当前项目统一 Server 的应用数据维护服务，作用域只限当前 owner/application；Server 根目录 SHALL 位于项目 `tmp/localapp-dev/server/`。
 
 #### Scenario: reset 本地数据
 - **WHEN** 开发者在 DevShell 中执行 reset
-- **THEN** mini-server SHALL 重建 `.localapp/dev.db`
-- **AND** mini-server SHALL 重新应用 migrations 和 `db/seeds/dev.sql`
+- **THEN** 统一 Server SHALL 先创建安全备份
+- **AND** SHALL 重建当前应用数据库并重新应用已安装版本的 migrations
+- **AND** SHALL NOT 修改 CLI 的离线 schema 工作库
 
 #### Scenario: 保存并恢复 snapshot
 - **WHEN** 开发者保存 snapshot
-- **THEN** mini-server SHALL 复制当前 `.localapp/dev.db` 到 `.localapp/dev-snapshots/`
+- **THEN** 统一 Server SHALL 使用正式应用备份实现保存数据库和文件快照
 - **AND** 当开发者恢复该 snapshot 时，后续 API 读取 SHALL 返回恢复后的数据
 
 ### Requirement: DevShell 展示业务规则和诊断信息
 
-DevShell SHALL 展示当前 manifest 中的业务配置，包括 `recordAccess`、`defaultFields`、`transitions` 和 `enums`。DevShell SHALL 展示 mini-server 最近请求诊断和 AI tool call 历史，帮助开发者理解本地行为。
+DevShell SHALL 展示当前 manifest 中的业务配置，包括 `recordAccess`、`defaultFields`、`transitions` 和 `enums`。DevShell SHALL 展示统一 Server 中当前模拟用户的最近请求诊断和 AI tool call 历史，帮助开发者理解本地行为。
 
 #### Scenario: 展示业务规则
 - **WHEN** DevShell 打开业务规则分区
@@ -129,7 +130,8 @@ DevShell SHALL 展示当前 manifest 中的业务配置，包括 `recordAccess`�
 
 #### Scenario: 展示最近请求诊断
 - **WHEN** DevShell 打开诊断分区
-- **THEN** DevShell SHALL 从 `/api/dev/diagnostics` 展示最近请求的 method、path、status、duration 和截断 body
+- **THEN** DevShell SHALL 从 `/api/dev/diagnostics/requests` 展示最近请求的 method、path、status 和 duration
+- **AND** SHALL NOT 返回其它 Server 用户的请求
 
 #### Scenario: 展示 AI tool call 历史
 - **WHEN** 应用通过 DevShell 注册或调用 AI 工具

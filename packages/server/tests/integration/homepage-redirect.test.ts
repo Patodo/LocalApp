@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 import { createTestServer, getAppUrl } from "./helpers.js";
 import { registerAndLogin } from "../helpers/createUser.js";
 import type { FastifyInstance } from "fastify";
@@ -107,6 +109,33 @@ describe("GET / homepage", () => {
 
     for (const url of variants) {
       expect(await rawGet(baseUrl, url, userCookie), url).toBe(404);
+    }
+  });
+});
+
+describe("packaged Web root", () => {
+  it("serves authenticated management pages from the configured packaged Web root", async () => {
+    const repoRoot = path.resolve(__dirname, "../../../..");
+    const fixtureRoot = await fs.promises.mkdtemp(path.join(repoRoot, "tmp/packaged-web-root-"));
+    const webRoot = path.join(fixtureRoot, "web");
+    await fs.promises.mkdir(path.join(webRoot, "_next"), { recursive: true });
+    await fs.promises.mkdir(path.join(webRoot, "home"), { recursive: true });
+    await fs.promises.mkdir(path.join(webRoot, "my"), { recursive: true });
+    await fs.promises.writeFile(path.join(webRoot, "my/keys.html"), "<!doctype html><h1>PACKAGED_KEYS_PAGE</h1>");
+    await fs.promises.writeFile(path.join(webRoot, "my/keys.txt"), "PACKAGED_KEYS_FLIGHT");
+
+    const packaged = await createTestServer({ webRoot });
+    try {
+      const cookie = await registerAndLogin(packaged.baseUrl, "packaged-user", "pass123456");
+      const page = await fetch(`${packaged.baseUrl}/my/keys`, { headers: { cookie } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain("PACKAGED_KEYS_PAGE");
+      const flight = await fetch(`${packaged.baseUrl}/my/keys.txt?_rsc=1`, { headers: { cookie } });
+      expect(flight.status).toBe(200);
+      expect(await flight.text()).toBe("PACKAGED_KEYS_FLIGHT");
+    } finally {
+      await packaged.stop();
+      await fs.promises.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 });

@@ -4,9 +4,9 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 ## Requirements
 
-### Requirement: 根路径重定向
+### Requirement: 根路径首页渲染
 
-`GET /` SHALL 根据用户登录状态执行不同操作。已登录用户 SHALL 渲染首页组件（三模块布局）。未登录用户 SHALL 重定向到 `/login?redirect=/`。
+`GET /` SHALL 对已登录和未登录用户都返回首页 HTML。已登录用户 SHALL 渲染首页组件（三模块布局）；未登录用户 SHALL 渲染公开产品首页并在当前页面提供登录模态框入口，不得重定向到 `/login?redirect=/`。
 
 #### Scenario: 已登录用户看到首页
 - **WHEN** 携带有效 session cookie 请求 `GET /`
@@ -14,7 +14,8 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 #### Scenario: 未登录用户访问根路径
 - **WHEN** 不携带 session cookie 请求 `GET /`
-- **THEN** 重定向到 `/login?redirect=/`
+- **THEN** 返回 HTTP 200 并渲染公开首页
+- **AND** 浏览器地址保持 `/`
 
 #### Scenario: 登录后回到首页
 - **WHEN** 用户在 `/login` 页面登录成功，redirect 参数为 `/`

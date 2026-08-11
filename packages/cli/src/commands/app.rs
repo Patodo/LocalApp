@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) use super::upload::{
     collect_backend_files_for_manifest, collect_declared_backend_mutations,
-    collect_package_source_tree, validate_backend_contract_files,
-    validate_platform_version_range,
+    collect_package_source_tree, validate_backend_contract_files, validate_platform_version_range,
 };
 
 pub async fn install(target_profile: Option<&str>, package: Option<&str>) -> Result<(), String> {
@@ -50,14 +49,7 @@ pub async fn sync(
     let manifest = Manifest::read_validated(&project)?
         .ok_or_else(|| "No manifest.json found. Run 'localapp init' first.".to_string())?;
     let target = resolve_project_target(target_profile, &project)?;
-    peer::sync_application(
-        &target,
-        &manifest.name,
-        peer_name,
-        with_data,
-        confirmation,
-    )
-    .await
+    peer::sync_application(&target, &manifest.name, peer_name, with_data, confirmation).await
 }
 
 fn resolve_package_path(package: &str) -> Result<PathBuf, String> {

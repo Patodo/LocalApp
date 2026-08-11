@@ -17,12 +17,16 @@ describe("LocalApp skill documentation consistency", () => {
     expect(dataSkill).toContain("不要把 `list({ limit: 1 })` / `list(limit: 1)` 当作常规计数写法");
   });
 
-  it("documents the SDK content upload route without recommending the removed legacy alias", () => {
+  it("documents content upload separately from the deployment compatibility transport", () => {
     const uploadSkill = readSkill("localapp-upload");
     expect(uploadSkill).toContain("useUpload()");
     expect(uploadSkill).toContain("/api/content/upload");
-    expect(uploadSkill).toContain("/api/content/{key}");
-    expect(uploadSkill).toContain("/api/upload` 端点（restrict-app-api-to-named-sql 变更前的 legacy 别名）已整体移除");
+    expect(uploadSkill).toContain("/serve/<owner>/<app>/api/content/<key>");
+    expect(uploadSkill).not.toContain("返回的 `url` 指向 `/api/content/{key}`");
+    expect(uploadSkill).toContain("应用代码不得调用 `/api/upload`");
+    expect(uploadSkill).toContain("部署兼容传输");
+    expect(uploadSkill).toContain("不是第二套安装实现");
+    expect(uploadSkill).not.toContain("已整体移除");
   });
 
   it("does not recommend removed schema CLI commands in app-building skills", () => {

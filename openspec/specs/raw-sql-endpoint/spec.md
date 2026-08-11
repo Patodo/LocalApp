@@ -12,7 +12,7 @@ Raw SQL execution SHALL be treated as a dev, owner-admin, or compatibility capab
 - **THEN** server MUST reject the request before executing SQL
 
 #### Scenario: developer needs diagnostics
-- **WHEN** dev-shell or local mini-server diagnostics call raw SQL in a development context
+- **WHEN** DevShell diagnostics inspect a development context
 - **THEN** raw SQL MAY execute subject to dev-only safeguards
 
 ### Requirement: SDK raw SQL is deprecated path

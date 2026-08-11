@@ -35,7 +35,7 @@ Server 会保存每次发布的 `manifest.json` 快照。应用所有者可以�
 
 - **Identity**：切换 `dev-user` / `alice` / `bob` / 未登录，检查 `defaultFrom: "currentUser.id"`、`recordAccess`、`useMe()` 和权限 UI。
 - **Time**：切换真实时间或固定 ISO 时间，检查 transition 的 `"now"`、进度、截止日期和时间相关视图。
-- **Data**：重置项目 `tmp/` 下的本地 Server 数据、创建 snapshot、restore snapshot；reset 会重新应用 migrations 和 `db/seeds/dev.sql`。
+- **Data**：重置项目 `tmp/` 下的本地 Server 数据、创建 snapshot、restore snapshot；运行时 reset 只重新应用当前已安装版本的 migrations。`db/seeds/dev.sql` 仅由离线 `localapp db reset` 应用。
 - **Diagnostics**：查看最近 API 请求，以及 `manifest.business` 中的 `recordAccess`、`defaultFields`、`transitions`、`enums`。
 
 身份、时间或恢复数据变化后 SDK 数据 hooks 会自动刷新订阅资源；通常不需要手动刷新页面。
@@ -65,7 +65,7 @@ clone 仓库后执行 `npm install`，`postinstall` 钩子会自动调用 `local
 | `localapp sync --quiet` | 静默模式（postinstall 钩子使用），版本一致时输出最简、错误不阻断 |
 | `localapp sync --interactive` | 交互模式，显示版本对比和变更清单、询问用户确认 |
 | `localapp sync --force` | 强制刷新 CLI 领地，恢复 `.localapp/runtime` 和内嵌 server-core 产物 |
-| `localapp sync --off` | 关闭 postinstall 自动 sync（写入 `dev-config.json` 的 `autoSync: false`） |
+| `localapp sync --off` | 关闭 postinstall 自动 sync（持久写入 `.localapp/project-config.json` 的 `autoSync: false`） |
 | `localapp sync --on` | 重新开启自动 sync |
 | `localapp eject` | 一次性脱钩：把 CLI 领地移到用户代码下，永久脱离自动更新（不可逆） |
 
@@ -77,8 +77,8 @@ CLI 升级后（运行 `localapp update`），用户运行 `localapp sync --inte
 - **优先使用 shadcn/ui 组件**: `import { Button } from "@/components/ui/button"`，全量组件已预置
 - **所有表单控件必须有 label 关联**: `<label htmlFor="id">` 对应 `<input id="id" ...>`，包括 `<input type="file">` 也要关联
 - **Agent 工具中禁止直接 fetch API**: 用 SDK hooks 或应用通过 `useRegisterTools` 注册的工具，不能 `fetch("/api/...")`
-- **先写 SQL migration 再写代码**: 在 `migrations/001_<name>.sql` 中声明表结构，本地用 `localapp db reset` 应用
-- **生成 TypeScript 类型**: `localapp db types -o src/types.ts`（从 `.localapp/dev.db` 反向生成 interface）
+- **先写 SQL migration 再写代码**: 在 `migrations/001_<name>.sql` 中声明表结构；`localapp dev` 会把 migration 随应用安装到统一 Server
+- **生成 TypeScript 类型**: `localapp db reset && localapp db types -o src/types.ts`（从项目 `tmp/localapp-schema/schema.db` 的离线 schema 工作库生成，不是第二个运行时后端）
 - **生成 named SQL 脚手架**: 写完 migration 后跑 `localapp backend scaffold`，自动生成 `backend/resources/<table>/{schema,queries,mutations}.json`，然后手动设置 `access` 字段和业务过滤
 - **默认用 bounded named SQL 承载读模型**: 普通 CRUD、列表、详情、筛选、分页、统计和聚合优先写在 `backend/resources/<table>/queries.json` / `mutations.json`。query 要声明 `result`，列表用 `mode: "page"` + `LIMIT/OFFSET`，详情用 `single`，统计用 `aggregate`。
 - **复杂业务优先沉淀为 named SQL / transaction mutation / 平台原语**: 审批、状态流转、跨表短写入和服务端校验不要只写在 React 里；先用 `backend/resources/<table>/mutations.json` 声明 named mutation，涉及多步原子写入时使用 `client.transaction()` / `useTransaction()` 原子执行多条 registered mutation，或反馈平台补齐原语。不要创建 `backend/actions/`、`actions.manifest.json` 或 `actions.bundle.mjs`，稳定平台已禁用 hosted action。
@@ -102,7 +102,7 @@ CLI 升级后（运行 `localapp update`），用户运行 `localapp sync --inte
 
 ## 媒体上传与预览
 
-模板已固定 `react-pdf@10.4.1`、`pdfjs-dist@6.1.200` 和 `yet-another-react-lightbox@3.32.1`。文件仍通过 `useUpload()` 上传到 Server 内容存储，数据库只保存 key、MIME、大小和业务元数据。
+模板已固定相互兼容的 `react-pdf@10.4.1`、`pdfjs-dist@5.4.296` 和 `yet-another-react-lightbox@3.32.1`。文件仍通过 `useUpload()` 上传到 Server 内容存储，数据库只保存 key、MIME、大小和业务元数据。
 
 - PDF 预览用 `react-pdf` 的 `Document` / `Page`，从已安装的 `pdfjs-dist` worker 配置 Vite-safe worker URL；展示 loading、错误、页码导航，并在替换/卸载时清理 object URL。
 - 图片预览必须有描述性的 `alt`、键盘可操作的上一张/下一张和下载入口；本地预览产生的 object URL 在文件变化或组件卸载时调用 `URL.revokeObjectURL()`。
@@ -220,7 +220,7 @@ import { useUpload } from "@localapp/sdk-react";
 
 const { upload, loading } = useUpload();
 const result = await upload(file);  // { key: string, url: string }
-// 支持: png/jpg/jpeg/gif/webp/svg, ≤10MB
+// 支持: png/jpg/jpeg/gif/webp/svg/pdf, ≤10MB
 // Ctrl+V 粘贴: ClipboardEvent.items → type.startsWith("image/") → getAsFile() → upload()
 ```
 
@@ -249,14 +249,16 @@ CREATE TABLE posts (
 
 常用命令:
 ```bash
-localapp db reset                 # 重建本地 .localapp/dev.db，并执行 db/seeds/dev.sql（如存在）
-localapp db types -o src/types.ts # 从 dev.db 生成 TypeScript interface
-localapp db validate              # 上传前拉取生产快照并验证 pending migrations
-localapp db status                # 查看已应用/待应用 migrations
+localapp db reset                 # 重建 tmp/localapp-schema/schema.db 离线工作库并检查 migration/seed
+localapp db types -o src/types.ts # 从离线 schema 工作库生成 TypeScript interface
+localapp db validate              # 应用包安装前拉取生产快照并验证 pending migrations
+localapp db status                # 查看离线 schema 工作库已应用/待应用 migrations
 localapp backend scaffold         # 从 migrations 生成标准 named SQL CRUD 契约
                                    # （$<table>.list/get/count + create/update/delete）
 localapp backend scaffold --force # 覆盖已存在的 backend/resources/<table>/ 声明
 ```
+
+上述离线工作库只用于 migration、seed 和代码生成，不承载 `localapp dev` 的应用数据。运行中应用的数据重置、快照和恢复使用 Dev Toolkit，它们由当前统一 Server 执行。
 
 `localapp backend scaffold` 是脚手架起点：对每张用户表生成标准 named SQL 模板（包含分页 list、single get、aggregate count，以及 create/update/delete mutation；`access` 字段需手动填）。生成后按业务需要修改 SQL（加 WHERE 过滤/状态守卫/权限校验）、`access` 字段和 `result` 预算。
 

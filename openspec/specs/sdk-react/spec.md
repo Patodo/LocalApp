@@ -12,20 +12,20 @@ TBD — `@localapp/sdk-react` React SDK 包，提供数据查询（useList、use
 
 ### Requirement: useList Hook
 
-`useList<T>(resource, options?)` SHALL 继续提供应用层数据的列表查询,行为不变。但在 dev 模式下,请求通过 vite-proxy 转发到本地 mini-server;在 prod 模式下,转发到生产 server。
+`useList<T>(resource, options?)` SHALL 继续提供应用层数据的列表查询。开发和正式模式均请求当前统一 Server；开发模式只多一层 Vite proxy。
 
 应用 SHALL NOT 用 `useList` 读取平台公共数据,平台数据用 `usePlatformData`。
 
-#### Scenario: useList 在 dev 模式下读 dev.db
+#### Scenario: useList 在 dev 模式下读取当前 Server 应用数据
 - **WHEN** dev 模式下应用 `useList<Task>("tasks")`
-- **THEN** vite-proxy 转发到 mini-server
-- **AND** mini-server 从 dev.db 读 tasks 表
+- **THEN** vite-proxy 转发到当前项目 Server 的应用 API
+- **AND** Server 从该应用隔离数据库读取 tasks 表
 - **AND** 返回 Task 数组
 
 #### Scenario: useList 不能读平台数据
 - **WHEN** 应用调用 `useList("users")` 试图读平台用户表
-- **THEN** dev 模式:mini-server 返回 404(dev.db 无 users 表)
-- **AND** prod 模式:server 返回 404(app.db 无应用层 users 表,平台 users 在专属路径)
+- **THEN** dev 模式:当前 Server 返回 404（应用数据库无 users 表）
+- **AND** 正式安装模式下同一个 Server 也返回 404（应用数据库不拥有平台 users，平台 users 在专属路径）
 - **AND** 提示开发者改用 `usePlatformData("users")`
 
 ### Requirement: useGet Hook
@@ -230,13 +230,13 @@ function usePlatformData<T>(
 
 #### Scenario: useCount 在 dev 下可用
 - **WHEN** dev 应用调用 `useCount("work_items")`
-- **THEN** Hook SHALL 通过 SDK 读取 mini-server 的 `/api/work_items/count`
+- **THEN** Hook SHALL 通过 SDK 读取当前 Server 的应用 count 契约
 - **AND** 返回正确 count、loading 和 error 状态
 
 #### Scenario: useUsers 在 dev 下可用
 - **WHEN** dev 应用调用 `useUsers()`
 - **THEN** Hook SHALL 读取标准 `{ success, data }` 响应
-- **AND** 不得因为 mini-server 将 `/api/users` 误解析为 CRUD 而失败
+- **AND** 不得将平台 `/api/users` 误解析为应用数据路由
 
 ### Requirement: dev context 变化触发订阅型 Hook 刷新
 
@@ -250,4 +250,3 @@ function usePlatformData<T>(
 #### Scenario: 固定时间刷新 useTime
 - **WHEN** Dev Toolkit 固定业务时间
 - **THEN** `useTime()` SHALL 刷新为固定后的日期
-

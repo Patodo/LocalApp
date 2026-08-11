@@ -25,7 +25,7 @@ TBD — `@localapp/sdk-agent` 独立 npm 包，提供 `useAgent` Hook 和 `Agent
 
 #### Scenario: getCurrentUser 行为
 - **WHEN** LLM 调用 `getCurrentUser` 工具
-- **THEN** SDK 发起 `GET /api/me` 请求(dev 模式走 mini-server,prod 模式走生产 server)
+- **THEN** SDK 发起 `GET /api/me` 请求（开发和正式模式均走当前统一 Server）
 - **AND** 返回 `{ id, name }`(或 null 表示未登录)
 - **AND** 不视为数据库操作(身份查询)
 
@@ -136,4 +136,3 @@ TBD — `@localapp/sdk-agent` 独立 npm 包，提供 `useAgent` Hook 和 `Agent
 - **WHEN** native 应用调用 `useRegisterTools({ tools, systemHint })`
 - **THEN** SDK SHALL 将工具注册到同页 shell registry
 - **AND** 平台 AI SHALL 能调用这些工具并收到结果
-

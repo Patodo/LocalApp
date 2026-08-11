@@ -18,10 +18,24 @@ semver = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
 dialoguer = "0.11"
+getrandom = "0.4"
 include_dir = "0.7"
+libc = "0.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 localapp-core = { path = "../localapp-core" }
 localapp-template = { path = "../localapp-template" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 httpmock = "0.7"

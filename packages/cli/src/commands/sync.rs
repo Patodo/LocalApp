@@ -1,3 +1,4 @@
+use crate::commands::project_config;
 use crate::scripts::script_invokes_localapp_dev;
 use crate::template::{
     extract_backend_seed_if_missing, extract_cli_zone, postprocess_package_json,
@@ -118,7 +119,7 @@ pub struct SyncCommand {
     #[arg(long)]
     interactive: bool,
 
-    /// 关闭自动同步（写入 dev-config.json autoSync: false）
+    /// 关闭自动同步（写入 project-config.json autoSync: false）
     #[arg(long)]
     off: bool,
 
@@ -164,16 +165,18 @@ pub fn sync_at_force(
 ) -> Result<(), String> {
     validate_project_dir(project_dir)?;
 
-    let dev_config = load_dev_config(project_dir)?;
-    if dev_config.ejected {
-        return Err("Project has been ejected. sync is disabled. To re-enable, remove 'ejected' flag and restore runtime manually.".to_string());
+    let project_config = project_config::load(project_dir)?;
+    if project_config.ejected {
+        return Err(
+            "Project has been ejected. sync is permanently disabled for this project.".to_string(),
+        );
     }
 
     let current_version = read_runtime_version(project_dir);
     let target_version = cli_version().to_string();
     let is_up_to_date = current_version.as_ref() == Some(&target_version);
 
-    if quiet && !force && dev_config.auto_sync == Some(false) {
+    if quiet && !force && project_config.auto_sync == Some(false) {
         println!(r#"{{"success": true, "skipped": "autoSync disabled"}}"#);
         return Ok(());
     }
@@ -195,25 +198,7 @@ pub fn sync_at_force(
         }
     }
 
-    let custom_dev_script = read_custom_dev_script(project_dir);
-
-    if !quiet {
-        eprintln!("  \u{2713} Removing CLI zones...");
-    }
-    remove_cli_zones(project_dir)?;
-
-    if !quiet {
-        eprintln!("  \u{2713} Extracting runtime...");
-        eprintln!("  \u{2713} Extracting skills...");
-    }
-    extract_cli_zone(project_dir)?;
-    extract_backend_seed_if_missing(project_dir)?;
-    write_runtime_version(project_dir)?;
-    // 与 init 流程保持一致：迁移 package.json 引用、注入 postinstall、清理 workspace:*
-    postprocess_package_json(project_dir)?;
-    restore_custom_dev_script(project_dir, custom_dev_script)?;
-    // 检查并迁移 src/main.tsx（移除旧版 DevShell 引用）
-    patch_legacy_main_tsx(project_dir, quiet)?;
+    refresh_cli_owned_files(project_dir, quiet)?;
 
     let result = if force {
         serde_json::json!({
@@ -243,6 +228,39 @@ pub fn sync_at_force(
     Ok(())
 }
 
+/// `localapp dev` 在启动前刷新 CLI 拥有的 runtime 与技能。
+///
+/// 发布版通常通过 CLI 版本号触发同步，但开发构建可能在版本号不变时更新内嵌模板，
+/// 因此 dev 必须按实际内嵌内容刷新。显式关闭 autoSync 或 eject 的项目仍保留其选择。
+pub fn refresh_for_dev(project_dir: &Path) -> Result<(), String> {
+    validate_project_dir(project_dir)?;
+    let project_config = project_config::load(project_dir)?;
+    if project_config.ejected || project_config.auto_sync == Some(false) {
+        return Ok(());
+    }
+    refresh_cli_owned_files(project_dir, true)
+}
+
+fn refresh_cli_owned_files(project_dir: &Path, quiet: bool) -> Result<(), String> {
+    let custom_dev_script = read_custom_dev_script(project_dir);
+
+    if !quiet {
+        eprintln!("  \u{2713} Removing CLI zones...");
+    }
+    remove_cli_zones(project_dir)?;
+
+    if !quiet {
+        eprintln!("  \u{2713} Extracting runtime...");
+        eprintln!("  \u{2713} Extracting skills...");
+    }
+    extract_cli_zone(project_dir)?;
+    extract_backend_seed_if_missing(project_dir)?;
+    write_runtime_version(project_dir)?;
+    postprocess_package_json(project_dir)?;
+    restore_custom_dev_script(project_dir, custom_dev_script)?;
+    patch_legacy_main_tsx(project_dir, quiet)
+}
+
 pub trait Prompt {
     fn confirm(&self) -> Result<bool, String>;
 }
@@ -269,23 +287,6 @@ fn validate_project_dir(project_dir: &Path) -> Result<(), String> {
         return Err("Not a localapp project. Run 'localapp init' first.".to_string());
     }
     Ok(())
-}
-
-#[derive(serde::Deserialize, Default)]
-struct DevConfig {
-    #[serde(default, rename = "autoSync")]
-    auto_sync: Option<bool>,
-    #[serde(default)]
-    ejected: bool,
-}
-
-fn load_dev_config(project_dir: &Path) -> Result<DevConfig, String> {
-    let path = project_dir.join(".localapp/dev-config.json");
-    let content = fs::read_to_string(&path).unwrap_or_default();
-    if content.is_empty() {
-        return Ok(DevConfig::default());
-    }
-    serde_json::from_str(&content).map_err(|e| format!("Invalid dev-config.json: {e}"))
 }
 
 fn read_runtime_version(project_dir: &Path) -> Option<String> {
@@ -328,23 +329,7 @@ fn remove_cli_zones(project_dir: &Path) -> Result<(), String> {
 
 pub fn set_auto_sync(project_dir: &Path, enabled: bool) -> Result<(), String> {
     validate_project_dir(project_dir)?;
-    let path = project_dir.join(".localapp/dev-config.json");
-    let content = fs::read_to_string(&path).unwrap_or_default();
-    let mut parsed: serde_json::Value = if content.is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(&content).map_err(|e| format!("Invalid dev-config.json: {e}"))?
-    };
-    let obj = parsed
-        .as_object_mut()
-        .ok_or_else(|| "dev-config.json must be an object".to_string())?;
-    if enabled {
-        obj.remove("autoSync");
-    } else {
-        obj.insert("autoSync".to_string(), serde_json::Value::Bool(false));
-    }
-    let serialized = serde_json::to_string_pretty(&parsed).unwrap();
-    fs::write(&path, serialized).map_err(|e| format!("Failed to write dev-config: {e}"))?;
+    project_config::set_auto_sync(project_dir, enabled)?;
     println!(r#"{{"success": true, "autoSync": {}}}"#, enabled);
     Ok(())
 }
@@ -423,6 +408,40 @@ mod tests {
     }
 
     #[test]
+    fn dev_refresh_replaces_cli_owned_runtime_even_when_version_marker_matches() {
+        let tmp = make_fake_project();
+        let project = project_path(&tmp);
+        fs::write(
+            project.join(".localapp/runtime/version.json"),
+            format!(r#"{{"cliVersion":"{}"}}"#, cli_version()),
+        )
+        .unwrap();
+        fs::write(
+            project.join(".localapp/runtime/vite-plugin.mjs"),
+            "// stale runtime from an earlier build",
+        )
+        .unwrap();
+        fs::write(
+            project.join(".localapp/runtime/removed-file.mjs"),
+            "// stale CLI-owned file",
+        )
+        .unwrap();
+
+        refresh_for_dev(&project).unwrap();
+
+        let expected = crate::template::BUILTIN_TEMPLATE
+            .get_file("runtime/vite-plugin.mjs")
+            .unwrap()
+            .contents();
+        assert_eq!(
+            fs::read(project.join(".localapp/runtime/vite-plugin.mjs")).unwrap(),
+            expected,
+        );
+        assert!(!project.join(".localapp/runtime/removed-file.mjs").exists());
+        assert!(project.join(".claude/skills/my-custom/SKILL.md").is_file());
+    }
+
+    #[test]
     fn sync_is_idempotent() {
         let tmp = make_fake_project();
         let project = project_path(&tmp);
@@ -495,10 +514,9 @@ mod tests {
 
         sync_at(&project, true, false, PromptYes).unwrap();
 
-        let package: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(project.join("package.json")).unwrap(),
-        )
-        .unwrap();
+        let package: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(project.join("package.json")).unwrap())
+                .unwrap();
         assert_eq!(package["scripts"]["dev"], "node scripts/dev.mjs");
         assert_eq!(package["scripts"]["dev:vite"], "vite --host 127.0.0.1");
     }
@@ -603,6 +621,11 @@ mod tests {
             !err.starts_with("{\"error\""),
             "error should be plain string, not JSON-encoded"
         );
+        let project_config =
+            fs::read_to_string(project.join(".localapp/project-config.json")).unwrap();
+        assert!(project_config.contains("\"ejected\": true"));
+        let dev_config = fs::read_to_string(project.join(".localapp/dev-config.json")).unwrap();
+        assert!(!dev_config.contains("ejected"));
     }
 
     #[test]
@@ -667,14 +690,33 @@ mod tests {
     }
 
     #[test]
-    fn sync_off_writes_auto_sync_false() {
+    fn sync_off_survives_canonical_dev_config_replacement() {
         let tmp = make_fake_project();
         let project = project_path(&tmp);
 
         set_auto_sync(&project, false).unwrap();
 
-        let config = fs::read_to_string(project.join(".localapp/dev-config.json")).unwrap();
+        let config = fs::read_to_string(project.join(".localapp/project-config.json")).unwrap();
         assert!(config.contains("\"autoSync\": false"));
+        let dev_config = project.join(".localapp/dev-config.json");
+        fs::write(
+            &dev_config,
+            r#"{"serverUrl":"http://127.0.0.1:43123","userId":"dev-user","pageName":"test-app","apiKey":"secret","appServerPort":5173}"#,
+        )
+        .unwrap();
+        fs::write(
+            project.join(".localapp/runtime/dev-shell.tsx"),
+            "// user kept runtime",
+        )
+        .unwrap();
+
+        refresh_for_dev(&project).unwrap();
+        assert_eq!(
+            fs::read_to_string(project.join(".localapp/runtime/dev-shell.tsx")).unwrap(),
+            "// user kept runtime",
+        );
+        let dev_config = fs::read_to_string(dev_config).unwrap();
+        assert!(!dev_config.contains("autoSync"));
 
         // 后续 sync --quiet 应该跳过
         let result = sync_at(&project, true, false, PromptYes);
@@ -688,9 +730,13 @@ mod tests {
 
         sync_at(&project, true, false, PromptYes).unwrap();
         set_auto_sync(&project, false).unwrap();
-        fs::write(project.join(".localapp/runtime/dev-shell.tsx"), "// patched by app").unwrap();
+        fs::write(
+            project.join(".localapp/runtime/dev-shell.tsx"),
+            "// patched by app",
+        )
+        .unwrap();
         let dev_db = b"local issue database";
-        fs::write(project.join(".localapp/dev.db"), dev_db).unwrap();
+        fs::write(project.join(".localapp/user-owned.db"), dev_db).unwrap();
         let attachment = project.join(".localapp/issues/attachments/attachment-1");
         fs::create_dir_all(attachment.parent().unwrap()).unwrap();
         fs::write(&attachment, b"local issue attachment").unwrap();
@@ -703,13 +749,15 @@ mod tests {
             "sync --force should restore CLI-managed runtime files"
         );
         assert!(
-            project.join(".localapp/runtime/server-core/dist/index.js").exists(),
+            project
+                .join(".localapp/runtime/server-core/dist/index.js")
+                .exists(),
             "sync --force should restore the embedded server-core artifact"
         );
         assert_eq!(
-            fs::read(project.join(".localapp/dev.db")).unwrap(),
+            fs::read(project.join(".localapp/user-owned.db")).unwrap(),
             dev_db,
-            "sync --force must preserve local Issue data in dev.db"
+            "sync --force must preserve user-owned files outside CLI runtime zones"
         );
         assert_eq!(
             fs::read(attachment).unwrap(),
@@ -728,7 +776,7 @@ mod tests {
         // 再 --on
         set_auto_sync(&project, true).unwrap();
 
-        let config = fs::read_to_string(project.join(".localapp/dev-config.json")).unwrap();
+        let config = fs::read_to_string(project.join(".localapp/project-config.json")).unwrap();
         assert!(!config.contains("autoSync"), "autoSync should be removed");
     }
 

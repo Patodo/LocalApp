@@ -45,7 +45,7 @@ export async function buildServerPackage(options = {}) {
   };
   await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-cli.ts")], outfile: path.join(binDirectory, "server-cli.cjs") });
   await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-worker.ts")], outfile: path.join(binDirectory, "worker.cjs") });
-  const launcher = `import path from "node:path";\nimport { fileURLToPath } from "node:url";\n\nconst packageDirectory = path.dirname(fileURLToPath(import.meta.url));\nprocess.env.LOCALAPP_WORKER_PATH ??= path.join(packageDirectory, "worker.cjs");\nprocess.env.LOCALAPP_WEB_ROOT ??= path.resolve(packageDirectory, "../web");\nawait import("./server-cli.cjs");\n`;
+  const launcher = `#!/usr/bin/env node\nimport path from "node:path";\nimport { fileURLToPath } from "node:url";\n\nconst packageDirectory = path.dirname(fileURLToPath(import.meta.url));\nprocess.env.LOCALAPP_WORKER_PATH ??= path.join(packageDirectory, "worker.cjs");\nprocess.env.LOCALAPP_WEB_ROOT ??= path.resolve(packageDirectory, "../web");\nawait import("./server-cli.cjs");\n`;
   await fs.writeFile(path.join(binDirectory, "localapp-server.mjs"), launcher, { mode: 0o755 });
   await fs.chmod(path.join(binDirectory, "server-cli.cjs"), 0o755);
   await fs.chmod(path.join(binDirectory, "worker.cjs"), 0o755);

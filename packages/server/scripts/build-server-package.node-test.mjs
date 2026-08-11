@@ -18,6 +18,7 @@ test("packed Node Server initializes and serves Web without repository dependenc
   const artifact = await buildServerPackage({ outputDirectory });
   const repeated = await buildServerPackage({ outputDirectory: repeatedDirectory });
   assert.equal(artifact.bundleDigest, repeated.bundleDigest);
+  assert.equal((await fs.readFile(artifact.bin, "utf8")).startsWith("#!/usr/bin/env node\n"), true);
 
   const child = spawn(process.execPath, [artifact.bin, "start", "--data-dir", dataDirectory, "--port", "0"], {
     cwd: outputDirectory,

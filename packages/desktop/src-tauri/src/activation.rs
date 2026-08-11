@@ -71,11 +71,14 @@ impl ActivationTicket {
             return Err("invalid activation ticket".into());
         }
 
-        let source_origin = normalize_source_origin(&source_origin.ok_or("invalid activation ticket")?)?;
+        let source_origin =
+            normalize_source_origin(&source_origin.ok_or("invalid activation ticket")?)?;
         let nonce = nonce.ok_or("invalid activation ticket")?;
         if nonce.len() < MIN_NONCE_LENGTH
             || nonce.len() > MAX_NONCE_LENGTH
-            || !nonce.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
         {
             return Err("invalid activation ticket".into());
         }
@@ -114,18 +117,34 @@ pub fn normalize_source_origin(value: &str) -> Result<String, String> {
     Ok(url.origin().ascii_serialization())
 }
 
-pub fn validate_confirmation_url(value: &str, ready_origin: &str) -> Result<String, String> {
+pub fn validate_confirmation_url(
+    value: &str,
+    ready_origin: &str,
+    expected_request_id: &str,
+) -> Result<String, String> {
     let url = Url::parse(value).map_err(|_| "invalid confirmation URL")?;
     let expected_origin = normalize_source_origin(ready_origin)?;
+    let expected_request_id = Uuid::parse_str(expected_request_id)
+        .map_err(|_| "invalid confirmation URL")?
+        .to_string();
     if url.origin().ascii_serialization() != expected_origin
         || url.username() != ""
         || url.password().is_some()
         || url.fragment().is_some()
-        || url.path_segments().is_none_or(|segments| {
-            let segments = segments.collect::<Vec<_>>();
-            segments.len() < 2 || segments[0] != "my" || segments[1] != "device-actions"
-        })
+        || url.path() != "/my/device-actions/"
     {
+        return Err("invalid confirmation URL".into());
+    }
+    let mut request_id = None;
+    let mut count = 0;
+    for (key, value) in url.query_pairs() {
+        count += 1;
+        if key != "requestId" || request_id.is_some() {
+            return Err("invalid confirmation URL".into());
+        }
+        request_id = Some(value.into_owned());
+    }
+    if count != 1 || request_id.as_deref() != Some(expected_request_id.as_str()) {
         return Err("invalid confirmation URL".into());
     }
     Ok(url.to_string())

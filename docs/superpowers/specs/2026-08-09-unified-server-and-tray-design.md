@@ -1,8 +1,8 @@
 # Unified Server and Optional Tray Design
 
-**Status:** Approved design, revised for generic Device Actions
+**Status:** Approved design, revised for generic Device Actions and canonical local development
 
-**Date:** 2026-08-09; revised 2026-08-10
+**Date:** 2026-08-09; revised 2026-08-11
 
 ## Summary
 
@@ -37,7 +37,7 @@ The Server also provides generic Device Actions. Any hosted application may ask 
 - User, permission, session, API-key, or platform-database synchronization.
 - Remote Server management, API proxying, or implicit failover.
 - Migration from the legacy Desktop or Local Runtime.
-- Compatibility aliases for legacy local-install or upload workflows.
+- Compatibility CLI commands or application-facing aliases for legacy local-install/upload workflows. The Server may retain an authenticated deployment compatibility transport only when it normalizes the request into `.localapp` and invokes the sole formal installer.
 - A Tauri-hosted management window.
 - Direct editing of arbitrary client filesystem directories from Studio.
 - Application-specific Device Action semantics such as SKILL catalog formats, resume records, package installation rules, or target-tool adapters.
@@ -84,6 +84,25 @@ localapp-server start
 ```
 
 The same package is usable from a project dependency, container image, system service, or bundled tray distribution. Headless and public deployments retain the same application API but leave the loopback Device Action ingress disabled unless it is explicitly supplied a local control credential.
+
+### Application Development Mode
+
+`localapp dev` is an orchestration mode for the same Node Server package, not a second application service. It:
+
+- resolves one canonical Server launcher from an explicit override, the project's `@localapp/server`, the CLI distribution, or `PATH`, and requires Node.js 24 or newer;
+- starts the packaged `localapp-server` executable on `127.0.0.1` with a random port and a data directory below `<project>/tmp/localapp-dev/server`;
+- initializes a real local Server administrator and CSPRNG API Key/password on first run, stores those credentials in private project-local files (`0600` on POSIX; current-user-only protected DACL on Windows), and never prints their values;
+- builds a uniquely versioned development `.localapp` package and installs it through the ordinary `/api/me/apps/install` endpoint;
+- writes only `serverUrl`, `userId`, `pageName`, `apiKey`, and the Vite port to `.localapp/dev-config.json`;
+- starts Vite on loopback as a frontend compiler and credential-injecting reverse proxy; every application, identity, platform, upload, Issue, Named SQL, and content request reaches that same Server;
+- binds unsafe proxy requests to the same browser with Origin and HttpOnly/SameSite CSRF checks, without exposing the API Key to browser code;
+- waits at most 15 seconds for structured Server readiness, uses only the actual listener-derived strict loopback `listenUrl` for credentials and proxying (never a configured public display URL), and supervises both complete process trees, so either child exit or an interrupt stops and waits for all descendants. Unix uses process groups; Windows atomically creates each root suspended, assigns it to a kill-on-close Job Object before user code can run, and only then resumes it, so even immediate descendants cannot escape supervision.
+
+Durable project policy is separate from that replaceable runtime context. `autoSync` and the monotonic `ejected` marker live in `.localapp/project-config.json`. On first read, the CLI migrates legacy copies from `dev-config.json` by atomically publishing the durable file before atomically cleaning the temporary file, so an interrupted migration is idempotent and cannot re-enable synchronization or undo eject.
+
+The same Server may expose `/api/dev/*` helpers only when started with the explicit development-tools flag. These authenticated, loopback-only helpers maintain simulated identity/time context, application-data reset and snapshots, current-user diagnostics, and business metadata. They validate the application name and resolved data path before access and are not registered in ordinary local, LAN, container, or public startup. Development context is scoped to one Server data root, user, and application and is cleared when that Server closes.
+
+CLI migration/type commands may use `<project>/tmp/localapp-schema/schema.db` as an offline schema workbench. That file is compiler input/output only: it does not serve HTTP, hold runtime application state, or constitute another backend. Runtime data reset, snapshot, and restore always execute inside the current Server. Each installed version retains a private, checksum-recorded migration snapshot (including an explicit empty marker); historical layouts are backfilled only from their retained digest-verified package. Runtime reset verifies and reapplies the active snapshot and never applies another version, the source tree, or the source-only development seed.
 
 ### Optional Native Bridge and Tray Distribution
 
@@ -203,7 +222,7 @@ Scheme activation always targets the computer on which the click occurred. There
 
 A trust grant is keyed by normalized source origin, application owner and name, immutable publisher user ID, and a canonical permission-set digest. Display names are informational and never identify trust. Reuse searches grants under the same origin/application/publisher tuple and accepts a saved permission set only when it is a superset of the new request; the digest still gives every approved set an immutable identity.
 
-The first action from a publisher requires local confirmation. A later action runs without another confirmation only when the source, application, publisher, and requested permissions are identical to or narrower than the saved grant. A publisher change, source-origin change, or permission expansion returns the action to `awaiting-trust`. Revocation affects later actions and does not silently terminate a currently running child process.
+The first action from a publisher requires local confirmation. A later action runs without another confirmation only when the source, application, publisher, and requested permissions are identical to or narrower than the saved grant. A publisher change, source-origin change, or permission expansion returns the action to `awaiting_trust`. Revocation affects later actions and does not silently terminate a currently running child process.
 
 The permission declaration covers filesystem read roots, filesystem write roots, network access, child-process access, and the action's working directory. Filesystem grants resolve existing ancestors, reject symlink traversal outside an approved root, and are revalidated immediately before execution. The executor adds only its immutable runner and dependency-cache paths. It launches the bundled Node runtime with its permission system enabled, a minimal environment, no Server credentials, bounded input/result/log sizes, a bounded timeout, captured output, and process-tree cancellation. Until container isolation is introduced, granting child-process access is explicitly presented as arbitrary code execution under the current operating-system user.
 
@@ -211,7 +230,7 @@ The permission declaration covers filesystem read roots, filesystem write roots,
 
 The source endpoints create actions, claim a specific action using its nonce, accept authenticated status updates, stream public status, and cancel active work. The local endpoints accept bridge activations, list pending confirmations, grant or revoke trust, expose local logs to administrators, and cancel local execution.
 
-Activation, claim, and terminal updates are idempotent. A nonce expires when unclaimed, is bound to one local installation after claim, and cannot claim another action. Claim requests use a fixed path, no redirects, no ambient proxy/cookie/authentication state, bounded connect/response time and bytes, DNS/address revalidation, and an explicit source-origin policy: HTTPS by default, loopback HTTP for local development, and private-network HTTP only after local administrator opt-in. The source never returns a script through status or browser-facing responses. The local Server durably records a claimed action before execution; after restart it resumes preparation where safe and otherwise reports `interrupted`. The externally visible states remain `pending`, `claimed`, `awaiting-trust`, `preparing`, `running`, `succeeded`, `failed`, `cancelled`, `expired`, and `interrupted`.
+Activation, claim, and terminal updates are idempotent. A nonce expires when unclaimed, is bound to one local installation after claim, and cannot claim another action. Claim requests use a fixed path, no redirects, no ambient proxy/cookie/authentication state, bounded connect/response time and bytes, DNS/address revalidation, and an explicit source-origin policy: HTTPS by default, loopback HTTP for local development, and private-network HTTP only after local administrator opt-in. The source never returns a script through status or browser-facing responses. The local Server durably records a claimed action before execution; after restart it resumes preparation where safe and otherwise reports `interrupted`. The externally visible states remain `pending`, `claimed`, `awaiting_trust`, `preparing`, `running`, `succeeded`, `failed`, `cancelled`, `expired`, and `interrupted`.
 
 ## Studio Workspaces and Task Execution
 
@@ -343,7 +362,9 @@ localapp app sync --peer <peer-name>
 localapp app sync --peer <peer-name> --with-data --confirm-app <app-name>
 ```
 
-Legacy `localapp local install`, `localapp upload`, MiniServer, and Local Runtime commands are removed. They do not alias the new commands.
+`localapp dev` remains as a convenience supervisor for the canonical Server plus Vite. It does not start a template-owned HTTP service or create a second application database.
+
+Legacy `localapp local install`, `localapp upload`, MiniServer, and Local Runtime commands are removed. They do not alias the new commands. A retained authenticated `POST /api/upload` is only a Server-side deployment compatibility transport: it normalizes multipart input into `.localapp` and invokes the same installer as `/api/me/apps/install`; applications use `/api/content/upload` for files.
 
 ## Legacy Desktop Policy
 
@@ -419,6 +440,7 @@ The repository may pass through temporary internal adapters while a track is und
 - The Server Web UI contains every management feature formerly exposed by Desktop.
 - Studio operates only on Server-managed workspaces.
 - Application URLs use the same path model locally and remotely.
+- `localapp dev` installs the application into the canonical Server package, keeps all runtime data below the project `tmp/` directory, and leaves development-only routes absent from ordinary Server startup.
 - Two independently initialized Servers can synchronize an application through a target-user API Key.
 - Application-only synchronization preserves target business data.
 - Application-plus-data synchronization replaces target business data and files with verified rollback.

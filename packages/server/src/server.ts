@@ -61,6 +61,7 @@ import { AppSyncTarget } from "./lib/app-sync-target.js";
 import { AppSyncSource } from "./lib/app-sync-source.js";
 import { reconcileAppInstallTransactions } from "./lib/app-installer.js";
 import { syncSourceRoutes, syncTargetRoutes } from "./routes/sync.js";
+import { devRoutes, installDevRequestContext } from "./routes/dev.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -68,10 +69,12 @@ export interface BuildServerOptions {
   setupTokens?: SetupTokenStore;
   restartController?: RestartController;
   configStore?: ServerConfigStore;
+  enableDevTools?: boolean;
 }
 
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
-  const configStore = options.configStore ?? createServerConfigStore({ env: options.env ?? process.env });
+  const env = options.env ?? process.env;
+  const configStore = options.configStore ?? createServerConfigStore({ env });
   const config = await configStore.read();
   const app = Fastify({ ignoreTrailingSlash: true });
   app.decorate("config", config);
@@ -80,13 +83,20 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     setupTokens: options.setupTokens ?? new SetupTokenStore(),
     configStore,
     restartController: options.restartController ?? { requestRestart: (exitCode) => process.exit(exitCode) },
+    enableDevTools: options.enableDevTools ?? env.LOCALAPP_DEV_TOOLS === "1",
   });
   return app;
 }
 
 async function registerServerPluginsAndRoutes(
   app: FastifyInstance,
-  options: { webRoot?: string; setupTokens: SetupTokenStore; configStore: ServerConfigStore; restartController: RestartController },
+  options: {
+    webRoot?: string;
+    setupTokens: SetupTokenStore;
+    configStore: ServerConfigStore;
+    restartController: RestartController;
+    enableDevTools: boolean;
+  },
 ): Promise<void> {
   const { default: websocket } = await import("@fastify/websocket");
   await app.register(websocket);
@@ -102,6 +112,7 @@ async function registerServerPluginsAndRoutes(
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: MAX_APP_PACKAGE_BYTES } });
   await app.register(sessionPlugin);
+  if (options.enableDevTools) await installDevRequestContext(app);
   const workspaceStore = new WorkspaceStore({
     workspaceDir: app.config.workspaceDir,
     archiveLimits: {
@@ -159,7 +170,7 @@ async function registerServerPluginsAndRoutes(
   app.register(desktopActionsRoutes);
   app.register(deviceActionsRoutes);
   app.register(deviceControlRoutes);
-  app.register(myServeRoutes);
+  app.register(myServeRoutes, { webRoot });
   app.register(async (peerScope) => peersRoutes(peerScope, peerStore));
   app.register(serveRoutes, { webRoot });
   app.register(authenticatedCliRoutes);
@@ -177,6 +188,7 @@ async function registerServerPluginsAndRoutes(
     authScope.register(async (workspaceScope) => workspacesRoutes(workspaceScope, workspaceStore));
     authScope.register(async (taskScope) => tasksRoutes(taskScope, { taskStore, taskRunner, agentRunner }));
     authScope.register(async (syncScope) => syncSourceRoutes(syncScope, syncSource));
+    if (options.enableDevTools) authScope.register(devRoutes);
   });
   app.register(adminRoutes);
 
@@ -190,7 +202,7 @@ async function registerServerPluginsAndRoutes(
         durationMs: reply.elapsedTime ? Math.round(reply.elapsedTime) : 0,
         userId: req.userId || null,
         visitorId: req.visitorId || null,
-      });
+      }, app.config.dataDir);
     }
   });
 

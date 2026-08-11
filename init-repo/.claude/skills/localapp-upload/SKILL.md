@@ -4,9 +4,9 @@
 
 平台提供 `useUpload` Hook，让用户可以在前端应用中上传图片或 PDF。内容存储在平台对象存储中，通过返回的 URL 访问。
 
-应用代码应通过 `useUpload()` 上传文件。SDK 使用内容端点 `/api/content/upload`，返回的 `url` 指向 `/api/content/{key}`。
+应用代码应通过 `useUpload()` 上传文件。SDK 从当前应用 resource base 推导上传端点：开发页面使用相对 `/api/content/upload`，正式应用会请求 `/serve/<owner>/<app>/api/content/upload`。Server 返回的 `url` 始终是完整应用作用域 `/serve/<owner>/<app>/api/content/<key>`；直接使用该 URL，不要手工拼接全局 `/api/content/{key}`。
 
-> 旧版 `/api/upload` 端点（restrict-app-api-to-named-sql 变更前的 legacy 别名）已整体移除。所有上传统一走 `/api/content/upload`。
+> 应用内容上传的旧 `/api/upload` 别名已移除；应用代码不得调用 `/api/upload`，所有图片、PDF 等内容统一走 `/api/content/upload`。Server 仍可能保留同路径的、经过认证的部署兼容传输，用于把旧 multipart 发布请求规范化为 `.localapp` 后交给正式安装器；它不是应用内容 API，也不是第二套安装实现。
 
 ## 限制
 

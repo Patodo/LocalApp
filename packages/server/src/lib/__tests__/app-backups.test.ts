@@ -148,16 +148,18 @@ describe("application database backups", () => {
     await first;
   });
 
-  it("rebuilds an empty database from current migrations and keeps a safety backup", async () => {
-    const migrationsDir = path.join(pageDir, "migrations");
-    fs.mkdirSync(migrationsDir);
+  it("rebuilds an installed app from its active version migrations and keeps a safety backup", async () => {
+    const migrationsDir = path.join(pageDir, "versions/v7/.localapp/migrations");
+    fs.mkdirSync(migrationsDir, { recursive: true });
     fs.writeFileSync(
       path.join(migrationsDir, "001_init.sql"),
       "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
     );
     await putObject("dataowner/app/0123456789abcdef0123.png", Buffer.from("attachment"), "image/png");
 
-    await resetAppDatabase(pageDir);
+    await resetAppDatabase(pageDir, {
+      application: { owner: "dataowner", name: "app", version: 7 },
+    });
 
     const SQL = await initSqlJs();
     const db = new SQL.Database(fs.readFileSync(dbPath));

@@ -17,6 +17,7 @@ export interface CreateTestServerOptions {
   env?: Record<string, string | undefined>;
   websocket?: boolean;
   cleanSetup?: boolean;
+  webRoot?: string;
 }
 
 export async function createTestServer(
@@ -41,7 +42,7 @@ export async function createTestServer(
   };
 
   const setupTokens = new SetupTokenStore();
-  const app = await buildServer({ env, setupTokens });
+  const app = await buildServer({ env, setupTokens, webRoot: options?.webRoot });
 
   if (!options?.cleanSetup) {
     const issued = setupTokens.issue();

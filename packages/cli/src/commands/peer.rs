@@ -13,9 +13,7 @@ pub async fn sync_application(
     confirmation: Option<&str>,
 ) -> Result<(), String> {
     if with_data && confirmation != Some(app_name) {
-        return Err(format!(
-            "--with-data requires --confirm-app {app_name}"
-        ));
+        return Err(format!("--with-data requires --confirm-app {app_name}"));
     }
 
     let client = Client::new(&target.as_config());
@@ -35,16 +33,17 @@ pub async fn sync_application(
         .post_json(&format!("/api/me/apps/{app_name}/sync"), body)
         .await?;
     if status != 202 || response["success"].as_bool() != Some(true) {
-        return Err(response_error(&response, "Could not start application synchronization"));
+        return Err(response_error(
+            &response,
+            "Could not start application synchronization",
+        ));
     }
     let job_id = response["data"]["id"]
         .as_str()
         .ok_or_else(|| "Server returned an invalid synchronization job".to_string())?;
 
     loop {
-        let (status, job_response) = client
-            .get(&format!("/api/sync-jobs/{job_id}"))
-            .await?;
+        let (status, job_response) = client.get(&format!("/api/sync-jobs/{job_id}")).await?;
         if status != 200 || job_response["success"].as_bool() != Some(true) {
             return Err(response_error(
                 &job_response,

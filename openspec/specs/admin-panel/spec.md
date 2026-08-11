@@ -49,16 +49,16 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 - **AND** 页面不得显示固定默认密码，不得将临时密码写入 URL 或浏览器持久存储
 
 #### Scenario: 用户管理页支持切换用户角色
-- **WHEN** admin 在 `/my/users` 页面查看某行（`id != 'localadmin'`）
+- **WHEN** admin 在 `/my/users` 页面查看另一个用户
 - **THEN** 该行操作区显示「切换角色」按钮，按钮文案根据用户当前 role 动态变化：`role='user'` 时显示「提升为管理员」，`role='admin'` 时显示「降级为用户」
 - **AND** 点击按钮进入二段式确认（与「重置密码」「删除」一致），显示 `[确认] [取消]`，确认时调用 `PATCH /api/admin/users/:id/role` 请求体 `{ role }`
 - **AND** 操作成功后用户列表刷新，toast 提示「已将 {name} 切换为 {role中文}」
-- **AND** 服务端返回 400（自我降级、最后 admin、保护账户）或 404 时，前端展示对应错误 toast，列表不刷新
+- **AND** 服务端返回 400（自我降级或最后 admin）或 404 时，前端展示对应错误 toast，列表不刷新
 
-#### Scenario: 用户管理页 localadmin 行受保护
-- **WHEN** admin 在 `/my/users` 页面查看 `id='localadmin'` 的行
-- **THEN** 该行的「切换角色」「删除」按钮均不渲染
-- **AND** 角色列右侧追加锁标识图标（含 `title="系统保护账户，不可降级或删除"`），视觉上明确该用户受特殊保护
+#### Scenario: 当前管理员自己的行受保护
+- **WHEN** admin 在 `/my/users` 页面查看自己的用户行
+- **THEN** 该行的「降级」「删除」按钮均不渲染
+- **AND** 页面 SHALL 说明必须由另一个管理员执行角色变更
 
 #### Scenario: 应用管理页
 - **WHEN** admin 访问 `/my/pages`
