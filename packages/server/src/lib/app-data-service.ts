@@ -107,6 +107,7 @@ export function inferAppDataIdentity(pageDir: string): AppDataIdentity {
 async function createArchiveAt(input: {
   pageDir: string;
   application: AppDataIdentity;
+  sourceApplication?: Pick<AppDataIdentity, "owner" | "name">;
   outputPath: string;
   limits: ArchiveLimits;
   storage: AppDataStorage;
@@ -114,11 +115,13 @@ async function createArchiveAt(input: {
   closeConnectionsForPage(input.pageDir);
   const databasePath = path.join(input.pageDir, "app.db");
   if (!fs.existsSync(databasePath)) throw new AppDataError("APP_DATABASE_NOT_FOUND", "Application database does not exist");
-  const objects = await input.storage.listAppObjects(input.application.owner, input.application.name);
+  const sourceApplication = input.sourceApplication ?? input.application;
+  const objects = await input.storage.listAppObjects(sourceApplication.owner, sourceApplication.name);
   return createDataArchive({
     outputPath: input.outputPath,
     databasePath,
     application: input.application,
+    sourceApplication,
     objects,
     openObject: input.storage.openObject,
     limits: input.limits,
@@ -259,6 +262,7 @@ async function prepareArchive(input: {
 export async function createAppDataExport(input: {
   pageDir: string;
   application: AppDataIdentity;
+  archiveApplication?: AppDataIdentity;
   limits?: ArchiveLimits;
   storage?: AppDataStorage;
 }): Promise<{ archivePath: string; cleanup: () => void }> {
@@ -268,7 +272,14 @@ export async function createAppDataExport(input: {
     fs.mkdirSync(operationDir(input.pageDir), { recursive: true });
     const archivePath = path.join(operationDir(input.pageDir), `export-${crypto.randomUUID()}.zip`);
     try {
-      await createArchiveAt({ ...input, limits, storage, outputPath: archivePath });
+      await createArchiveAt({
+        pageDir: input.pageDir,
+        application: input.archiveApplication ?? input.application,
+        sourceApplication: input.application,
+        limits,
+        storage,
+        outputPath: archivePath,
+      });
       return { archivePath, cleanup: () => fs.rmSync(archivePath, { force: true }) };
     } catch (caught) {
       fs.rmSync(archivePath, { force: true });

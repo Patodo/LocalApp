@@ -499,6 +499,9 @@ export async function initMetaDb(
       completed_at TEXT
     )
   `);
+  const syncJobColumns = db.exec("PRAGMA table_info(sync_jobs)")[0]?.values.map((row) => String(row[1])) ?? [];
+  if (!syncJobColumns.includes("data_digest")) db.run("ALTER TABLE sync_jobs ADD COLUMN data_digest TEXT");
+  if (!syncJobColumns.includes("data_size")) db.run("ALTER TABLE sync_jobs ADD COLUMN data_size INTEGER");
   db.run(`CREATE INDEX IF NOT EXISTS idx_sync_jobs_owner ON sync_jobs(owner_id, created_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status)`);
 

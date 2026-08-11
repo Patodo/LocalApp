@@ -49,6 +49,14 @@ function appObjectKeyAllowed(key: string, owner: string, appName: string): boole
   return key.startsWith(`${owner}/${appName}/`) || key.startsWith(`issues/${owner}/${appName}/`);
 }
 
+function rebaseAppObjectKey(key: string, source: { owner: string; name: string }, target: { owner: string; name: string }): string {
+  const appPrefix = `${source.owner}/${source.name}/`;
+  const issuePrefix = `issues/${source.owner}/${source.name}/`;
+  if (key.startsWith(appPrefix)) return `${target.owner}/${target.name}/${key.slice(appPrefix.length)}`;
+  if (key.startsWith(issuePrefix)) return `issues/${target.owner}/${target.name}/${key.slice(issuePrefix.length)}`;
+  throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Object key is outside the application namespace: ${key}`);
+}
+
 function waitForArchiveEntry(archive: ArchiveWriter, name: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const onEntry = (entry: { name: string }) => {
@@ -79,6 +87,7 @@ export async function createDataArchive(input: {
   outputPath: string;
   databasePath: string;
   application: { owner: string; name: string; version: number };
+  sourceApplication?: { owner: string; name: string };
   objects: StoredObjectInfo[];
   openObject: (key: string) => Promise<{ body: Readable; contentType?: string } | null>;
   limits: ArchiveLimits;
@@ -103,7 +112,7 @@ export async function createDataArchive(input: {
   archive.pipe(output);
 
   try {
-    const databaseEntry = {
+  const databaseEntry = {
       path: "database/app.db" as const,
       size: databaseSize,
       sha256: await hashFile(input.databasePath),
@@ -112,10 +121,15 @@ export async function createDataArchive(input: {
     await appendArchiveEntry(archive, fs.createReadStream(input.databasePath), databaseEntry.path);
 
     const files: AppDataArchiveManifest["files"] = [];
+    const sourceApplication = input.sourceApplication ?? input.application;
+    const rebasedKeys = new Set<string>();
     for (const [index, object] of [...input.objects].sort((left, right) => left.key.localeCompare(right.key)).entries()) {
-      if (!appObjectKeyAllowed(object.key, input.application.owner, input.application.name)) {
+      if (!appObjectKeyAllowed(object.key, sourceApplication.owner, sourceApplication.name)) {
         throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Object key is outside the application namespace: ${object.key}`);
       }
+      const objectKey = rebaseAppObjectKey(object.key, sourceApplication, input.application);
+      if (rebasedKeys.has(objectKey)) throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Multiple source objects map to the same target key: ${objectKey}`);
+      rebasedKeys.add(objectKey);
       expandedBytes += object.size;
       if (expandedBytes > input.limits.maxExpandedBytes) {
         throw new AppDataError("APP_ARCHIVE_LIMIT_EXCEEDED", "Application data exceeds expanded archive limit");
@@ -139,7 +153,7 @@ export async function createDataArchive(input: {
       }
       files.push({
         path: entryPath,
-        objectKey: object.key,
+        objectKey,
         ...(stored.contentType || object.contentType ? { contentType: stored.contentType ?? object.contentType } : {}),
         size: actualSize,
         sha256: hash.digest("hex"),

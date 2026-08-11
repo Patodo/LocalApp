@@ -14,10 +14,12 @@ export interface SyncJobRecord {
   appName: string;
   peerId: string;
   syncId: string;
-  withData: false;
+  withData: boolean;
   appVersion: string | null;
   packageDigest: string | null;
   packageSize: number | null;
+  dataDigest: string | null;
+  dataSize: number | null;
   status: SyncJobStatus;
   history: SyncJobHistoryEntry[];
   error: string | null;
@@ -29,14 +31,14 @@ export interface SyncJobRecord {
 const TERMINAL = new Set<SyncJobStatus>(["completed", "rolled-back", "failed", "recovery-required"]);
 
 export class SyncJobStore {
-  create(input: { ownerId: string; appName: string; peerId: string; syncId: string; withData: false }): SyncJobRecord {
+  create(input: { ownerId: string; appName: string; peerId: string; syncId: string; withData: boolean }): SyncJobRecord {
     const now = new Date().toISOString();
     const id = randomUUID();
     const history: SyncJobHistoryEntry[] = [{ status: "queued", at: now }];
     getDb().run(
-      `INSERT INTO sync_jobs (id, owner_id, app_name, peer_id, sync_id, with_data, app_version, package_digest, package_size, status, history_json, error, created_at, updated_at, completed_at)
-       VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, NULL, 'queued', ?, NULL, ?, ?, NULL)`,
-      [id, input.ownerId, input.appName, input.peerId, input.syncId, JSON.stringify(history), now, now],
+      `INSERT INTO sync_jobs (id, owner_id, app_name, peer_id, sync_id, with_data, app_version, package_digest, package_size, data_digest, data_size, status, history_json, error, created_at, updated_at, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 'queued', ?, NULL, ?, ?, NULL)`,
+      [id, input.ownerId, input.appName, input.peerId, input.syncId, input.withData ? 1 : 0, JSON.stringify(history), now, now],
     );
     flushMetaDb();
     return this.get(id)!;
@@ -69,6 +71,16 @@ export class SyncJobStore {
     getDb().run(
       "UPDATE sync_jobs SET app_version = ?, package_digest = ?, package_size = ?, updated_at = ? WHERE id = ?",
       [input.appVersion, input.packageDigest, input.packageSize, now, id],
+    );
+    flushMetaDb();
+    return required(this.get(id));
+  }
+
+  setData(id: string, input: { dataDigest: string; dataSize: number }): SyncJobRecord {
+    const now = new Date().toISOString();
+    getDb().run(
+      "UPDATE sync_jobs SET data_digest = ?, data_size = ?, updated_at = ? WHERE id = ?",
+      [input.dataDigest, input.dataSize, now, id],
     );
     flushMetaDb();
     return required(this.get(id));
@@ -116,10 +128,12 @@ function fromRow(row: Record<string, unknown>): SyncJobRecord {
   try { history = JSON.parse(String(row.history_json)) as SyncJobHistoryEntry[]; } catch { /* retained corrupt history stays readable */ }
   return {
     id: String(row.id), ownerId: String(row.owner_id), appName: String(row.app_name), peerId: String(row.peer_id),
-    syncId: String(row.sync_id), withData: false,
+    syncId: String(row.sync_id), withData: Number(row.with_data) === 1,
     appVersion: row.app_version == null ? null : String(row.app_version),
     packageDigest: row.package_digest == null ? null : String(row.package_digest),
     packageSize: row.package_size == null ? null : Number(row.package_size),
+    dataDigest: row.data_digest == null ? null : String(row.data_digest),
+    dataSize: row.data_size == null ? null : Number(row.data_size),
     status: String(row.status) as SyncJobStatus, history, error: row.error == null ? null : String(row.error),
     createdAt: String(row.created_at), updatedAt: String(row.updated_at), completedAt: row.completed_at == null ? null : String(row.completed_at),
   };

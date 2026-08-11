@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Readable } from "node:stream";
 import { AppInstallError } from "../lib/app-installer.js";
+import { AppDataError } from "../lib/app-data-errors.js";
 import { AppSyncSource, SyncSourceError } from "../lib/app-sync-source.js";
 import { AppSyncTarget, targetInstallCode, targetInstallStatus } from "../lib/app-sync-target.js";
 import { SyncSessionError } from "../lib/sync-session-store.js";
@@ -20,14 +21,32 @@ export async function syncTargetRoutes(app: FastifyInstance, target: AppSyncTarg
       const appName = requiredString(body?.appName, "appName");
       const nameError = validateName(appName);
       if (nameError) throw new SyncSessionError("APP_NAME_INVALID", nameError, 400);
+      const mode = body?.mode === "app-only" || body?.mode === "app-and-data" ? body.mode : invalidMode();
       const session = target.create({
         id: requiredString(body?.id, "id"), ownerId,
-        mode: body?.mode === "app-only" ? "app-only" : invalidMode(),
+        mode,
         appName, appVersion: requiredString(body?.appVersion, "appVersion"),
         packageDigest: requiredString(body?.packageDigest, "packageDigest"),
         packageSize: requiredInteger(body?.packageSize, "packageSize"),
+        ...(mode === "app-and-data" ? {
+          dataDigest: requiredString(body?.dataDigest, "dataDigest"),
+          dataSize: requiredInteger(body?.dataSize, "dataSize"),
+        } : {}),
       });
       return reply.status(session.status === "created" ? 201 : 200).send({ success: true, data: publicSession(session) });
+    } catch (error) { return targetError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string } }>("/api/peer/sync-sessions/:id/data", async (request, reply) => {
+    const ownerId = bearerOwner(request, reply);
+    if (!ownerId) return;
+    try {
+      const length = Number(request.headers["content-length"]);
+      if (!Number.isSafeInteger(length) || length < 0) throw new SyncSessionError("SYNC_CONTENT_LENGTH_REQUIRED", "A valid Content-Length is required", 411);
+      const session = await target.sessions.receiveData({
+        id: request.params.id, ownerId, stream: request.body as Readable, contentLength: length,
+      });
+      return { success: true, data: publicSession(session) };
     } catch (error) { return targetError(reply, error); }
   });
 
@@ -71,8 +90,17 @@ export async function syncSourceRoutes(app: FastifyInstance, source: AppSyncSour
       const nameError = validateName(request.params.name);
       if (nameError) throw new SyncSourceError(400, nameError, "APP_NAME_INVALID");
       const body = request.body as Record<string, unknown> | null;
-      if (body?.withData !== false) throw new SyncSourceError(400, "Task 7 only supports withData: false", "SYNC_MODE_UNSUPPORTED");
-      const job = await source.start({ ownerId: request.userId, appName: request.params.name, peerId: requiredString(body?.peerId, "peerId"), withData: false });
+      const peerId = requiredString(body?.peerId, "peerId");
+      let job;
+      if (body?.withData === true) {
+        const confirmation = requiredString(body.confirmation, "confirmation");
+        if (confirmation !== request.params.name) throw new SyncSourceError(400, "Application name confirmation does not match", "APP_CONFIRMATION_MISMATCH");
+        job = await source.start({ ownerId: request.userId, appName: request.params.name, peerId, withData: true, confirmation });
+      } else if (body?.withData === false) {
+        job = await source.start({ ownerId: request.userId, appName: request.params.name, peerId, withData: false });
+      } else {
+        throw new SyncSourceError(400, "withData must be a boolean", "SYNC_MODE_UNSUPPORTED");
+      }
       return reply.status(202).send({ success: true, data: job });
     } catch (error) { return sourceError(reply, error); }
   });
@@ -119,14 +147,14 @@ function bearerOwner(request: FastifyRequest, reply: FastifyReply): string | nul
   return ownerId;
 }
 
-function publicSession(session: { id: string; mode: string; appName: string; appVersion: string; packageDigest: string; packageSize: number; status: string; outcome: unknown; error: string | null; createdAt: string; updatedAt: string }) {
-  return { id: session.id, mode: session.mode, appName: session.appName, appVersion: session.appVersion, packageDigest: session.packageDigest, packageSize: session.packageSize, status: session.status, outcome: session.outcome, error: session.error, createdAt: session.createdAt, updatedAt: session.updatedAt };
+function publicSession(session: { id: string; mode: string; appName: string; appVersion: string; packageDigest: string; packageSize: number; dataDigest: string | null; dataSize: number | null; status: string; outcome: unknown; error: string | null; createdAt: string; updatedAt: string }) {
+  return { id: session.id, mode: session.mode, appName: session.appName, appVersion: session.appVersion, packageDigest: session.packageDigest, packageSize: session.packageSize, dataDigest: session.dataDigest, dataSize: session.dataSize, status: session.status, outcome: session.outcome, error: session.error, createdAt: session.createdAt, updatedAt: session.updatedAt };
 }
 
 function targetError(reply: FastifyReply, error: unknown) {
   return reply.status(targetInstallStatus(error)).send({
     success: false, code: targetInstallCode(error),
-    error: error instanceof AppInstallError || error instanceof SyncSessionError ? error.message : "Synchronization request failed",
+    error: error instanceof AppInstallError || error instanceof AppDataError || error instanceof SyncSessionError ? error.message : "Synchronization request failed",
   });
 }
 
@@ -143,4 +171,4 @@ function requiredInteger(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value)) throw new SyncSessionError("SYNC_METADATA_INVALID", `${field} must be an integer`, 400);
   return value as number;
 }
-function invalidMode(): never { throw new SyncSessionError("SYNC_MODE_UNSUPPORTED", "Only application-only synchronization is supported", 400); }
+function invalidMode(): never { throw new SyncSessionError("SYNC_MODE_UNSUPPORTED", "Unsupported synchronization mode", 400); }

@@ -1,8 +1,10 @@
 import { EventEmitter } from "node:events";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { inspectAppPackage } from "./app-package.js";
+import { createAppDataExport } from "./app-data-service.js";
 import { PeerStore } from "./peer-store.js";
 import { SyncJobStore, type SyncJobRecord, type SyncJobStatus } from "./sync-job-store.js";
 import { getPageDir, readPageMeta } from "../plugins/storage.js";
@@ -15,7 +17,12 @@ const PEER_ERROR_CODES = new Set([
   "APP_MANIFEST_INVALID", "APP_HEALTH_CHECK_FAILED", "APP_PLATFORM_VERSION_MISMATCH",
   "SYNC_SESSION_CONFLICT", "SYNC_SESSION_NOT_FOUND", "SYNC_PACKAGE_TOO_LARGE", "SYNC_PACKAGE_SIZE_MISMATCH",
   "SYNC_PACKAGE_DIGEST_MISMATCH", "SYNC_PACKAGE_METADATA_MISMATCH", "SYNC_PACKAGE_REQUIRED", "SYNC_CANNOT_CANCEL",
-  "SYNC_COMMIT_IN_PROGRESS", "SYNC_RECOVERY_REQUIRED",
+  "SYNC_COMMIT_IN_PROGRESS", "SYNC_RECOVERY_REQUIRED", "SYNC_DATA_REQUIRED", "SYNC_DATA_NOT_EXPECTED",
+  "SYNC_DATA_TOO_LARGE", "SYNC_DATA_SIZE_MISMATCH", "SYNC_DATA_DIGEST_MISMATCH", "SYNC_DATA_CONFLICT",
+  "APP_ARCHIVE_LIMIT_EXCEEDED", "APP_ARCHIVE_IDENTITY_MISMATCH", "APP_ARCHIVE_VERSION_TOO_NEW",
+  "APP_ARCHIVE_MANIFEST_INVALID", "APP_ARCHIVE_FORMAT_UNSUPPORTED", "APP_ARCHIVE_INVALID_PATH",
+  "APP_ARCHIVE_HASH_MISMATCH", "APP_ARCHIVE_ENTRY_MISSING", "APP_DATABASE_SCHEMA_INCOMPATIBLE",
+  "APP_DATA_ROLLBACK_FAILED", "APP_DATABASE_NOT_FOUND", "APP_DATA_OPERATION_BUSY",
 ]);
 
 interface AppSyncSourceOptions {
@@ -45,9 +52,14 @@ export class AppSyncSource {
     private readonly options: AppSyncSourceOptions = {},
   ) {}
 
-  async start(input: { ownerId: string; appName: string; peerId: string; withData: false }): Promise<SyncJobRecord> {
+  async start(input: {
+    ownerId: string; appName: string; peerId: string; withData: false;
+  } | {
+    ownerId: string; appName: string; peerId: string; withData: true; confirmation: string;
+  }): Promise<SyncJobRecord> {
     const syncId = randomUUID();
     const job = this.jobs.create({ ...input, syncId });
+    let dataExport: { archivePath: string; cleanup: () => void } | undefined;
     try {
       this.change(job.id, "staging");
       const active = await activePackage(this.dataDir, input.ownerId, input.appName);
@@ -55,13 +67,29 @@ export class AppSyncSource {
       this.change(job.id, "validating");
       const target = this.peers.loadForCheck(input.peerId);
       if (!target) throw new SyncSourceError(404, "Peer not found", "PEER_NOT_FOUND");
+      if (input.withData && !target.verifiedUserId) {
+        throw new SyncSourceError(409, "Peer must be checked before application data can be synchronized", "PEER_NOT_VERIFIED");
+      }
+      let dataDigest: string | undefined;
+      let dataSize: number | undefined;
+      if (input.withData) {
+        dataExport = await createAppDataExport({
+          pageDir: getPageDir(this.dataDir, input.ownerId, input.appName),
+          application: { owner: input.ownerId, name: input.appName, version: active.localVersion },
+          archiveApplication: { owner: target.verifiedUserId!, name: input.appName, version: active.localVersion },
+        });
+        dataDigest = await sha256File(dataExport.archivePath);
+        dataSize = fs.statSync(dataExport.archivePath).size;
+        this.jobs.setData(job.id, { dataDigest, dataSize });
+      }
       const response = await peerFetch(`${target.baseUrl}/api/peer/sync-sessions`, target.apiKey, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({
-          id: syncId, mode: "app-only", appName: input.appName, appVersion: active.appVersion,
+          id: syncId, mode: input.withData ? "app-and-data" : "app-only", appName: input.appName, appVersion: active.appVersion,
           packageDigest: active.digest, packageSize: active.size,
+          ...(input.withData ? { dataDigest, dataSize } : {}),
         }),
       });
       if (!response.ok) throw await sourceResponseError(response);
@@ -70,12 +98,13 @@ export class AppSyncSource {
       this.controllers.set(job.id, controller);
       this.activePeers.set(job.id, { baseUrl: target.baseUrl, apiKey: target.apiKey });
       setImmediate(() => {
-        const run = this.run(job.id, active.path, target.baseUrl, target.apiKey, controller);
+        const run = this.run(job.id, active.path, dataExport?.archivePath, target.baseUrl, target.apiKey, controller, dataExport?.cleanup);
         this.runs.add(run);
         void run.finally(() => this.runs.delete(run));
       });
       return this.jobs.get(job.id)!;
     } catch (error) {
+      dataExport?.cleanup();
       this.fail(job.id, error);
       throw error;
     }
@@ -117,7 +146,7 @@ export class AppSyncSource {
     this.emitters.clear();
   }
 
-  private async run(jobId: string, packagePath: string, baseUrl: string, apiKey: string, controller: AbortController): Promise<void> {
+  private async run(jobId: string, packagePath: string, dataPath: string | undefined, baseUrl: string, apiKey: string, controller: AbortController, cleanupData?: () => void): Promise<void> {
     try {
       const job = this.jobs.get(jobId);
       if (!job || TERMINAL.has(job.status)) return;
@@ -137,12 +166,32 @@ export class AppSyncSource {
         throw error;
       } finally { uploadDeadline.dispose(); }
       if (!upload.ok) throw await sourceResponseError(upload);
+      const current = this.jobs.get(jobId);
+      if (current?.withData) {
+        if (!dataPath || current.dataSize === null) throw new SyncSourceError(409, "Data archive is unavailable", "SYNC_DATA_REQUIRED");
+        const dataDeadline = createDeadlineSignal(controller.signal, this.options.uploadTimeoutMs ?? 60_000);
+        let dataUpload: Response;
+        try {
+          dataUpload = await peerFetch(`${baseUrl}/api/peer/sync-sessions/${encodeURIComponent(current.syncId)}/data`, apiKey, {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream", "Content-Length": String(current.dataSize) },
+            body: fs.createReadStream(dataPath),
+            signal: dataDeadline.signal,
+            duplex: "half",
+          });
+        } catch (error) {
+          if (dataDeadline.timedOut()) throw new SyncSourceError(504, "Peer data upload timed out", "SYNC_UPLOAD_TIMEOUT");
+          throw error;
+        } finally { dataDeadline.dispose(); }
+        if (!dataUpload.ok) throw await sourceResponseError(dataUpload);
+      }
       if (TERMINAL.has(this.jobs.get(jobId)!.status)) return;
       this.change(jobId, "activating");
       await this.commitUntilTerminal(jobId, baseUrl, apiKey, controller);
     } catch (error) {
       if (!TERMINAL.has(this.jobs.get(jobId)?.status ?? "failed")) this.fail(jobId, error);
     } finally {
+      cleanupData?.();
       this.controllers.delete(jobId);
       this.activePeers.delete(jobId);
     }
@@ -194,7 +243,7 @@ export class AppSyncSource {
   }
 }
 
-async function activePackage(dataDir: string, ownerId: string, appName: string): Promise<{ path: string; appVersion: string; digest: string; size: number }> {
+async function activePackage(dataDir: string, ownerId: string, appName: string): Promise<{ path: string; appVersion: string; localVersion: number; digest: string; size: number }> {
   const meta = readPageMeta(dataDir, ownerId, appName);
   if (!meta) throw new SyncSourceError(404, "Application not found", "APP_NOT_FOUND");
   const active = meta.versions.find((entry) => entry.version === meta.currentVersion);
@@ -211,7 +260,7 @@ async function activePackage(dataDir: string, ownerId: string, appName: string):
   if (inspected.name !== appName || inspected.version !== active.appVersion || inspected.digest !== active.digest) {
     throw new SyncSourceError(409, "Retained application package does not match active metadata", "APP_PACKAGE_MISMATCH");
   }
-  return { path: packagePath, appVersion: active.appVersion, digest: active.digest, size: fs.statSync(packagePath).size };
+  return { path: packagePath, appVersion: active.appVersion, localVersion: active.version, digest: active.digest, size: fs.statSync(packagePath).size };
 }
 
 type NodeRequestInit = Omit<RequestInit, "body"> & { body?: RequestInit["body"] | NodeJS.ReadableStream; duplex?: "half" };
@@ -228,6 +277,12 @@ async function sourceResponseError(response: Response): Promise<SyncSourceError>
   const body = await response.json().catch(() => null) as { code?: unknown; error?: unknown } | null;
   const code = typeof body?.code === "string" && PEER_ERROR_CODES.has(body.code) ? body.code : "PEER_SYNC_FAILED";
   return new SyncSourceError(response.status, `Peer synchronization failed (${response.status})`, code);
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
 
 function createDeadlineSignal(parent: AbortSignal | undefined, timeoutMs: number): {
