@@ -51,7 +51,8 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     const workerEnv: NodeJS.ProcessEnv = { ...env };
     delete workerEnv.LOCALAPP_USE_PENDING_CONFIG;
     if (usePendingConfig) workerEnv.LOCALAPP_USE_PENDING_CONFIG = "1";
-    return spawn(process.execPath, [path.join(__dirname, "worker.js")], {
+    const workerPath = process.env.LOCALAPP_WORKER_PATH ?? path.join(__dirname, "worker.js");
+    return spawn(process.execPath, [workerPath], {
       env: workerEnv,
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
@@ -116,7 +117,7 @@ async function requiresSetup(dataDir: string): Promise<boolean> {
   }
 }
 
-if (require.main === module) {
+if (typeof require !== "undefined" && require.main === module && process.env.LOCALAPP_PACKAGE_ENTRY !== "1") {
   runCli().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);

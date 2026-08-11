@@ -1,7 +1,7 @@
 {
   "name": "@localapp/server",
   "version": "0.0.1",
-  "private": true,
+  "private": false,
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,6 +12,8 @@
     "dev": "cross-env DATA_DIR=../../data BOOTSTRAP_API_KEY=dev-api-key-change-me JWT_SECRET=dev-jwt-secret-change-me tsx watch --include ../server-core/dist src/cli.ts start",
     "build": "tsc",
     "start": "node dist/cli.js start",
+    "package": "pnpm -C ../server-core build && pnpm -C ../web build && node scripts/build-server-package.mjs",
+    "test:package": "node --test scripts/build-server-package.node-test.mjs",
     "test": "vitest run",
     "test:runner-protocol": "node --test tests/runner-protocol.node-test.mjs",
     "clean": "rimraf dist"
@@ -44,6 +46,7 @@
     "@types/ws": "^8.18.1",
     "@types/yauzl": "3.4.0",
     "cross-env": "^10.1.0",
+    "esbuild": "^0.25.12",
     "rimraf": "^5.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",

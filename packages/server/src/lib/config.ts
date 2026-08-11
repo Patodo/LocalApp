@@ -182,9 +182,18 @@ function readSettingsForProcess(dataDir: string, usePending: boolean): Partial<P
   if (usePending) {
     const pending = readPendingNetworkSettings(dataDir);
     if (!pending) throw new Error("Pending network configuration is missing");
-    return pending.candidate;
+    return normalizePersistedWorkspace(dataDir, pending.candidate);
   }
-  return readPersistedServerSettings(dataDir);
+  return normalizePersistedWorkspace(dataDir, readPersistedServerSettings(dataDir));
+}
+
+function normalizePersistedWorkspace(dataDir: string, settings: Partial<PersistedServerSettings>): Partial<PersistedServerSettings> {
+  if (!settings.workspaceDir || !path.isAbsolute(settings.workspaceDir)) return settings;
+  const relative = path.relative(path.resolve(dataDir), path.resolve(settings.workspaceDir));
+  if (relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))) {
+    return { ...settings, workspaceDir: relative || "." };
+  }
+  return settings;
 }
 
 function pickEnv(env: NodeJS.ProcessEnv, key: string, tomlValue: string | undefined, defaultVal: string): string {

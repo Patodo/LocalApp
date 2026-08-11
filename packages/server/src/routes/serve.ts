@@ -48,7 +48,6 @@ declare module "fastify" {
 const HTML_404 = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Not Found</title></head><body style="display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:system-ui;background:#f8f9fa"><div style="text-align:center"><h1 style="font-size:2rem;color:#1a1d23">404</h1><p style="color:#6b7280">Page not found.</p><a href="/" style="color:#2563eb">Back to home</a></div></body></html>`;
 
 const CSP_HEADER = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'";
-const WEB_OUT_DIR = path.resolve(__dirname, "../../../web/out");
 
 type CollaborationSseClient = {
   userId: string;
@@ -123,12 +122,13 @@ function sendOfflineAppError(reply: FastifyReply) {
   });
 }
 
-export async function serveRoutes(app: FastifyInstance) {
+export async function serveRoutes(app: FastifyInstance, options: { webRoot?: string } = {}) {
+  const webOutDir = options.webRoot ?? path.resolve(__dirname, "../../../web/out");
   const dataDir = () => app.config.dataDir;
 
   // Serve Next.js HTML pages for auth routes
   function serveNextHtml(page: string) {
-    const filePath = path.join(WEB_OUT_DIR, `${page}.html`);
+    const filePath = path.join(webOutDir, `${page}.html`);
     return async (_req: FastifyRequest, reply: FastifyReply) => {
       try {
         const html = fs.readFileSync(filePath, "utf-8");
@@ -149,7 +149,7 @@ export async function serveRoutes(app: FastifyInstance) {
   app.get("/setup.txt", async (_req, reply) => {
     if (listUsers(1, 1).total !== 0) return reply.status(404).send("");
     try {
-      return reply.type("text/plain; charset=utf-8").send(fs.readFileSync(path.join(WEB_OUT_DIR, "setup.txt"), "utf-8"));
+      return reply.type("text/plain; charset=utf-8").send(fs.readFileSync(path.join(webOutDir, "setup.txt"), "utf-8"));
     } catch {
       return reply.status(404).send("");
     }
@@ -222,7 +222,7 @@ export async function serveRoutes(app: FastifyInstance) {
 
       // Serve Next.js static React platform shell with actual params injected.
       try {
-        let html = fs.readFileSync(path.join(WEB_OUT_DIR, "platform-shell/placeholder/placeholder.html"), "utf-8");
+        let html = fs.readFileSync(path.join(webOutDir, "platform-shell/placeholder/placeholder.html"), "utf-8");
         // Replace static placeholder params with actual values in RSC payload
         html = html
           .replace(/\\"platform-shell\\",\\"placeholder\\",\\"placeholder\\"/g, `\\"platform-shell\\",\\"${userId}\\",\\"${name}\\"`)

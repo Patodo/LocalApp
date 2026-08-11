@@ -36,6 +36,7 @@ export async function runWorker(): Promise<void> {
   const setupTokens = new SetupTokenStore();
   const startedFromPendingConfiguration = process.env.LOCALAPP_USE_PENDING_CONFIG === "1";
   app = await buildServer({
+    webRoot: process.env.LOCALAPP_WEB_ROOT,
     setupTokens,
     restartController: {
       requestRestart(exitCode) {
@@ -58,7 +59,7 @@ export async function runWorker(): Promise<void> {
   send(message);
 }
 
-if (require.main === module) {
+if (typeof require !== "undefined" && require.main === module && process.env.LOCALAPP_PACKAGE_ENTRY !== "1") {
   runWorker().catch((error) => {
     console.error(error);
     process.exit(1);

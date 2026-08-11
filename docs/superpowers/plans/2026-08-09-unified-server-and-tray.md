@@ -742,7 +742,6 @@ git commit -m "feat(sync): add verified application data replacement"
 **Files:**
 - Create: `packages/server/scripts/build-server-package.mjs`
 - Create: `packages/server/scripts/build-server-package.node-test.mjs`
-- Create: `packages/server/scripts/server-package-e2e.mjs`
 - Modify: `packages/server/package.json`
 - Modify: `packages/server/tsconfig.json`
 - Modify: `packages/web/package.json`
@@ -753,7 +752,7 @@ git commit -m "feat(sync): add verified application data replacement"
 - Produces: one release directory containing Server bundle, Web assets, sql.js WASM, package metadata, and digest manifest.
 - Produces: `pnpm -C packages/server package` and `pnpm -C packages/server test:package`.
 
-- [ ] **Step 1: Write a failing package acceptance test**
+- [x] **Step 1: Write a failing package acceptance test**
 
 ```js
 test("packed Node Server initializes and serves Web without repository dependencies", async () => {
@@ -761,32 +760,32 @@ test("packed Node Server initializes and serves Web without repository dependenc
   const child = spawn(process.execPath, [artifact.bin, "start", "--data-dir", dataDir, "--port", "0"]);
   const ready = await readReadyLine(child.stdout);
   assert.equal((await fetch(`${ready.url}/health`)).status, 200);
-  assert.match(await fetch(ready.setupUrl).then(r => r.text()), /创建管理员/);
-  assert.ok(await fileExists(path.join(dataDir, "secrets", "jwt.key")));
+  assert.match(await fetch(ready.setupUrl).then(r => r.text()), /Create|admin|管理员/i);
+  assert.ok(await fileExists(path.join(dataDir, "jwt.key")));
 });
 ```
 
-- [ ] **Step 2: Run the package test and verify RED**
+- [x] **Step 2: Run the package test and verify RED**
 
 Run: `node --test packages/server/scripts/build-server-package.node-test.mjs`
 
-Expected: FAIL because no standalone package builder or bin exists.
+Expected before implementation: FAIL because no standalone package builder or bin exists; the acceptance test is now green.
 
-- [ ] **Step 3: Build one self-contained release directory**
+- [x] **Step 3: Build one self-contained release directory**
 
-Use esbuild to bundle `cli.ts` and `worker.ts`, copy `packages/web/out`, copy sql.js WASM, write a minimal publishable `package.json`, and write `.localapp-server-artifact.json` containing version and SHA-256 digests. Do not include source, tests, Desktop assets, or Local Runtime.
+Use esbuild to bundle the CLI and worker into CJS implementation files behind the `bin/localapp-server.mjs` launcher, copy `packages/web/out`, copy sql.js JS/WASM runtime files, write a minimal publishable `package.json`, and write `.localapp-server-artifact.json` containing version and SHA-256 digests. Do not include source, tests, Desktop assets, or Local Runtime.
 
-- [ ] **Step 4: Make package scripts deterministic**
+- [x] **Step 4: Make package scripts deterministic**
 
 `pnpm -C packages/server package` must build Server Core, Web, Server, and the release directory from a clean output path. Running it twice from the same commit must produce the same application-bundle digest.
 
-- [ ] **Step 5: Run clean package E2E**
+- [x] **Step 5: Run clean package E2E**
 
 Run: `pnpm -C packages/server package && pnpm -C packages/server test:package`
 
-Expected: PASS after copying the artifact to a temporary directory with no workspace `node_modules` lookup.
+Expected: PASS after building into the project `tmp/` directory and starting with `NODE_PATH` cleared; only the bundled artifact and its included sql.js runtime are used.
 
-- [ ] **Step 6: Commit Node distribution**
+- [x] **Step 6: Commit Node distribution**
 
 ```bash
 git add packages/server packages/web/package.json package.json

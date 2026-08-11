@@ -157,7 +157,7 @@ async function registerServerPluginsAndRoutes(
   app.register(desktopActionsRoutes);
   app.register(myServeRoutes);
   app.register(async (peerScope) => peersRoutes(peerScope, peerStore));
-  app.register(serveRoutes);
+  app.register(serveRoutes, { webRoot });
   app.register(authenticatedCliRoutes);
   app.register(depsRoutes);
   app.register(async (authScope) => {

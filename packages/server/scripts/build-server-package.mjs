@@ -1,0 +1,138 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const projectDirectory = path.resolve(scriptDirectory, "../../..");
+const serverDirectory = path.join(projectDirectory, "packages/server");
+const sourceDirectory = path.join(serverDirectory, "src");
+const defaultOutputDirectory = path.join(projectDirectory, "tmp/localapp-server-package");
+
+/**
+ * Build the publishable, self-contained Server directory.
+ * @param {{ outputDirectory?: string }} [options]
+ */
+export async function buildServerPackage(options = {}) {
+  const outputDirectory = path.resolve(options.outputDirectory ?? process.env.LOCALAPP_SERVER_PACKAGE_DIR ?? defaultOutputDirectory);
+  const binDirectory = path.join(outputDirectory, "bin");
+  const webDirectory = path.join(outputDirectory, "web");
+  const sqlDirectory = path.join(outputDirectory, "node_modules/sql.js");
+  const sourcePackage = JSON.parse(await fs.readFile(path.join(serverDirectory, "package.json"), "utf8"));
+  const webOutput = path.join(projectDirectory, "packages/web/out");
+  await assertFile(path.join(webOutput, "index.html"));
+
+  await fs.rm(outputDirectory, { recursive: true, force: true });
+  await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
+  await fs.cp(webOutput, webDirectory, { recursive: true });
+
+  const bundleOptions = {
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node24",
+    sourcemap: false,
+    legalComments: "none",
+    external: ["sql.js"],
+    define: { "process.env.LOCALAPP_PACKAGE_ENTRY": '"1"' },
+    absWorkingDir: projectDirectory,
+    logLevel: "warning",
+  };
+  await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-cli.ts")], outfile: path.join(binDirectory, "server-cli.cjs") });
+  await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-worker.ts")], outfile: path.join(binDirectory, "worker.cjs") });
+  const launcher = `import path from "node:path";\nimport { fileURLToPath } from "node:url";\n\nconst packageDirectory = path.dirname(fileURLToPath(import.meta.url));\nprocess.env.LOCALAPP_WORKER_PATH ??= path.join(packageDirectory, "worker.cjs");\nprocess.env.LOCALAPP_WEB_ROOT ??= path.resolve(packageDirectory, "../web");\nawait import("./server-cli.cjs");\n`;
+  await fs.writeFile(path.join(binDirectory, "localapp-server.mjs"), launcher, { mode: 0o755 });
+  await fs.chmod(path.join(binDirectory, "server-cli.cjs"), 0o755);
+  await fs.chmod(path.join(binDirectory, "worker.cjs"), 0o755);
+  await fs.chmod(path.join(binDirectory, "localapp-server.mjs"), 0o755);
+
+  const require = createRequire(import.meta.url);
+  const sqlEntry = require.resolve("sql.js", { paths: [serverDirectory] });
+  const sqlPackageDirectory = path.resolve(path.dirname(sqlEntry), "..");
+  await fs.cp(path.join(sqlPackageDirectory, "package.json"), path.join(sqlDirectory, "package.json"));
+  await fs.mkdir(path.join(sqlDirectory, "dist"), { recursive: true });
+  await fs.cp(path.join(path.dirname(sqlEntry), "sql-wasm.js"), path.join(sqlDirectory, "dist/sql-wasm.js"));
+  await fs.cp(path.join(path.dirname(sqlEntry), "sql-wasm.wasm"), path.join(sqlDirectory, "dist/sql-wasm.wasm"));
+
+  const packageJson = {
+    name: "@localapp/server",
+    version: sourcePackage.version,
+    description: "LocalApp canonical Server",
+    license: sourcePackage.license,
+    type: "module",
+    bin: { "localapp-server": "bin/localapp-server.mjs" },
+    engines: { node: ">=24" },
+  };
+  await writeJson(path.join(outputDirectory, "package.json"), packageJson);
+  const files = await listFiles(outputDirectory);
+  const digests = {};
+  for (const file of files) {
+    if (file === ".localapp-server-artifact.json") continue;
+    digests[file] = await sha256(path.join(outputDirectory, file));
+  }
+  const bundleDigest = sha256Bytes(Buffer.from(JSON.stringify(digests)));
+  const manifest = {
+    schemaVersion: 1,
+    name: packageJson.name,
+    version: packageJson.version,
+    nodeMajor: 24,
+    entrypoint: "bin/localapp-server.mjs",
+    worker: "bin/worker.cjs",
+    bundleDigest,
+    files: digests,
+  };
+  await writeJson(path.join(outputDirectory, ".localapp-server-artifact.json"), manifest);
+  return {
+    outputDirectory,
+    bin: path.join(outputDirectory, "bin/localapp-server.mjs"),
+    worker: path.join(outputDirectory, "bin/worker.cjs"),
+    manifestPath: path.join(outputDirectory, ".localapp-server-artifact.json"),
+    bundleDigest,
+  };
+}
+
+async function assertFile(filePath) {
+  const stat = await fs.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) throw new Error(`Required package input is missing: ${filePath}`);
+}
+
+async function writeJson(filePath, value) {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function listFiles(directory, prefix = "") {
+  const entries = await fs.readdir(path.join(directory, prefix), { withFileTypes: true });
+  const result = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const relative = path.posix.join(prefix.split(path.sep).join("/"), entry.name);
+    if (entry.isDirectory()) result.push(...await listFiles(directory, relative));
+    else if (entry.isFile()) result.push(relative);
+  }
+  return result;
+}
+
+async function sha256(filePath) {
+  const hash = crypto.createHash("sha256");
+  const handle = await fs.open(filePath, "r");
+  try {
+    for await (const chunk of handle.createReadStream()) hash.update(chunk);
+  } finally {
+    await handle.close();
+  }
+  return hash.digest("hex");
+}
+
+function sha256Bytes(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  buildServerPackage().then((result) => {
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  }).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
