@@ -10,6 +10,25 @@
 
 **Implementation status (2026-08-11):** Tasks 1–14 are implemented and committed on `main`. The two real applications build from the builtin template, install through the formal Server package endpoint, and pass the deterministic local acceptance suite. Task 15 is partially complete: the bundled Tauri Server and formal Browser UI have been exercised locally, while the in-app Browser security policy blocked dispatching the external `localapp://` navigation needed to complete the final native-activation observation. The SDD progress ledger records the exact evidence and remaining boundary.
 
+**Completed implementation ledger:**
+
+| Scope | Evidence commit(s) | Current evidence |
+| --- | --- | --- |
+| Tasks 1–2 — reusable Server, setup, configuration, supervision | `73d7992`, `5859d24`, `9935029`, `1b06653` | clean setup, unified configuration, loopback defaults, supervised executable tests |
+| Task 3 — atomic application installation | `58ba7c0`, `5a170a9`, `fe8f553` | package install, activation, recovery, and upload regression tests |
+| Task 4 — Server-owned Studio/workspaces/tasks | `5afd93f`, `784087c`, `6ab2ce3` | workspace boundary, lifecycle, and runner tests |
+| Task 5 — Server Web control plane | `cafd551`, `4b4f33e` | static formal routes and Web control-plane tests |
+| Task 6 — encrypted peers and capability verification | `3fe3a96`, `5753bd9`, `4022a6a`, `5822b5b` | encrypted target credentials and peer verification tests |
+| Tasks 7–8 — application-only and explicit data synchronization | `d6e00dd`, `714d46e`, `e49eac4`, `b2630c2`, `64abd7e` | two-peer sync, snapshot replacement, rollback, and durability tests |
+| Task 9 — standalone Node Server artifact | `cd75360` | package build and packed-artifact tests |
+| Task 10 — generic Device Actions | `bfa55f6`, `0a74e48` | protocol, trust, activation, executor, and SDK tests |
+| Task 11 — windowless Tauri bridge/tray | `3694cd8` | Rust bridge, tray, lifecycle tests and local debug bundle build |
+| Task 12 — unified CLI and removal of Local Runtime | `2779e2d` | CLI, staging, and documentation tests |
+| Task 13 — template, media packages, skills, and agents | `f2090c1` | template, generated-app, staging, and build tests |
+| Task 14 — two real local applications | `67e29c3` | `pnpm test:real-apps`, owner boundary, upload/download, and Device Action acceptance |
+
+Task 15 remains intentionally open only for the cross-distribution Browser/native-Scheme observation described below; it is not treated as complete by the automated activation tests.
+
 ## Global Constraints
 
 - There is one canonical `@localapp/server`; do not preserve a MiniServer or Local Runtime execution path.
@@ -58,7 +77,7 @@
 - Produces: `GET /api/setup/status` and `POST /api/setup/initialize`.
 - Removes: automatic `localadmin` creation from `initMetaDb`.
 
-- [ ] **Step 1: Write failing clean-setup integration tests**
+- [x] **Step 1: Write failing clean-setup integration tests**
 
 ```ts
 it("starts empty and consumes the setup token after creating the first administrator", async () => {
@@ -85,13 +104,13 @@ it("starts empty and consumes the setup token after creating the first administr
 });
 ```
 
-- [ ] **Step 2: Run the setup tests and verify RED**
+- [x] **Step 2: Run the setup tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/setup-flow.test.ts tests/bootstrap-admin.test.ts`
 
 Expected: FAIL because `cleanSetup`, setup routes, and `SetupTokenStore` do not exist and `initMetaDb` still creates the bootstrap user.
 
-- [ ] **Step 3: Extract route registration into `buildServer`**
+- [x] **Step 3: Extract route registration into `buildServer`**
 
 ```ts
 export interface BuildServerOptions {
@@ -114,7 +133,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 
 Move all current plugin, route, request-log, and close-hook registration from `index.ts` into this factory. `index.ts` must only build, listen, report readiness, and handle fatal errors.
 
-- [ ] **Step 4: Implement setup-token and initial-admin services**
+- [x] **Step 4: Implement setup-token and initial-admin services**
 
 ```ts
 export class SetupTokenStore {
@@ -141,17 +160,17 @@ export class SetupTokenStore {
 
 `POST /api/setup/initialize` must require zero users, consume a valid token, validate username/password, create the administrator and everyone group in one meta-DB transaction, revoke all setup tokens, and return `201` without issuing a session.
 
-- [ ] **Step 5: Make test and production startup use the same factory**
+- [x] **Step 5: Make test and production startup use the same factory**
 
 Replace duplicated registration in `tests/integration/helpers.ts` with `buildServer({ env, setupTokens })`. Return `baseUrl` and `setupTokens` from the helper. Remove bootstrap-user assertions and replace them with assertions that a fresh database has zero users.
 
-- [ ] **Step 6: Run Server tests and verify GREEN**
+- [x] **Step 6: Run Server tests and verify GREEN**
 
 Run: `pnpm -C packages/server test`
 
 Expected: all Server tests pass; tests that previously relied on `localadmin` explicitly initialize an admin through the setup service or test helper.
 
-- [ ] **Step 7: Commit the reusable Server and setup flow**
+- [x] **Step 7: Commit the reusable Server and setup flow**
 
 ```bash
 git add packages/server/src packages/server/tests
@@ -182,7 +201,7 @@ git commit -m "feat(server): add reusable startup and first-run setup"
 - Produces: worker readiness message `{ type: "ready"; url: string; setupUrl?: string }` on IPC or stdout.
 - Produces: restart exit code `75`; `localapp-server start` restarts the worker only for this code.
 
-- [ ] **Step 1: Write failing configuration and rebind tests**
+- [x] **Step 1: Write failing configuration and rebind tests**
 
 ```ts
 it("defaults to loopback and rejects LAN binding without acknowledgement", async () => {
@@ -205,13 +224,13 @@ it("persists a validated network change and requests supervised restart", async 
 });
 ```
 
-- [ ] **Step 2: Run targeted tests and verify RED**
+- [x] **Step 2: Run targeted tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/config-store.test.ts tests/integration/system-settings.test.ts`
 
 Expected: FAIL because the unified configuration fields, store, and system routes do not exist.
 
-- [ ] **Step 3: Implement the configuration store and admin system routes**
+- [x] **Step 3: Implement the configuration store and admin system routes**
 
 Persist non-secret settings to `<data-dir>/server.json` with mode `0600` on Unix. Resolve paths against `dataDir`. Environment variables override persisted values. If no `JWT_SECRET` override exists, generate a random 32-byte instance signing key once at `jwtKeyFile` with restrictive permissions; a clean packaged Server must therefore boot without hand-written secrets. Never serialize signing keys, storage credentials, or the peer master key from `GET /api/system/settings`.
 
@@ -233,7 +252,7 @@ export interface ServerConfigStore {
 
 Validate the candidate listener with a temporary `node:net` server before saving it. Respond `202`, then call `requestRestart(75)` after the response completes.
 
-- [ ] **Step 4: Implement the supervised executable**
+- [x] **Step 4: Implement the supervised executable**
 
 `cli.ts` parses `localapp-server start --data-dir --host --port`, spawns `worker.js`, forwards signals, prints readiness JSON, and restarts only when the worker exits with `75`. `worker.ts` builds the Server, listens with configured host/port, issues a setup token when no users exist, and sends the readiness message.
 
@@ -246,19 +265,19 @@ if (code === 75 && !stopping) {
 }
 ```
 
-- [ ] **Step 5: Verify supervisor restart behavior**
+- [x] **Step 5: Verify supervisor restart behavior**
 
 Run: `node --test packages/server/tests/supervisor.node-test.mjs`
 
 Expected: PASS; the test starts on loopback, requests a port change, observes one worker replacement, and reaches `/health` on the new port.
 
-- [ ] **Step 6: Run Server build and tests**
+- [x] **Step 6: Run Server build and tests**
 
 Run: `pnpm -C packages/server build && pnpm -C packages/server test`
 
 Expected: PASS with no duplicate route-registration helper in tests.
 
-- [ ] **Step 7: Commit unified configuration and supervision**
+- [x] **Step 7: Commit unified configuration and supervision**
 
 ```bash
 git add packages/server
@@ -290,7 +309,7 @@ git commit -m "feat(server): add supervised unified configuration"
 - `uploadRoutes` delegates final validation and activation to the same installer service.
 - Keeps the existing numeric `PageMeta.currentVersion` as the local deployment sequence; every version entry additionally stores stable `appVersion: string` and `digest: string`, which are used for peer identity and conflict detection.
 
-- [ ] **Step 1: Write a failing atomic package-install test**
+- [x] **Step 1: Write a failing atomic package-install test**
 
 ```ts
 it("installs a portable package for the authenticated owner and preserves the old version on migration failure", async () => {
@@ -308,13 +327,13 @@ it("installs a portable package for the authenticated owner and preserves the ol
 });
 ```
 
-- [ ] **Step 2: Run the package-install test and verify RED**
+- [x] **Step 2: Run the package-install test and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/app-package-install.test.ts`
 
 Expected: FAIL because the package endpoint and installer do not exist.
 
-- [ ] **Step 3: Implement safe package inspection**
+- [x] **Step 3: Implement safe package inspection**
 
 Use `yauzl` in lazy-entry mode. Reject absolute paths, `..`, symlinks, duplicate entries, unsupported compression, mismatched checksums, excessive expanded size, excessive file count, missing `manifest.json`, missing `dist/index.html`, and backend files outside the declared root.
 
@@ -329,21 +348,21 @@ export interface InspectedAppPackage {
 }
 ```
 
-- [ ] **Step 4: Implement atomic installation and shared activation**
+- [x] **Step 4: Implement atomic installation and shared activation**
 
 Stage under `<data-dir>/.staging/apps/<job-id>`, validate the backend contract, back up the target database, apply migrations, write version metadata, health-check the staged version, and atomically update current-version metadata. Restore the database and previous metadata on failure. Preserve the existing numeric directory/version sequence for storage compatibility inside the unified Server, but expose and compare the package's stable `appVersion` plus `digest`; installing the same pair is idempotent and reusing an `appVersion` with a different digest is a conflict.
 
-- [ ] **Step 5: Refactor multipart upload to use the installer**
+- [x] **Step 5: Refactor multipart upload to use the installer**
 
 Keep the existing `/api/upload` wire format only until Task 11 removes the old command. Convert its collected files into a staged package and call `installAppPackage`; remove its duplicate activation and rollback implementation.
 
-- [ ] **Step 6: Run application and upload regression tests**
+- [x] **Step 6: Run application and upload regression tests**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/app-package-install.test.ts tests/integration/upload-atomic-migrations.test.ts tests/integration/full-workflow.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the atomic installer**
+- [x] **Step 7: Commit the atomic installer**
 
 ```bash
 git add packages/server
@@ -380,7 +399,7 @@ git commit -m "feat(server): unify atomic application installation"
 - Produces: `TaskRunner.start(input): Promise<TaskRecord>`, `cancel(id)`, `logs(id, cursor)`, and `events(id)`.
 - Produces routes under `/api/workspaces` and `/api/tasks` using normal session/API-key authorization.
 
-- [ ] **Step 1: Write failing workspace-boundary and task-lifecycle tests**
+- [x] **Step 1: Write failing workspace-boundary and task-lifecycle tests**
 
 ```ts
 it("rejects traversal and symlink escape from a managed workspace", async () => {
@@ -398,17 +417,17 @@ it("persists, streams, and cancels a workspace task", async () => {
 });
 ```
 
-- [ ] **Step 2: Run targeted tests and verify RED**
+- [x] **Step 2: Run targeted tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/workspace-path.test.ts tests/integration/workspaces.test.ts tests/integration/tasks.test.ts`
 
 Expected: FAIL because Server-owned workspaces and tasks do not exist.
 
-- [ ] **Step 3: Implement workspace storage**
+- [x] **Step 3: Implement workspace storage**
 
 Store records in the meta DB and files under `<workspaceDir>/<workspace-id>`. Generate UUID workspace IDs. Accept project creation, Git clone with `--` argument separation, and archive import. Reject arbitrary absolute paths. Use temp directories and atomic rename for clone/import.
 
-- [ ] **Step 4: Implement the task store and process runner**
+- [x] **Step 4: Implement the task store and process runner**
 
 ```ts
 export interface StartTaskInput {
@@ -423,17 +442,17 @@ export interface StartTaskInput {
 
 Spawn with `shell: false`, workspace `cwd`, an allowlisted executable, bounded environment, output file, process-group cancellation, timeout, and persisted transitions. Reconcile `running` tasks to `interrupted` on startup.
 
-- [ ] **Step 5: Port Agent execution behind `AgentRunner`**
+- [x] **Step 5: Port Agent execution behind `AgentRunner`**
 
 Move the runner protocol from `packages/desktop/src-tauri/runner/localapp-runner.mjs` into the Server package and preserve it with a Node protocol test. Implement Codex and OpenCode adapters with the same `start/send/cancel/logs` interface. Keep protocol parsing in separate adapter files and emit task events through Server-Sent Events. Capability output must report unavailable executables rather than selecting a different runtime.
 
-- [ ] **Step 6: Register routes and run tests**
+- [x] **Step 6: Register routes and run tests**
 
 Run: `pnpm -C packages/server test`
 
 Expected: PASS, including workspace archive limits, permission checks, process cleanup, timeout, and startup reconciliation.
 
-- [ ] **Step 7: Commit Server-owned Studio and tasks**
+- [x] **Step 7: Commit Server-owned Studio and tasks**
 
 ```bash
 git add packages/server
@@ -465,7 +484,7 @@ git commit -m "feat(server): add managed workspaces and tasks"
 - Consumes: `/api/setup/*`, `/api/workspaces`, `/api/tasks`, `/api/system/*`, and existing application/user/inbox/favorite APIs.
 - Produces: static-export routes `/setup`, `/my/studio`, `/my/tasks`, and `/my/system`.
 
-- [ ] **Step 1: Write failing navigation and page behavior tests**
+- [x] **Step 1: Write failing navigation and page behavior tests**
 
 ```tsx
 it("shows Studio, tasks, and system administration in the Web shell", async () => {
@@ -478,27 +497,27 @@ it("shows Studio, tasks, and system administration in the Web shell", async () =
 
 Add page tests that initialize the first administrator with the setup token, create/import a workspace, edit a file, start/cancel a task, and request a network setting change.
 
-- [ ] **Step 2: Run Web tests and verify RED**
+- [x] **Step 2: Run Web tests and verify RED**
 
 Run: `pnpm -C packages/web test`
 
 Expected: FAIL because the new routes and navigation items do not exist.
 
-- [ ] **Step 3: Implement focused API clients and pages**
+- [x] **Step 3: Implement focused API clients and pages**
 
 Each component owns one feature area and uses same-origin `fetch` with credentials. The setup page reads the token only from its initial URL, removes it from browser history after loading, clears it after submission, and never persists it. Use EventSource for task logs.
 
-- [ ] **Step 4: Serve every static-export route from Server**
+- [x] **Step 4: Serve every static-export route from Server**
 
 Extend the setup/static route mapping plus `myServeRoutes.ADMIN_PAGES` for the three dashboard routes and their `.txt` flight payloads. Add direct route tests proving the setup page is available only while setup is required, unauthenticated dashboard redirects, and admin authorization for system settings.
 
-- [ ] **Step 5: Run Web and Server route tests**
+- [x] **Step 5: Run Web and Server route tests**
 
 Run: `pnpm -C packages/web test && pnpm -C packages/web build && pnpm -C packages/server exec vitest run tests/integration/homepage-redirect.test.ts`
 
 Expected: PASS and static files exist at `packages/web/out/setup.html` and under `packages/web/out/my/{studio,tasks,system}.html`.
 
-- [ ] **Step 6: Commit the Web control plane**
+- [x] **Step 6: Commit the Web control plane**
 
 ```bash
 git add packages/web packages/server/src/routes/my-serve.ts packages/server/tests/integration/homepage-redirect.test.ts
@@ -534,7 +553,7 @@ git commit -m "feat(web): move management into the server control plane"
 - Produces: `GET /api/peer/capabilities` authenticated by target-user API Key.
 - Produces: static-export route `/my/peers` and its admin-only Web navigation entry.
 
-- [ ] **Step 1: Write failing secret and peer tests**
+- [x] **Step 1: Write failing secret and peer tests**
 
 ```ts
 it("stores an encrypted API key and never returns it", async () => {
@@ -551,31 +570,31 @@ it("stores an encrypted API key and never returns it", async () => {
 
 Add a Web test that submits a target URL and API Key, clears the input after submission, lists only public peer metadata, and never redisplays the stored credential.
 
-- [ ] **Step 2: Run peer tests and verify RED**
+- [x] **Step 2: Run peer tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/secret-box.test.ts tests/integration/peers.test.ts`
 
 Expected: FAIL because peer storage and encryption do not exist.
 
-- [ ] **Step 3: Implement master-key and authenticated encryption**
+- [x] **Step 3: Implement master-key and authenticated encryption**
 
 Load a 32-byte key from the configured master-key file. Generate it once with restrictive filesystem permissions when absent. Store versioned `iv.ciphertext.tag` base64url fields and bind the peer ID as additional authenticated data.
 
-- [ ] **Step 4: Implement peer CRUD and capability verification**
+- [x] **Step 4: Implement peer CRUD and capability verification**
 
 Normalize URLs, reject embedded credentials and fragments, require HTTPS unless the administrator explicitly accepts insecure LAN, and fetch capabilities with `Authorization: Bearer <api-key>`. Persist verified user ID, display name, protocol version, limits, and timestamp.
 
-- [ ] **Step 5: Implement the peer Web page and route**
+- [x] **Step 5: Implement the peer Web page and route**
 
 Add `/my/peers` to the Web shell and Server static-route mapping. Keep the API Key only in component state until submission, clear it in `finally`, and render only public peer metadata returned by `PeerStore.listPublic`.
 
-- [ ] **Step 6: Run peer and security tests**
+- [x] **Step 6: Run peer and security tests**
 
 Run: `pnpm -C packages/server exec vitest run tests/secret-box.test.ts tests/integration/peers.test.ts tests/integration/security-boundary.test.ts && pnpm -C packages/web test && pnpm -C packages/web build`
 
 Expected: PASS; logs and JSON snapshots contain no plaintext peer API keys.
 
-- [ ] **Step 7: Commit peer configuration**
+- [x] **Step 7: Commit peer configuration**
 
 ```bash
 git add packages/server packages/web
@@ -604,7 +623,7 @@ git commit -m "feat(server): add encrypted peer connections"
 - Produces persisted job states `queued`, `staging`, `validating`, `backing-up`, `installing`, `activating`, `completed`, `rolled-back`, `failed`, and `recovery-required`.
 - Consumes: `inspectAppPackage` and `installAppPackage` from Task 3.
 
-- [ ] **Step 1: Write failing two-peer application tests**
+- [x] **Step 1: Write failing two-peer application tests**
 
 ```ts
 it("pushes an application to the target API-key owner and preserves target data", async () => {
@@ -626,35 +645,35 @@ it("treats an identical version as idempotent and rejects a digest conflict", as
 });
 ```
 
-- [ ] **Step 2: Run the two-peer test and verify RED**
+- [x] **Step 2: Run the two-peer test and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/two-peer-sync.test.ts`
 
 Expected: FAIL because synchronization sessions and jobs do not exist.
 
-- [ ] **Step 3: Implement target staging sessions**
+- [x] **Step 3: Implement target staging sessions**
 
 Create session metadata under `<data-dir>/.staging/sync/<session-id>`. Stream uploads to `.partial` files while hashing, fsync, verify declared size/digest, then atomically rename. Enforce target capability limits and API-key owner authorization on every request.
 
-- [ ] **Step 4: Implement source push and target commit**
+- [x] **Step 4: Implement source push and target commit**
 
 Build one deterministic package from the active source version, create a target session, upload, commit, and persist progress after every state transition. The target owner always comes from the API Key: the first synchronization creates `<api-key-user>/<unchanged-app-name>`, and later synchronization of that name creates a new local deployment sequence. Compare stable `appVersion` plus `digest`; matching pairs are idempotent and a reused `appVersion` with another digest returns `409`. Delegate installation and rollback to Task 3 services.
 
-- [ ] **Step 5: Implement cancellation, idempotency, and pruning**
+- [x] **Step 5: Implement cancellation, idempotency, and pruning**
 
 Use a client-generated synchronization ID. Repeated metadata and upload calls with matching digests return the existing session. Conflicting metadata returns `409`. Delete abandoned uncommitted sessions after the configured retention period.
 
-- [ ] **Step 6: Add Web synchronization progress**
+- [x] **Step 6: Add Web synchronization progress**
 
 The peers/app UI posts the source sync request, subscribes to job events, displays state history, and offers cancellation before activation. It never sends the peer API key during synchronization.
 
-- [ ] **Step 7: Run Server and Web tests**
+- [x] **Step 7: Run Server and Web tests**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/two-peer-sync.test.ts && pnpm -C packages/web test`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit application synchronization**
+- [x] **Step 8: Commit application synchronization**
 
 ```bash
 git add packages/server packages/web
@@ -680,7 +699,7 @@ git commit -m "feat(sync): add atomic application peer sync"
 - Produces: `replaceAppDataFromSnapshot(input): Promise<void>` with verified rollback.
 - Extends source sync body with `{ withData: true; confirmation: appName }`.
 
-- [ ] **Step 1: Write failing data replacement and rollback tests**
+- [x] **Step 1: Write failing data replacement and rollback tests**
 
 ```ts
 it("replaces target business data and files without replacing users or platform data", async () => {
@@ -704,31 +723,31 @@ it("restores version, database, and files when activation fails", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the data-sync test and verify RED**
+- [x] **Step 2: Run the data-sync test and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/two-peer-data-sync.test.ts`
 
 Expected: FAIL because consistent snapshots and replacement do not exist.
 
-- [ ] **Step 3: Implement source snapshot creation**
+- [x] **Step 3: Implement source snapshot creation**
 
 Acquire the existing application write guard, checkpoint/export the sql.js database, copy uploaded files into a staging tree, write a manifest of relative paths/sizes/digests, archive it, then release the source write guard. Exclude platform databases and configuration by an explicit allowlist of business database and application file roots.
 
-- [ ] **Step 4: Implement target backup, replacement, and verified rollback**
+- [x] **Step 4: Implement target backup, replacement, and verified rollback**
 
 Validate the complete snapshot before pausing target writes. Back up current version metadata, business database, and file root. Replace all three through staged paths, run integrity and application health checks, and resume writes only after success. On failure, restore and hash-verify every backup. Enter `recovery-required` if verification fails.
 
-- [ ] **Step 5: Add explicit Web confirmation**
+- [x] **Step 5: Add explicit Web confirmation**
 
 Require the application name to be typed before enabling `应用 + 数据`. Display that target data and files are replaced while users, permissions, issues, favorites, notifications, tasks, and messages remain local.
 
-- [ ] **Step 6: Run data, backup, and failure tests**
+- [x] **Step 6: Run data, backup, and failure tests**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/two-peer-data-sync.test.ts tests/integration/app-data-management.test.ts tests/integration/upload-atomic-migrations.test.ts && pnpm -C packages/web test`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit data synchronization**
+- [x] **Step 7: Commit data synchronization**
 
 ```bash
 git add packages/server packages/web
@@ -862,7 +881,7 @@ export interface DeviceActivationTicket {
 - Produces local administrator endpoints under `/api/device-actions/local` for pending actions, exact trust grants, revocation, logs, and cancellation.
 - Consumes `packages/server/runner/localapp-runner.mjs`, the bundled Node executable, the Server master key, and Server-owned `<data-dir>/device-actions` directories.
 
-- [ ] **Step 1: Write failing protocol, trust, and two-Server tests**
+- [x] **Step 1: Write failing protocol, trust, and two-Server tests**
 
 ```ts
 it("hands a source action to the Server on the computer that receives the activation", async () => {
@@ -889,13 +908,13 @@ it("requires new confirmation when permissions expand", async () => {
 });
 ```
 
-- [ ] **Step 2: Run Device Action tests and verify RED**
+- [x] **Step 2: Run Device Action tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/device-action-ticket.test.ts tests/device-action-trust.test.ts tests/device-action-executor.test.ts tests/device-action-source-policy.test.ts tests/integration/two-server-device-action.test.ts`
 
 Expected: FAIL because generic tickets, local activation, permission-aware trust, and Server-owned execution do not exist.
 
-- [ ] **Step 3: Generalize and harden the source action protocol**
+- [x] **Step 3: Generalize and harden the source action protocol**
 
 Rename the Desktop-specific stores and routes. Canonicalize and bound every request field, derive publisher identity from the active installed application version, and persist a canonical permission JSON plus SHA-256 digest. Return `localapp://action/<canonical-uuid>?origin=<percent-encoded-origin>&nonce=<base64url>&protocolVersion=2`; reject duplicate or unknown query fields. Keep script, dependencies, and input out of browser status responses and Scheme URLs.
 
@@ -903,23 +922,23 @@ Derive the activation origin from canonical Server configuration, never request 
 
 Claim uses the high-entropy nonce and local installation ID, atomically binds the action to one installation, and returns the action plus an action-scoped callback token. Encrypt that token with the Server master key so the identical installation can retry a lost claim response. Status updates accept only the callback token and bound installation ID; neither the source user's API key nor a synchronized identity is involved.
 
-- [ ] **Step 4: Implement authenticated local activation and durable claim**
+- [x] **Step 4: Implement authenticated local activation and durable claim**
 
 Register `device-control` only when the injected control token is non-empty. Require a loopback socket address, constant-time token comparison, JSON content type, protocol version 2, and a strictly normalized source origin. Persist the activation before returning. The local worker claims only a fixed endpoint with redirects, ambient proxy variables, cookies, and authentication disabled; enforce connect/total timeouts, response bounds, DNS/address revalidation, HTTPS by default, loopback HTTP for development, and private-network HTTP only after explicit local-admin opt-in. It verifies action ID, origin, publisher fields, permissions digest, expiry, and callback credential, then durably records the claimed payload before any trust or execution transition.
 
-- [ ] **Step 5: Implement permission-aware trust and the local Web surface**
+- [x] **Step 5: Implement permission-aware trust and the local Web surface**
 
 Store grants by `(sourceOrigin, appOwner, appName, publisherUserId, permissionsDigest)`. Canonical permission arrays are absolute, normalized, sorted, and duplicate-free. Reuse searches the same origin/application/publisher tuple and accepts an existing grant only when its stored permission set contains the new set. A source, application, publisher, or expanded path/boolean permission enters `awaiting_trust`. Only a local administrator may grant or revoke. Add `/my/device-actions` for pending confirmation, active/history state, exact permission display, trust revocation, cancellation, and local logs; it is a normal static-exported Server Web page, not a Tauri window.
 
-- [ ] **Step 6: Move script execution and dependency preparation into Server**
+- [x] **Step 6: Move script execution and dependency preparation into Server**
 
 Port only the generic behavior from Desktop's execution, runner, environment, and process tests. Prepare exact registry dependencies under a content-addressed Server cache with lifecycle scripts disabled and verified lockfile/integrity metadata. Launch the immutable Server runner with the bundled/current Node executable and `--permission`; always allow the runner, action module, dependency directory, and Server-created working directory, then add requested filesystem roots and `--allow-net`, `--allow-child-process`, or `--allow-worker` only when declared. Resolve existing ancestors and reject/recheck symlink escapes for filesystem grants. Supply a minimal environment that omits JWT, master key, peer keys, API keys, proxy variables, and inherited credential-like names. Persist bounded stdout/stderr, input, and result, enforce timeout, cancel the whole process tree, and recover claimed nonterminal records as `interrupted` unless they had not started and can safely resume preparation.
 
-- [ ] **Step 7: Rename the public SDK without narrowing the application contract**
+- [x] **Step 7: Rename the public SDK without narrowing the application contract**
 
 Keep the existing EventSource-with-polling fallback and abort behavior. Replace `desktop.run` with `device.run`, replace `useDesktopAction` with `useDeviceAction`, add the mandatory permission declaration, and preserve generic script/dependency/input/result typing. No SKILL-specific field or installer API belongs in SDK or Server.
 
-- [ ] **Step 8: Run Device Action, SDK, Web, and Server regression suites**
+- [x] **Step 8: Run Device Action, SDK, Web, and Server regression suites**
 
 Run:
 
@@ -934,7 +953,7 @@ pnpm -C packages/server test
 
 Expected: PASS; the two-Server test writes only inside its project-local fixture directory, a missing permission is denied, a replay is idempotent, and browser-visible responses contain no script or callback credential.
 
-- [ ] **Step 9: Commit generic Device Actions**
+- [x] **Step 9: Commit generic Device Actions**
 
 ```bash
 git add -A packages/server packages/sdk-core packages/sdk-react packages/web
@@ -1299,6 +1318,8 @@ git commit -m "feat(examples): add skill market and resume manager"
 
 **Current boundary:** The packaged Tauri bridge starts its bundled Server on loopback and the in-app Browser renders the formal SKILL market URL with login and permission disclosure. The Browser tool blocks the external `localapp://` navigation as a browser security action, so the final “Web click → native bridge → trust → success” observation still requires a user-level activation in an environment that permits the registered Scheme. No Browser or OS security boundary is bypassed by the test harness.
 
+**Partial implementation record:** The deterministic packaged application acceptance is covered by `packages/server/tests/e2e-unified/real-apps.spec.ts`, and the Tauri bundle, Rust bridge tests, and formal Browser UI inspection passed locally. The broader packaged two-peer/Studio Browser suite remains separate from the user-requested two-application acceptance and is not falsely marked complete.
+
 **Files:**
 - Create: `packages/server/tests/e2e-unified/two-peer.spec.ts`
 - Create: `packages/server/tests/e2e-unified/studio-task.spec.ts`
@@ -1397,6 +1418,6 @@ git add -A
 git commit -m "test: verify unified server distributions end to end"
 ```
 
-- [ ] **Step 11: Stop local processes and preserve the acceptance record**
+- [x] **Step 11: Stop local processes and preserve the acceptance record**
 
 Stop both packaged Servers and the native bridge gracefully. Keep committed source fixtures and the Browser acceptance record; remove only generated runtime subdirectories below `<repo>/tmp/unified-acceptance` after byte comparisons and log capture are complete. Never touch unrelated user content already present under `tmp/`.
