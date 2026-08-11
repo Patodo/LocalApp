@@ -52,6 +52,10 @@ export class AppSyncSource {
     private readonly options: AppSyncSourceOptions = {},
   ) {}
 
+  resolvePeerName(name: string): string | null {
+    return this.peers.findIdByName(name);
+  }
+
   async start(input: {
     ownerId: string; appName: string; peerId: string; withData: false;
   } | {

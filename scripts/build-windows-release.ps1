@@ -512,7 +512,7 @@ function Invoke-BuildWindowsRelease {
   }
 
   if ($Target -in @("All", "Desktop")) {
-    Invoke-External "pnpm" @("--filter", "@localapp/desktop", "runtime:prepare", "--target", "win-x64")
+    Invoke-External "pnpm" @("--filter", "@localapp/desktop", "build")
     $tauriArguments = @("--filter", "@localapp/desktop", "tauri", "build", "--bundles", "nsis", "--target", "x86_64-pc-windows-msvc")
     $tauriConfig = New-TemporaryTauriConfig $Mode
     if ($Mode -eq "Release") {

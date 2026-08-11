@@ -416,7 +416,7 @@ describe("application-only peer synchronization", () => {
   async function startSync(name: string) {
     return fetchJson(`${baseUrl}/api/me/apps/${name}/sync`, {
       method: "POST", headers: { Cookie: adminCookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId, withData: false }),
+      body: JSON.stringify({ peerName: "self-as-independent-peer", withData: false }),
     });
   }
 

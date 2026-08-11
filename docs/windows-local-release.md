@@ -45,11 +45,12 @@ CLI/Desktop packaging path:
 .\scripts\build-windows-release.ps1 -Target All -Mode Test -SkipInstall
 ```
 
-The Desktop installer must contain the pinned Node runtime, Local Runtime
-entrypoint, and SQLite WASM. Validate those source resources before building:
+The optional tray bridge installer must contain the pinned Node runtime, the
+canonical Server entrypoint, and SQLite WASM. Validate those source resources
+before building:
 
 ```powershell
-pnpm --filter @localapp/desktop test:local-runtime-bundle
+pnpm --filter @localapp/desktop test:bundle
 ```
 
 Use `-Target Cli` or `-Target Desktop` to build only one artifact family. Use

@@ -122,7 +122,7 @@ pub(crate) async fn execute_with_target(
             &mut report,
             "session",
             "Application has no deployed version to verify".to_string(),
-            Some("Run localapp upload first"),
+            Some("Run localapp app install first"),
         ));
     }
     report.owner = Some(owner.clone());

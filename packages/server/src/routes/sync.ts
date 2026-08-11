@@ -90,7 +90,10 @@ export async function syncSourceRoutes(app: FastifyInstance, source: AppSyncSour
       const nameError = validateName(request.params.name);
       if (nameError) throw new SyncSourceError(400, nameError, "APP_NAME_INVALID");
       const body = request.body as Record<string, unknown> | null;
-      const peerId = requiredString(body?.peerId, "peerId");
+      const peerId = body?.peerName !== undefined || body?.peer !== undefined
+        ? source.resolvePeerName(requiredString(body?.peerName ?? body?.peer, "peerName"))
+        : requiredString(body?.peerId, "peerId");
+      if (!peerId) throw new SyncSourceError(404, "Peer not found", "PEER_NOT_FOUND");
       let job;
       if (body?.withData === true) {
         const confirmation = requiredString(body.confirmation, "confirmation");

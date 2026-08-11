@@ -73,29 +73,35 @@ localapp db validate
 localapp db types --output src/lib/database.types.ts
 ```
 
-### 4. 本地安装或远端发布
+### 4. 安装、发布与对等同步
 
-个人本地正式运行：
+构建并安装到一个命名 Server：
 
 ```bash
 localapp build --package
-localapp local install
+localapp app install --target local
 ```
 
-`build --package` 生成可移植的 `.localapp`，`local install` 将它安装到 Desktop
-管理的本地应用库。Desktop 使用一个 MiniServer 承载多个本地应用，应用在默认
-浏览器中打开，不要求运行源码目录、Vite 或远端 LocalApp Server。
+`build --package` 生成可移植的 `.localapp`，`app install` 将包提交给目标 Server。
+本地 Server 与远程 Server 使用同一套应用、认证、权限、数据库和文件实现；本地
+运行不需要单独的 MiniServer 或 Local Runtime。
 
-需要发布给团队时，先配置目标 Server，再显式选择该配置：
+配置目标 Server 后显式选择 profile：
 
 ```bash
-localapp server add company --url https://localapp.example.com
-localapp server login company
-localapp upload --profile company --verify
+localapp server add company --server-url https://localapp.example.com --api-key "$LOCALAPP_API_KEY"
+localapp app install --target company
 ```
 
-`upload --profile company --verify` 会构建和上传应用，并在正式应用路径创建
-隔离会话执行 smoke 验收。需要单独复验时可运行：
+应用包和数据同步由源 Server 发起。对端 API Key 只保存在源 Server 的 Web 设置中：
+
+```bash
+localapp app sync --target local --peer company
+localapp app sync --target local --peer company --with-data --confirm-app my-app
+```
+
+默认只同步应用包、manifest、migration 和 backend contract；显式 `--with-data`
+才会整体替换目标端应用数据库与文件，并在目标端失败时回滚。需要单独复验时可运行：
 
 ```bash
 localapp verify --as owner
@@ -184,12 +190,13 @@ localapp backend scaffold --table work_items --security-profile owner
 | --- | --- |
 | `localapp init --name <name>` | 创建并初始化应用 |
 | `localapp build --package` | 构建并生成不含本地数据的 `.localapp` |
-| `localapp local install` | 将当前应用包安装或更新到 Desktop 本地应用库 |
-| `localapp server add/list/use/remove` | 管理多个远端 Server 配置 |
-| `localapp server login <name>` | 登录指定 Server 配置 |
+| `localapp app install --target <name>` | 将当前项目或显式 `.localapp` 包安装到目标 Server |
+| `localapp app sync --peer <name>` | 从当前 Server 向已配置对端同步应用版本 |
+| `localapp app sync --with-data --confirm-app <name>` | 在精确确认后同步应用数据库和文件 |
+| `localapp server add/list/use/remove` | 管理 CLI 使用的 Server 连接 |
+| `localapp login --profile <name>` | 登录并保存指定 Server 的 API Key |
 | `localapp dev` | 启动带 Dev Shell 的本地开发环境 |
-| `localapp check` | 执行上传前完整检查 |
-| `localapp upload --profile <name> --verify` | 发布到明确指定的 Server 并执行 smoke 验收 |
+| `localapp check` | 执行安装前完整检查 |
 | `localapp verify --as owner\|member` | 使用隔离身份复验已发布应用 |
 | `localapp sync` | 更新 CLI 管理的 runtime 和 Agent skills |
 | `localapp platform version` | 查看平台版本与兼容状态 |
@@ -238,14 +245,14 @@ packages/
 ├── sdk-core/     # SDK 核心
 ├── sdk-react/    # React SDK
 ├── sdk-agent/    # Agent/AI SDK
-└── desktop/      # Windows-first Tauri 桌面伴侣
+└── desktop/      # 可选的无窗口 Tauri Server 托盘桥接器
 init-repo/        # 应用内置模板、示例契约和 Agent skills
 openspec/specs/   # 平台行为规格
 ```
 
 ## Docker 部署
 
-生产镜像包含 Server、Web 静态产物和平台运行时，对外只需要一个 HTTP 端口。CLI 与 Desktop 由 GitHub Release 独立分发，镜像不会内嵌这些发行二进制：
+生产镜像包含 Server、Web 静态产物和平台运行时，对外只需要一个 HTTP 端口。CLI 与可选托盘桥接器由 GitHub Release 独立分发，镜像不会内嵌这些发行二进制：
 
 ```bash
 docker build -t localapp-server:local .
@@ -270,16 +277,16 @@ docker save localapp-server:local -o localapp-server.tar
 docker load -i localapp-server.tar
 ```
 
-## Desktop 与 Windows 发行
+## 可选托盘桥接器与 Windows 发行
 
-LocalApp Desktop 是 Windows-first 本地应用管理器和平台伴侣。它维护本地应用
-库，以一个 MiniServer 承载多个已安装应用，并在默认浏览器中打开应用；个人
-用户无需部署远端 LocalApp。Desktop 同时保留通知、收藏、可信本地动作和固定
-JavaScript runner，并可将本地应用按需发布到明确选择的 LocalApp Server。
+Tauri 程序不维护应用库，也不实现另一套后端。它只负责启动当前机器上的同一个
+Node Server、注册 `localapp://` Scheme，并在托盘提供“打开主页”和“退出本地服务”。
+所有管理、认证、应用安装、对端配置和 Device Actions 都由 Server Web 页面与 API
+承载。
 
 Windows CLI 和 Tauri/NSIS 客户端必须在 Windows x64 环境构建。完整的环境准备、签名、校验、上传和干净虚拟机验收流程见：
 
-- [Desktop 说明](packages/desktop/README.md)
+- [托盘桥接器说明](packages/desktop/README.md)
 - [本地运行与按需发布](docs/local-runtime.md)
 - [Windows 本地发行指南](docs/windows-local-release.md)
 - [Windows 构建脚本](scripts/build-windows-release.ps1)

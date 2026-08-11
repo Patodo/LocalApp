@@ -3,7 +3,7 @@ use crate::commands::backend_security::{
     SecurityValidationSummary, security_required_for_platform_range,
     validate_backend_security_files,
 };
-use crate::commands::{db, upload};
+use crate::commands::{app, db};
 use crate::config::{ResolvedTarget, resolve_project_target};
 use crate::platform_capabilities::PlatformCapabilities;
 use crate::pm;
@@ -271,58 +271,6 @@ pub async fn run(json: bool, profile: Option<&str>) -> Result<(), String> {
     }
 }
 
-pub async fn run_for_upload(
-    upload_path: Option<&str>,
-    target: &ResolvedTarget,
-) -> Result<(), String> {
-    let cwd = std::env::current_dir().map_err(|error| format!("Failed to get cwd: {error}"))?;
-    let input_hash = project_input_hash_for(&cwd, upload_path)?;
-    let artifact_state = artifact_cache_state(&cwd, upload_path).ok();
-    if let Some((server_url, _, capability_hash)) = load_target_capabilities(target).await.ok() {
-        if artifact_state
-            .as_ref()
-            .is_some_and(|(artifact_path, artifact_hash)| {
-                read_cache(&cwd).is_some_and(|cache| {
-                    cache.matches_for(
-                        &input_hash,
-                        &server_url,
-                        &capability_hash,
-                        artifact_path,
-                        artifact_hash,
-                    )
-                })
-            })
-        {
-            eprintln!("  ✓ Reusing successful localapp check result");
-            return Ok(());
-        }
-    }
-
-    let result = execute(&cwd, upload_path, CheckMode::Remote(target)).await;
-    if !result.report.success() {
-        return Err(result
-            .report
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-            .map(|diagnostic| diagnostic.message.clone())
-            .unwrap_or_else(|| "Project check failed before upload".to_string()));
-    }
-    eprintln!("  ✓ localapp check passed");
-    let (artifact_path, artifact_hash) = artifact_cache_state(&cwd, upload_path)?;
-    write_cache(
-        &cwd,
-        &CheckCache::successful_for(
-            result.report.input_hash.clone(),
-            result.server_url.as_deref().unwrap_or(""),
-            &result.report.capability_hash,
-            &artifact_path,
-            &artifact_hash,
-        ),
-    )?;
-    Ok(())
-}
-
 pub async fn run_local_for_package(project_dir: &Path) -> Result<(), String> {
     let result = execute(project_dir, None, CheckMode::Local).await;
     if result.report.success() {
@@ -422,7 +370,7 @@ async fn execute(
         project_failed = true;
     }
     if let Some(range) = manifest.platform_version.as_deref() {
-        match upload::validate_platform_version_range(range) {
+        match app::validate_platform_version_range(range) {
             Err(error) => {
                 report.push(
                     Diagnostic::error("PLATFORM_VERSION_INVALID", CheckPhase::Project, error)
@@ -629,9 +577,9 @@ fn validate_backend(
     project_dir: &Path,
     manifest: &Manifest,
 ) -> Result<SecurityValidationSummary, String> {
-    let files = upload::collect_backend_files_for_manifest(project_dir, manifest)?;
-    upload::validate_backend_contract_files(&files)?;
-    let mutations = upload::collect_declared_backend_mutations(&files)?;
+    let files = app::collect_backend_files_for_manifest(project_dir, manifest)?;
+    app::validate_backend_contract_files(&files)?;
+    let mutations = app::collect_declared_backend_mutations(&files)?;
     validate_manifest_collaboration(manifest.collaboration.as_ref(), &mutations)?;
     validate_backend_security_files(
         &files,

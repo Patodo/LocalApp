@@ -79,6 +79,10 @@ export class PeerStore {
     return peer ? publicPeer(peer) : null;
   }
 
+  findIdByName(name: string): string | null {
+    return this.listPublic().find((peer) => peer.name === name)?.id ?? null;
+  }
+
   replaceCredential(id: string, apiKey: string): PeerPublic | null {
     return this.update(id, { apiKey });
   }

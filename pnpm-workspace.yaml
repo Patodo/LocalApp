@@ -1,7 +1,6 @@
 packages:
   - "packages/server"
   - "packages/server-core"
-  - "packages/local-runtime"
   - "packages/backend"
   - "packages/sdk-core"
   - "packages/sdk-react"

@@ -1,4 +1,5 @@
-use crate::client::{Client, collect_files};
+use crate::client::Client;
+use crate::commands::build;
 use crate::config::Config;
 use crate::pm;
 use crate::project::{Manifest, ManifestBackend, ManifestDb, ManifestRequires, is_valid_name};
@@ -181,79 +182,25 @@ fn write_project_files(
     Ok(manifest)
 }
 
-async fn deploy_project(
-    client: &Client,
-    target_dir: &Path,
-    name: &str,
-    manifest: &Manifest,
-) -> Result<(), String> {
-    // Register page
-    eprintln!("  \u{2713} Registering page...");
-    let page_body = serde_json::json!({ "name": name });
-    let (page_status, page_resp) = client.post_json("/api/pages", page_body).await?;
-    if page_status == 409 {
-        eprintln!("  (page already exists, reusing)");
-    } else if page_status != 200 {
-        let error = page_resp["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!(
-            "Page registration failed: {error}\n  You can manually run: localapp new"
-        ));
+async fn deploy_project(client: &Client, target_dir: &Path, name: &str) -> Result<(), String> {
+    eprintln!("  \u{2713} Building application package...");
+    let package = build::build_package(target_dir, Some(&format!("{name}.localapp"))).await?;
+    eprintln!("  \u{2713} Installing on the configured Server...");
+    let (status, response) = client.install_package(&package.path).await?;
+    if !matches!(status, 200 | 201) || response["success"].as_bool() != Some(true) {
+        return Err(response["error"]
+            .as_str()
+            .unwrap_or("Application installation failed")
+            .to_string());
     }
-
-    // Build
-    eprintln!("  \u{2713} Building project...");
-    pm::run_build(target_dir)
-        .map_err(|e| format!("{e}\n  Fix the build, then run: localapp upload"))?;
-
-    // Upload
-    eprintln!("  \u{2713} Uploading...");
-    let dist_dir = target_dir.join("dist");
-    if !dist_dir.is_dir() {
-        return Err("dist/ directory not found after build. Run 'localapp upload' manually after fixing the build.".to_string());
-    }
-
-    let files = collect_files(&dist_dir)?;
-    if files.is_empty() {
-        return Err("No files found in dist/. Run 'localapp upload' manually.".to_string());
-    }
-
-    let db_config = manifest
-        .db
-        .as_ref()
-        .map(|db| serde_json::to_string(db).unwrap_or_default());
-    let manifest_json = serde_json::to_string(manifest).unwrap_or_default();
-    let backend_files =
-        crate::commands::upload::collect_backend_files_for_manifest(target_dir, manifest)?;
-
-    let (upload_status, upload_body) = client
-        .upload_with_description(
-            name,
-            files,
-            Vec::new(),
-            backend_files,
-            &manifest.description,
-            db_config.as_deref(),
-            None,
-            None,
-            Some(&manifest_json),
-        )
-        .await?;
-
-    if upload_status != 200 || !upload_body["success"].as_bool().unwrap_or(false) {
-        let error = upload_body["error"].as_str().unwrap_or("Upload failed");
-        return Err(format!("Upload failed: {}", error));
-    }
-
-    let page_url = upload_body["data"]["url"].as_str().unwrap_or("");
-    let raw_url = upload_body["data"]["rawUrl"].as_str().unwrap_or("");
-    eprintln!("  \u{2713} Deployed!");
-    let output = serde_json::json!({
-        "created": name,
-        "url": page_url,
-        "rawUrl": raw_url,
-    });
-    println!("{output}");
-
+    println!(
+        "{}",
+        serde_json::json!({
+            "created": name,
+            "operation": "install",
+            "data": response["data"],
+        })
+    );
     Ok(())
 }
 
@@ -303,9 +250,7 @@ pub async fn run(
             "created": name
         });
         println!("{output}");
-        eprintln!(
-            "  \u{26a0} Skipping deployment. Run 'localapp upload' manually when ready to deploy."
-        );
+        eprintln!("  \u{26a0} Skipping deployment. Run 'localapp app install' when ready.");
         return Ok(());
     }
 
@@ -342,7 +287,7 @@ pub async fn run(
     }
 
     // Write project files (manifest.json + dev-config.json)
-    let manifest = write_project_files(&target_dir, name, description, cfg.base_url())?;
+    let _manifest = write_project_files(&target_dir, name, description, cfg.base_url())?;
 
     // npm install (skip if --skip-install)
     if skip_install {
@@ -355,7 +300,7 @@ pub async fn run(
             .map_err(|e| format!("{e}\n  You can manually run: cd {} && npm install", name))?;
     }
 
-    deploy_project(&client, &target_dir, name, &manifest).await
+    deploy_project(&client, &target_dir, name).await
 }
 
 #[cfg(test)]

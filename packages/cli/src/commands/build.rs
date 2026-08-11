@@ -1,5 +1,5 @@
 use crate::commands::check;
-use crate::commands::upload::{collect_backend_files_for_manifest, collect_package_source_tree};
+use crate::commands::app::{collect_backend_files_for_manifest, collect_package_source_tree};
 use crate::project::Manifest;
 use localapp_core::{AppPackageMetadata, build_app_package_from_files};
 use serde::Deserialize;
@@ -16,17 +16,44 @@ fn default_version() -> String {
     "0.0.0".into()
 }
 
+pub(crate) struct PackageBuildResult {
+    pub path: PathBuf,
+    pub app_id: String,
+    pub version: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
 pub async fn run(package: bool, output: Option<&str>) -> Result<(), String> {
     if !package {
         return Err("The build command currently requires --package".into());
     }
     let cwd = std::env::current_dir().map_err(|error| format!("Failed to get cwd: {error}"))?;
-    check::run_local_for_package(&cwd).await?;
-    let manifest = Manifest::read_validated(&cwd)?
+    let result = build_package(&cwd, output).await?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "success": true,
+            "appId": result.app_id,
+            "version": result.version,
+            "path": result.path,
+            "sha256": result.sha256,
+            "size": result.size,
+        })
+    );
+    Ok(())
+}
+
+pub async fn build_package(
+    project: &Path,
+    output: Option<&str>,
+) -> Result<PackageBuildResult, String> {
+    check::run_local_for_package(project).await?;
+    let manifest = Manifest::read_validated(project)?
         .ok_or_else(|| "No manifest.json found. Run 'localapp init' first.".to_string())?;
-    let version = read_project_version(&cwd)?;
-    let output = resolve_output(&cwd, output, &manifest.name);
-    let files = collect_canonical_package_files(&cwd, &manifest)?;
+    let version = read_project_version(project)?;
+    let output = resolve_output(project, output, &manifest.name);
+    let files = collect_canonical_package_files(project, &manifest)?;
     let summary = build_app_package_from_files(
         &output,
         AppPackageMetadata {
@@ -41,18 +68,13 @@ pub async fn run(package: bool, output: Option<&str>) -> Result<(), String> {
         files,
     )
     .map_err(|error| error.to_string())?;
-    println!(
-        "{}",
-        serde_json::json!({
-            "success": true,
-            "appId": summary.metadata.app_id,
-            "version": summary.metadata.version,
-            "path": output,
-            "sha256": summary.sha256,
-            "size": summary.size,
-        })
-    );
-    Ok(())
+    Ok(PackageBuildResult {
+        path: output,
+        app_id: summary.metadata.app_id,
+        version: summary.metadata.version,
+        sha256: summary.sha256,
+        size: summary.size,
+    })
 }
 
 fn collect_canonical_package_files(

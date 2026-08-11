@@ -1083,7 +1083,7 @@ git commit -m "refactor(desktop): replace client with native server bridge"
 - Removes `localapp desktop`, `localapp local install`, and `localapp upload` entirely.
 - Removes `@localapp/local-runtime` from the pnpm workspace and dependency graph.
 
-- [ ] **Step 1: Write failing CLI parser and request tests**
+- [x] **Step 1: Write failing CLI parser and request tests**
 
 ```rust
 #[test]
@@ -1095,31 +1095,31 @@ fn parses_unified_app_commands_and_rejects_removed_commands() {
 }
 ```
 
-- [ ] **Step 2: Run CLI tests and verify RED**
+- [x] **Step 2: Run CLI tests and verify RED**
 
 Run: `cargo test --manifest-path packages/cli/Cargo.toml parses_unified_app_commands`
 
 Expected: FAIL because the old command tree is still present.
 
-- [ ] **Step 3: Implement Server-targeted application commands**
+- [x] **Step 3: Implement Server-targeted application commands**
 
 `app install` builds the current project or reads an explicit `--package <path>` `.localapp` package and posts it to `/api/me/apps/install` using the selected connection API Key. `app sync` asks the active (or explicitly selected) source Server to start `/api/me/apps/:name/sync`; the peer name resolves inside that Server, so the target peer credential is never copied into CLI configuration. `--with-data` requires `--confirm-app <exact-name>` in non-interactive mode and an exact typed name in interactive mode.
 
-- [ ] **Step 4: Delete old commands and Local Runtime**
+- [x] **Step 4: Delete old commands and Local Runtime**
 
 Remove the command variants, modules, tests, workspace entry, bundle scripts, and documentation. Update root and release scripts so searching tracked files for `@localapp/local-runtime`, `localapp-local-runtime`, or `localapp local install` returns no production references.
 
-- [ ] **Step 5: Rewrite product documentation around one Server and equal peers**
+- [x] **Step 5: Rewrite product documentation around one Server and equal peers**
 
 Document Node startup, the optional native bridge, first-run setup, loopback/LAN settings, application installation, peer API keys, application-only sync, explicit data sync, Device Action activation, and clean-state policy. Remove MiniServer, legacy upload, and Desktop-management terminology from user-facing workflows. Task 13 separately owns generated-application guidance.
 
-- [ ] **Step 6: Run CLI, workspace, and documentation tests**
+- [x] **Step 6: Run CLI, workspace, and documentation tests**
 
 Run: `cargo test --manifest-path packages/cli/Cargo.toml && pnpm install --lockfile-only && pnpm -r build && pnpm -r test`
 
 Expected: PASS with no Local Runtime workspace package.
 
-- [ ] **Step 7: Commit the breaking CLI and package removal**
+- [x] **Step 7: Commit the breaking CLI and package removal**
 
 ```bash
 git add -A packages/cli packages/local-runtime pnpm-workspace.yaml pnpm-lock.yaml README.md docs init-repo scripts package.json

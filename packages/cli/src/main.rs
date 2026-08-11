@@ -25,8 +25,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 启动 LocalApp Desktop 桌面客户端（普通用户的主入口）
-    Desktop,
     /// 查看 CLI 命令帮助（`localapp <command>` 即可执行，无需此前缀）
     Cli,
     /// 创建新项目（含模板下载、依赖安装、首次部署）
@@ -68,35 +66,18 @@ enum Commands {
         #[arg(long)]
         output: Option<String>,
     },
-    /// 管理 Desktop 本地应用
-    Local {
-        #[command(subcommand)]
-        action: LocalAction,
-    },
     /// 管理命名 LocalApp Server
     Server {
         #[command(subcommand)]
         action: ServerAction,
     },
+    /// 安装应用包或在对等 Server 之间同步应用
+    App {
+        #[command(subcommand)]
+        action: AppAction,
+    },
     /// 创建新页面并关联到当前项目
     New,
-    /// 上传构建产物到服务器
-    Upload {
-        /// 本地目录路径（默认读取项目配置中的 distDir）
-        path: Option<String>,
-        /// 跳过 db validate（危险）
-        #[arg(long)]
-        skip_validate: bool,
-        /// 跳过 validate 时必须提供项目名确认
-        #[arg(long)]
-        confirm_project_name: Option<String>,
-        /// 部署后创建隔离会话并执行正式路径 smoke 验证
-        #[arg(long)]
-        verify: bool,
-        /// 发布到指定 Server profile
-        #[arg(long)]
-        profile: Option<String>,
-    },
     /// 在上传前检查平台能力、数据库、backend、测试、构建和 dist
     Check {
         /// 只向 stdout 输出一个机器可读 JSON 报告
@@ -195,11 +176,30 @@ enum GenerateAction {
 }
 
 #[derive(Subcommand)]
-enum LocalAction {
-    /// 将 .localapp 安装到正在运行的 LocalApp Desktop
+enum AppAction {
+    /// 将当前项目构建并安装到目标 Server，或安装显式指定的 .localapp 包
     Install {
-        /// .localapp 文件路径
-        package: String,
+        /// 目标 Server profile；省略时使用项目默认或当前 Server
+        #[arg(long)]
+        target: Option<String>,
+        /// 显式 .localapp 包路径；省略时从当前项目构建
+        #[arg(long)]
+        package: Option<String>,
+    },
+    /// 从当前 Server 将应用版本同步到已配置的对等 Server
+    Sync {
+        /// 对等 Server 名称（凭据只保存在当前 Server）
+        #[arg(long)]
+        peer: String,
+        /// 源 Server profile；省略时使用项目默认或当前 Server
+        #[arg(long)]
+        target: Option<String>,
+        /// 同步应用数据库和上传文件；需要精确确认应用名称
+        #[arg(long)]
+        with_data: bool,
+        /// --with-data 时必须与 manifest.json 中的应用名完全一致
+        #[arg(long)]
+        confirm_app: Option<String>,
     },
 }
 
@@ -365,14 +365,10 @@ enum BackendAction {
 async fn main() {
     let cli = Cli::parse();
 
-    // 无子命令或显式 `desktop`：启动 LocalApp Desktop（普通用户的主入口）。
-    // `cli`：打印 CLI 命令帮助（实际执行无需此前缀，直接 `localapp <command>`）。
+    // 无子命令或显式 `cli`：打印 CLI 帮助。Server 本身由 Node 包或可选原生桥启动。
     match cli.command {
-        None | Some(Commands::Desktop) => {
-            if let Err(e) = commands::desktop::launch() {
-                eprintln!("{}", serde_json::json!({ "error": e }));
-                std::process::exit(1);
-            }
+        None => {
+            let _ = Cli::command().print_help();
             return;
         }
         Some(Commands::Cli) => {
@@ -382,7 +378,7 @@ async fn main() {
         _ => {}
     }
 
-    // 到达此处的都是已有 CLI 子命令（Init/Upload/...），前面已排除 None/Desktop/Cli。
+    // 到达此处的都是已有 CLI 子命令，前面已排除 None/Cli。
     let command = cli.command.expect("command resolved above");
     let result = match command {
         Commands::Init {
@@ -402,9 +398,6 @@ async fn main() {
         Commands::Build { package, output } => {
             commands::build::run(package, output.as_deref()).await
         }
-        Commands::Local { action } => match action {
-            LocalAction::Install { package } => commands::local::install(&package).await,
-        },
         Commands::Server { action } => match action {
             ServerAction::Add {
                 name,
@@ -415,23 +408,26 @@ async fn main() {
             ServerAction::Use { name } => commands::server::use_profile(&name),
             ServerAction::Remove { name } => commands::server::remove(&name),
         },
+        Commands::App { action } => match action {
+            AppAction::Install { target, package } => {
+                commands::app::install(target.as_deref(), package.as_deref()).await
+            }
+            AppAction::Sync {
+                peer,
+                target,
+                with_data,
+                confirm_app,
+            } => {
+                commands::app::sync(
+                    &peer,
+                    target.as_deref(),
+                    with_data,
+                    confirm_app.as_deref(),
+                )
+                .await
+            }
+        },
         Commands::New => commands::new_page::run().await,
-        Commands::Upload {
-            path,
-            skip_validate,
-            confirm_project_name,
-            verify,
-            profile,
-        } => {
-            commands::upload::run(
-                path.as_deref(),
-                skip_validate,
-                confirm_project_name.as_deref(),
-                verify,
-                profile.as_deref(),
-            )
-            .await
-        }
         Commands::Check { json, profile } => commands::check::run(json, profile.as_deref()).await,
         Commands::Verify {
             as_identity,
@@ -559,7 +555,7 @@ async fn main() {
             },
         },
         // 前置 match 已处理并 return，逻辑上不会到达。
-        Commands::Desktop | Commands::Cli => unreachable!("desktop/cli handled before dispatch"),
+        Commands::Cli => unreachable!("cli handled before dispatch"),
     };
 
     if let Err(e) = result {
@@ -573,7 +569,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, LocalAction, SCHEMAS_DEPRECATED_MESSAGE};
+    use super::{Cli, Commands, SCHEMAS_DEPRECATED_MESSAGE};
     use clap::Parser;
 
     #[test]
@@ -622,19 +618,6 @@ mod tests {
     }
 
     #[test]
-    fn upload_command_accepts_production_verification() {
-        let cli = Cli::try_parse_from(["localapp", "upload", "./dist", "--verify"])
-            .expect("upload --verify should parse");
-        match cli.command {
-            Some(Commands::Upload { path, verify, .. }) => {
-                assert_eq!(path.as_deref(), Some("./dist"));
-                assert!(verify);
-            }
-            _ => panic!("upload command should parse"),
-        }
-    }
-
-    #[test]
     fn local_first_commands_and_server_profiles_are_parseable() {
         let build = Cli::try_parse_from([
             "localapp",
@@ -652,14 +635,17 @@ mod tests {
             _ => panic!("build command should parse"),
         }
 
-        let install = Cli::try_parse_from(["localapp", "local", "install", "app.localapp"])
-            .expect("local install should parse");
-        match install.command {
-            Some(Commands::Local {
-                action: LocalAction::Install { package },
-            }) => assert_eq!(package, "app.localapp"),
-            _ => panic!("local install command should parse"),
-        }
+        let install = Cli::try_parse_from([
+            "localapp",
+            "app",
+            "install",
+            "--target",
+            "staging",
+            "--package",
+            "app.localapp",
+        ])
+        .expect("app install should parse");
+        assert!(matches!(install.command, Some(Commands::App { .. })));
 
         for arguments in [
             vec![
@@ -682,19 +668,6 @@ mod tests {
 
     #[test]
     fn remote_commands_accept_an_explicit_profile() {
-        let upload =
-            Cli::try_parse_from(["localapp", "upload", "--profile", "staging", "--verify"])
-                .expect("upload --profile should parse");
-        match upload.command {
-            Some(Commands::Upload {
-                profile, verify, ..
-            }) => {
-                assert_eq!(profile.as_deref(), Some("staging"));
-                assert!(verify);
-            }
-            _ => panic!("upload command should parse"),
-        }
-
         let check = Cli::try_parse_from(["localapp", "check", "--profile", "staging"])
             .expect("check --profile should parse");
         assert!(matches!(
@@ -717,17 +690,38 @@ mod tests {
     }
 
     #[test]
-    fn bare_command_parses_as_none_and_desktop_subcommand_exists() {
-        // `localapp` 无子命令 → None，由 main 分流去启动 Desktop。
+    fn bare_command_parses_as_none_and_cli_help_exists() {
+        // `localapp` 无子命令 → None，由 main 打印 CLI 帮助。
         let bare = Cli::parse_from(["localapp"]);
         assert!(bare.command.is_none());
-
-        // `localapp desktop` 显式启动 Desktop。
-        let desktop = Cli::parse_from(["localapp", "desktop"]);
-        assert!(matches!(desktop.command, Some(Commands::Desktop)));
 
         // `localapp cli` 进入命令帮助。
         let cli_help = Cli::parse_from(["localapp", "cli"]);
         assert!(matches!(cli_help.command, Some(Commands::Cli)));
+    }
+
+    #[test]
+    fn parses_unified_app_commands_and_rejects_removed_commands() {
+        assert!(Cli::try_parse_from([
+            "localapp",
+            "app",
+            "install",
+            "--target",
+            "local",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "localapp",
+            "app",
+            "sync",
+            "--peer",
+            "office",
+            "--with-data",
+            "--confirm-app",
+            "notes",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["localapp", "local", "install", "x.localapp"]).is_err());
+        assert!(Cli::try_parse_from(["localapp", "upload"]).is_err());
     }
 }

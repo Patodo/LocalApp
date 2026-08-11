@@ -1,215 +1,9 @@
-use crate::client::{Client, collect_files};
-use crate::commands::backend_security::{
-    security_required_for_platform_range, validate_backend_security_files,
-};
-use crate::commands::check;
-use crate::commands::verify;
-use crate::config::resolve_project_target;
+use crate::client::collect_files;
 use crate::platform_capabilities::embedded_platform_capabilities;
-use crate::pm;
-use crate::project::{Manifest, ManifestBackend, validate_manifest_collaboration};
-use localapp_core::PublishResult;
-use sha2::{Digest, Sha256};
+use crate::project::{Manifest, ManifestBackend};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-
-pub async fn run(
-    path: Option<&str>,
-    skip_validate: bool,
-    confirm_project_name: Option<&str>,
-    verify_deployment: bool,
-    profile: Option<&str>,
-) -> Result<(), String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("Failed to get cwd: {e}"))?;
-    let target = resolve_project_target(profile, &cwd)?;
-    let config = target.as_config();
-
-    let manifest = Manifest::read_validated(&cwd)?
-        .ok_or("No manifest.json found. Run 'localapp init' first.")?;
-
-    if manifest.name.is_empty() {
-        return Err("No name in manifest.json".to_string());
-    }
-
-    if skip_validate && confirm_project_name != Some(manifest.name.as_str()) {
-        return Err(format!(
-            "Skipping validation is dangerous. Add --confirm-project-name {} to proceed.",
-            manifest.name
-        ));
-    }
-
-    let client = Client::new(&config);
-    if skip_validate {
-        pm::check_available()?;
-    } else {
-        check::run_for_upload(path, &target).await?;
-    }
-
-    let upload_path = match path {
-        Some(p) => {
-            // Explicit path: skip build, just upload
-            p.to_string()
-        }
-        None => {
-            if skip_validate {
-                eprintln!("  \u{2713} Building project...");
-                pm::run_build(&cwd)?;
-                build_backend_actions_if_present(&cwd, &manifest)?;
-            }
-
-            if manifest.dist_dir.is_empty() {
-                return Err("No distDir in manifest.json and no path specified".to_string());
-            }
-            format!("./{}", manifest.dist_dir)
-        }
-    };
-
-    let dir = Path::new(&upload_path);
-    if !dir.is_dir() {
-        return Err(format!("Directory not found: {upload_path}"));
-    }
-
-    let files = collect_files(dir)?;
-    if files.is_empty() {
-        return Err(format!("No files found in: {upload_path}"));
-    }
-
-    let migrations = collect_migrations(&cwd.join("migrations"))?;
-    let backend_files = collect_backend_files_for_manifest(&cwd, &manifest)?;
-    if skip_validate {
-        validate_backend_contract_files(&backend_files)?;
-        validate_backend_security_files(
-            &backend_files,
-            security_required_for_platform_range(manifest.platform_version.as_deref()),
-        )?;
-        let declared_mutations = collect_declared_backend_mutations(&backend_files)?;
-        validate_manifest_collaboration(manifest.collaboration.as_ref(), &declared_mutations)?;
-    }
-
-    if skip_validate {
-        match manifest.platform_version.as_deref() {
-            Some(range) => validate_platform_version_range(range)?,
-            None => eprintln!(
-                "manifest.json missing platformVersion. Defaulting to current platform version '^1.0'."
-            ),
-        }
-    }
-
-    let db_config = manifest
-        .db
-        .as_ref()
-        .map(|db| serde_json::to_string(db).unwrap_or_default());
-
-    let shell_config = manifest
-        .shell
-        .as_ref()
-        .map(|shell| serde_json::to_string(shell).unwrap_or_default());
-
-    let notify_config = manifest
-        .notify
-        .as_ref()
-        .map(|notify| serde_json::to_string(notify).unwrap_or_default());
-
-    let manifest_json = serde_json::to_string(&manifest).unwrap_or_default();
-
-    ensure_page_registered(&client, &manifest.name).await?;
-    let (status, body) = client
-        .upload_with_description(
-            &manifest.name,
-            files,
-            migrations,
-            backend_files,
-            &manifest.description,
-            db_config.as_deref(),
-            shell_config.as_deref(),
-            notify_config.as_deref(),
-            Some(&manifest_json),
-        )
-        .await?;
-
-    if status != 200 || !body["success"].as_bool().unwrap_or(false) {
-        let error = body["error"].as_str().unwrap_or("Upload failed");
-        return Err(error.to_string());
-    }
-
-    let page_url = body["data"]["url"].as_str().unwrap_or("");
-    let raw_url = body["data"]["rawUrl"].as_str().unwrap_or("");
-
-    let output = serde_json::to_value(PublishResult {
-        name: body["data"]["name"]
-            .as_str()
-            .unwrap_or(&manifest.name)
-            .to_string(),
-        url: page_url.to_string(),
-        raw_url: raw_url.to_string(),
-        version: body["data"]["version"].as_u64().unwrap_or_default(),
-        profile: target.profile_name.clone(),
-        server_url: target.base_url().to_string(),
-    })
-    .map_err(|error| format!("Failed to serialize publish result: {error}"))?;
-    if !verify_deployment {
-        println!("{output}");
-        return Ok(());
-    }
-
-    match verify::execute_with_target("owner", &target).await {
-        Ok(report) => {
-            println!("{}", upload_verification_output(&output, &report, true));
-            Ok(())
-        }
-        Err((report, error)) => {
-            println!("{}", upload_verification_output(&output, &report, false));
-            let version = output["version"].as_u64().unwrap_or(0);
-            Err(format!(
-                "Version {version} was deployed, but production verification failed: {error}"
-            ))
-        }
-    }
-}
-
-fn upload_verification_output(
-    upload: &serde_json::Value,
-    verification: &verify::VerificationReport,
-    verification_started: bool,
-) -> serde_json::Value {
-    let verification =
-        serde_json::to_value(verification).expect("verification report should serialize");
-    let status = if verification_started {
-        verification["status"].as_str().unwrap_or("pending-browser")
-    } else {
-        "verification-failed"
-    };
-    serde_json::json!({
-        "success": verification_started,
-        "status": status,
-        "name": upload["name"],
-        "url": upload["url"],
-        "rawUrl": upload["rawUrl"],
-        "version": upload["version"],
-        "profile": upload["profile"],
-        "serverUrl": upload["serverUrl"],
-        "deployment": {
-            "status": "deployed",
-            "version": upload["version"],
-            "url": upload["url"],
-            "rawUrl": upload["rawUrl"],
-        },
-        "verification": verification,
-        "suggestions": if verification_started {
-            Vec::<String>::new()
-        } else {
-            vec![
-                "Inspect the deployed version before deciding whether to keep or roll it back"
-                    .to_string(),
-                "Resolve the verification failure and rerun localapp verify --as owner --json"
-                    .to_string(),
-            ]
-        },
-    })
-}
-
 pub(crate) fn collect_declared_backend_mutations(
     backend_files: &[(String, Vec<u8>)],
 ) -> Result<Vec<String>, String> {
@@ -230,77 +24,6 @@ pub(crate) fn collect_declared_backend_mutations(
     mutations.sort();
     mutations.dedup();
     Ok(mutations)
-}
-
-async fn ensure_page_registered(client: &Client, name: &str) -> Result<(), String> {
-    let body = serde_json::json!({ "name": name });
-    let (status, resp) = client.post_json("/api/pages", body).await?;
-    if status == 200 || status == 409 {
-        return Ok(());
-    }
-    let error = resp["error"].as_str().unwrap_or("Unknown error");
-    Err(format!("Page registration failed before upload: {error}"))
-}
-
-fn build_backend_actions_if_present(project_dir: &Path, manifest: &Manifest) -> Result<(), String> {
-    let root = manifest
-        .backend
-        .as_ref()
-        .and_then(|backend| backend.root.as_deref())
-        .unwrap_or("backend");
-    let actions_dir = project_dir.join(root).join("actions");
-    if !actions_dir.exists() || !contains_action_source(&actions_dir)? {
-        return Ok(());
-    }
-
-    Err("Hosted actions are disabled in stable LocalApp backend contracts. Use named SQL, transaction mutation, or a platform primitive instead.".to_string())
-}
-
-fn _build_backend_actions_if_present_legacy(
-    project_dir: &Path,
-    _manifest: &Manifest,
-) -> Result<(), String> {
-    let script = project_dir.join(".localapp/runtime/build-actions.mjs");
-    if !script.exists() {
-        return Err("Backend actions require .localapp/runtime/build-actions.mjs. Run `localapp sync` to refresh the runtime.".to_string());
-    }
-
-    eprintln!("  \u{2713} Building backend actions...");
-    let output = Command::new("node")
-        .arg(&script)
-        .arg(project_dir)
-        .current_dir(project_dir)
-        .output()
-        .map_err(|e| format!("Failed to run backend action builder: {e}"))?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Backend action build failed:\n{}\n{}",
-            stdout.trim(),
-            stderr.trim()
-        ));
-    }
-    Ok(())
-}
-
-fn contains_action_source(dir: &Path) -> Result<bool, String> {
-    let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read backend actions: {e}"))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if contains_action_source(&path)? {
-                return Ok(true);
-            }
-        } else if matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("ts" | "tsx" | "js" | "mjs")
-        ) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 pub(crate) fn collect_backend_files_for_manifest(
@@ -1582,32 +1305,6 @@ fn is_sql_keyword(value: &str) -> bool {
     )
 }
 
-fn collect_migrations(migrations_dir: &Path) -> Result<Vec<(String, Vec<u8>, String)>, String> {
-    if !migrations_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut paths = fs::read_dir(migrations_dir)
-        .map_err(|e| format!("Failed to read migrations directory: {e}"))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("sql"))
-        .collect::<Vec<_>>();
-    paths.sort();
-
-    let mut migrations = Vec::new();
-    for path in paths {
-        let filename = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("Invalid migration filename: {}", path.display()))?
-            .to_string();
-        let data =
-            fs::read(&path).map_err(|e| format!("Failed to read migration {filename}: {e}"))?;
-        let checksum = format!("{:x}", Sha256::digest(&data));
-        migrations.push((filename, data, checksum));
-    }
-    Ok(migrations)
-}
-
 pub fn validate_platform_version_range(range: &str) -> Result<(), String> {
     let trimmed = range.trim();
     if trimmed.starts_with('^') && trimmed.len() > 1 {
@@ -1617,6 +1314,22 @@ pub fn validate_platform_version_range(range: &str) -> Result<(), String> {
         return Ok(());
     }
     Err("Invalid platformVersion range".to_string())
+}
+
+#[cfg(test)]
+fn contains_action_source(dir: &Path) -> Result<bool, String> {
+    for entry in fs::read_dir(dir).map_err(|error| format!("Failed to read actions: {error}"))? {
+        let path = entry
+            .map_err(|error| format!("Failed to read action entry: {error}"))?
+            .path();
+        if path.is_dir() && contains_action_source(&path)? {
+            return Ok(true);
+        }
+        if matches!(path.extension().and_then(|extension| extension.to_str()), Some("ts" | "tsx" | "js" | "mjs")) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

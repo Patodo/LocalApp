@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::commands::upload::{
+use crate::commands::app::{
     collect_backend_files_for_manifest, validate_backend_contract_files,
 };
 use crate::config::Config;

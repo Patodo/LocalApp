@@ -179,89 +179,36 @@ impl Client {
         Ok((status, body))
     }
 
-    pub async fn upload_with_description(
-        &self,
-        page_name: &str,
-        files: Vec<(String, Vec<u8>)>,
-        migrations: Vec<(String, Vec<u8>, String)>,
-        backend_files: Vec<(String, Vec<u8>)>,
-        description: &str,
-        db_config: Option<&str>,
-        shell_config: Option<&str>,
-        notify_config: Option<&str>,
-        manifest_json: Option<&str>,
-    ) -> Result<(u16, Value), String> {
-        let url = format!("{}/api/upload", self.base_url);
-        let mut form = multipart::Form::new();
-        form = form.text("name", page_name.to_string());
-
-        if !description.is_empty() {
-            form = form.text("description", description.to_string());
-        }
-
-        if let Some(db) = db_config {
-            form = form.text("dbConfig", db.to_string());
-        }
-
-        if let Some(shell) = shell_config {
-            form = form.text("shellConfig", shell.to_string());
-        }
-
-        if let Some(notify) = notify_config {
-            form = form.text("notifyConfig", notify.to_string());
-        }
-
-        if let Some(manifest) = manifest_json {
-            let part = multipart::Part::text(manifest.to_string())
-                .file_name("manifest.json")
-                .mime_str("application/json")
-                .map_err(|e| format!("MIME error: {e}"))?;
-            form = form.part("manifest", part);
-        }
-
-        for (index, (filename, data)) in files.into_iter().enumerate() {
-            form = form.text(format!("filepath_{index}"), filename.clone());
-            let part = multipart::Part::bytes(data)
-                .file_name(filename.clone())
-                .mime_str("application/octet-stream")
-                .map_err(|e| format!("MIME error: {e}"))?;
-            form = form.part("files", part);
-        }
-
-        for (filename, data, checksum) in migrations {
-            form = form.text(format!("migrationChecksum_{filename}"), checksum);
-            let part = multipart::Part::bytes(data)
-                .file_name(filename.clone())
-                .mime_str("application/octet-stream")
-                .map_err(|e| format!("MIME error: {e}"))?;
-            form = form.part(format!("migration_{filename}"), part);
-        }
-
-        for (index, (filename, data)) in backend_files.into_iter().enumerate() {
-            form = form.text(format!("backendFilepath_{index}"), filename.clone());
-            let part = multipart::Part::bytes(data)
-                .file_name(filename.clone())
-                .mime_str("application/json")
-                .map_err(|e| format!("MIME error: {e}"))?;
-            form = form.part("backendFiles", part);
-        }
-
-        let res = self
+    pub async fn install_package(&self, package_path: &Path) -> Result<(u16, Value), String> {
+        let bytes = fs::read(package_path)
+            .map_err(|error| format!("Failed to read application package: {error}"))?;
+        let filename = package_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "Application package filename is invalid".to_string())?;
+        let part = multipart::Part::bytes(bytes)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|error| format!("MIME error: {error}"))?;
+        let form = multipart::Form::new().part("package", part);
+        let url = format!("{}/api/me/apps/install", self.base_url);
+        let response = self
             .http
-            .post(&url)
+            .post(url)
             .header("X-API-Key", &self.api_key)
             .header("X-CLI-Version", VERSION)
             .multipart(form)
             .send()
             .await
-            .map_err(|e| format!("Upload failed: {e}"))?;
-        let status = res.status().as_u16();
-        let body = res
+            .map_err(|error| format!("Request failed: {error}"))?;
+        let status = response.status().as_u16();
+        let body = response
             .json::<Value>()
             .await
-            .map_err(|e| format!("Failed to parse response: {e}"))?;
+            .map_err(|error| format!("Failed to parse response: {error}"))?;
         Ok((status, body))
     }
+
 }
 
 pub fn collect_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
