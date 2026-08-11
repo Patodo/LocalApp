@@ -2,23 +2,23 @@
 
 ## 测试方法
 
-端到端验证 Agent 功能时，按以下步骤操作：
+端到端验证 Agent 和应用功能时，所有生成项目、Server 数据、上传文件和下载文件都放在本仓库的 `tmp/` 下：
 
-1. **启动 server** — 在本项目目录运行 `npm run dev`（等同于 `npm run dev:server`）
-2. **初始化测试应用** — 在临时目录用 CLI 的 builtin init-repo 模板初始化一个应用：
+1. **启动统一 Server** — 在本项目目录运行 `npm run dev`（等同于 `npm run dev:server`）。
+2. **初始化测试应用** — 使用 CLI 的 builtin 模板在 `tmp/` 下创建项目：
    ```bash
-   mkdir -p /tmp/localapp-test && cd /tmp/localapp-test
+   mkdir -p tmp/localapp-test && cd tmp/localapp-test
    localapp init  # 使用 builtin 模板
    ```
-3. **用 Codex 实现应用** — 在初始化的目录中使用 bash 工具结合 Codex 的 prompt 参数，让 Codex 按照 init-repo/.Codex/skills/ 中的 skill 指引实现应用：
+3. **实现应用** — 遵循生成项目中的 `AGENTS.md` 和 `.claude/skills/localapp*/`。
+4. **安装到明确的 Server** — 构建并安装应用包：
    ```bash
-   Codex --print "实现一个请假表单应用..." < prompt.txt
+   localapp check --json
+   localapp app install --target local
    ```
-4. **上传到 server** — 使用 CLI 上传构建产物：
-   ```bash
-   localapp upload
-   ```
-5. **回到本项目检查** — 回到 localapp 主项目目录，使用 chrome-devtools MCP 工具访问 `http://localhost:3000/{user}/{app}/`，验证应用功能和 agent 行为。`/serve/{user}/{app}/` 仅用于 raw app resource/API 诊断。
+5. **正式入口验证** — 使用 `browser:control-in-app-browser` 访问 Server 返回的 `/<owner>/<app>/` URL，检查 DOM、console、核心读写和权限边界。`/serve/<owner>/<app>/` 只用于 raw app resource/API 诊断，不能作为功能验收入口。
+
+本地应用临时产物不得写入系统 `/tmp`；测试结束后只清理本项目 `tmp/` 下本次创建的明确目录。
 
 ## 导航栏设计
 

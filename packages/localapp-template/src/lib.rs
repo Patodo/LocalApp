@@ -1,7 +1,7 @@
 //! LocalApp 应用模板抽取。
 //!
 //! 提供 init-repo 模板（编译期内嵌）的用户领地 / CLI 领地抽取能力，
-//! 供 CLI 的 `localapp init` / `sync` 和 Desktop 的 Studio 工作台复用。
+//! 供 CLI 的 `localapp init` / `sync` 和统一 Server 的应用工作台复用。
 
 use include_dir::{Dir, DirEntry, include_dir};
 use std::fs;
@@ -189,7 +189,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
 /// 写入 `.localapp/runtime/version.json`，内容为 `{"cliVersion": "<version>"}`。
 ///
 /// 用于 sync 比对：用户项目的 runtime 版本号 vs 当前工具版本号。
-/// 调用方传入具体的版本字符串（CLI 版本、Desktop 版本等）。
+/// 调用方传入当前 CLI/Server 工具链的版本字符串。
 pub fn write_runtime_version(target_dir: &Path, version: &str) -> Result<(), String> {
     let version_path = target_dir.join(".localapp/runtime/version.json");
     if let Some(parent) = version_path.parent() {
@@ -203,7 +203,7 @@ pub fn write_runtime_version(target_dir: &Path, version: &str) -> Result<(), Str
 
 /// 后处理用户项目 `package.json`：
 /// - 将 `workspace:*` 引用替换为 `file:./.localapp/runtime/...`
-/// - 将 mini-server 所需的 `@localapp/server-core` 指向内置 runtime 包
+/// - 将统一 Server SDK 所需的 `@localapp/server-core` 指向内置 runtime 包
 /// - 兼容旧架构：把 `file:./vendor/sdk-*` 迁移到 `file:./.localapp/runtime/sdk/*`
 /// - 注入跨平台 postinstall 钩子，安装后静默尝试刷新 CLI 领地
 /// - 清理 runtime/sdk/ 内残留的 `workspace:*` 引用

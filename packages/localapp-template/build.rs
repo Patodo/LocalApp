@@ -26,6 +26,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../../init-repo/vitest.config.ts");
     println!("cargo:rerun-if-changed=../../init-repo/tailwind.config.js");
     println!("cargo:rerun-if-changed=../../init-repo/CLAUDE.md");
+    println!("cargo:rerun-if-changed=../../init-repo/AGENTS.md");
+    println!("cargo:rerun-if-changed=../../init-repo/.npmrc");
     println!("cargo:rerun-if-changed=../../init-repo/manifest.json");
     println!("cargo:rerun-if-changed=../../init-repo/.claude/skills");
     println!("cargo:rerun-if-changed=../../init-repo/runtime");

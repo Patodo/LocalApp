@@ -38,7 +38,7 @@ LocalApp 提供内置 SQLite 数据库，两种生产推荐方式：声明式 CR
 1. 在 `migrations/001_<description>.sql` 中写 SQLite DDL。
 2. 运行 `localapp db reset` 重建本地 `.localapp/dev.db`。
 3. 运行 `localapp db types -o src/types.ts` 从真实数据库生成类型。
-4. 上传前运行 `localapp db validate`，通过后再 `localapp upload`。
+4. 安装前运行 `localapp db validate`，通过后再 `localapp app install --target <server-profile>`。
 
 示例：
 ```sql

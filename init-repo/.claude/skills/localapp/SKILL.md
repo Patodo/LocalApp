@@ -1,8 +1,8 @@
 ---
 name: localapp
 description: >
-  LocalApp 前端应用托管平台的开发与部署指南。当用户提到 localapp、部署前端页面、
-  创建托管项目、上传构建产物，或当前目录包含 manifest.json 时使用此 skill。
+LocalApp 统一 Server 应用的开发与部署指南。当用户提到 localapp、部署前端页面、
+创建托管项目、安装应用包，或当前目录包含 manifest.json 时使用此 skill。
   也适用于用户说"部署一下"、"上传页面"、"创建项目"、"init 项目"、
   "帮我做一个 xxx 应用"等场景。即使用户没有明确说 localapp，
   只要涉及在 LocalApp 平台上开发或部署，都应使用此 skill。
@@ -10,7 +10,7 @@ description: >
 
 # LocalApp
 
-介于低代码与高度自定义之间的应用平台，内置 named SQL、用户身份、内容上传和正式路径隔离验收。目标不是“构建成功”，而是让用户创建应用后立即在正式入口看到可用结果。
+介于低代码与高度自定义之间的应用平台，内置 named SQL、用户身份、内容上传和正式路径隔离验收。所有部署都是同一个 Server；目标不是“构建成功”，而是让用户创建应用后立即在正式入口看到可用结果。
 
 ## 项目识别
 
@@ -50,13 +50,12 @@ cd my-app
 npm install
 localapp dev                       # 本地开发和多身份/时间/数据验证
 localapp check --json              # 本地契约、测试、构建和 dist 门禁
-localapp build --package           # 生成不含本地数据的 .localapp
-localapp local install             # 安装到 Desktop 并进行个人本地正式验收
+localapp app install --target local # 构建并安装到本机 Server
 ```
 
 后续更新：
 ```bash
-localapp check --json && localapp build --package && localapp local install
+localapp check --json && localapp app install --target local
 ```
 
 只有用户明确要求团队共享或远端部署时，才执行：
@@ -64,10 +63,10 @@ localapp check --json && localapp build --package && localapp local install
 ```bash
 localapp server add company --url https://localapp.example.com
 localapp server login company
-localapp upload --profile company --verify
+localapp app install --target company
 ```
 
-远端 `upload --verify` 返回 `browserUrl` 后，必须用浏览器访问该 URL，并检查：
+`app install` 返回正式路径后，必须用应用内 Browser 访问 `/<owner>/<app>/`，并检查：
 
 1. DOM 有实际业务内容且无错误占位。
 2. console 没有未处理错误。
@@ -82,12 +81,20 @@ localapp upload --profile company --verify
 成功部署后，平台保存应用上传的 `manifest.json` 快照。应用所有者可在 `/my/apps/<app>/settings` 维护独立的 `manifest.platform.json`：
 
 - 运行时 `manifest.platform.json` 优先，缺失字段回退到 `manifest.json`。
-- 后续 `localapp upload` 更新应用自带 manifest，但不会覆盖平台配置。
+- 后续 `localapp app install --target <name>` 更新应用自带 manifest，但不会覆盖平台配置。
 - 设置页切到“应用自带配置”时所有 manifest 控件只读。
 - 本阶段平台只允许覆盖描述、页面访问、Shell、数据库权限和通知配置。
 - 线上行为与本地 manifest 不一致时，先检查平台配置，不要直接修改 raw `/serve/` 资源。
 
 应用数据库备份、导入导出和恢复出厂设置位于同一设置页的数据管理页签。导入、恢复和恢复出厂设置会先创建安全备份；恢复出厂设置不会删除应用或版本。
+
+## 通用 Device Actions
+
+当应用需要在当前点击按钮的电脑上执行本机操作时，只调用 SDK 的 `device.run()`，不要为某个应用或某个外部工具扩展 Server API。激活前展示操作和最小权限；默认关闭网络和子进程权限，`childProcess` 等价于当前操作系统用户权限下的任意代码执行。脚本只接收结构化输入，校验相对路径/大小边界并返回有限大小的 JSON 结果。`localapp://` 只传递短期激活票据，不传脚本、依赖、凭据或用户数据。完整示例见 `localapp-device-actions` skill。
+
+## 媒体预览基础设施
+
+模板固定 `react-pdf@10.4.1`、`pdfjs-dist@6.1.200` 和 `yet-another-react-lightbox@3.32.1`。PDF 预览用 `Document` / `Page` 配置已安装的 PDF.js worker，包含 loading、错误和页码导航；图片预览提供 alt 文本、键盘导航和下载。所有本地 object URL 在文件变化或组件卸载时调用 `URL.revokeObjectURL()`。上传继续使用 `useUpload()` 和 authenticated content URL，预览不读取 raw `/serve/` 资源。
 
 ## CLI 命令参考
 
@@ -100,12 +107,11 @@ localapp login                     # 配置 server URL + API key
 ### 项目管理
 ```bash
 localapp init --name <name>        # 创建项目（--description 可选）
-localapp build --package           # 构建并生成 .localapp
-localapp local install             # 安装或更新到 Desktop 本地应用库
-localapp new                       # 注册页面到服务端（首次）
-localapp upload --profile <name>   # 上传到明确指定的 Server profile
-localapp upload --profile <name> --verify # 部署并执行正式 smoke
-localapp check --json              # 上传前结构化门禁
+localapp build --package           # 构建并生成 .localapp（需要单独查看包时使用）
+localapp app install --target <name> # 构建并安装/更新到明确的 Server profile
+localapp app sync --peer <name>    # 在对等 Server 间同步应用版本
+localapp app sync --peer <name> --with-data --confirm-app <exact-name> # 显式替换应用和数据
+localapp check --json              # 安装前结构化门禁
 localapp verify --as owner --json  # 对已部署版本单独发起 owner 验收
 localapp verify --as member --json # 对已部署版本单独发起 member 验收
 ```
@@ -215,7 +221,7 @@ const post = await query("posts.withAuthor", { id: 1 });
 
 身份、时间、reset/restore 后会触发 `localapp:dev-context-changed`，SDK 数据 hooks 会自动刷新订阅资源。
 
-`localapp dev` 会启动本地 mini-server 隔离开发态数据。应用侧应通过 SDK 调用数据、用户、分组、上传、named SQL 和时间 API；mini-server 与生产 serve 使用同一套应用 API 路由契约，避免本地可用、线上不可用或反向漂移。
+`localapp dev` 会把开发应用接到当前统一 Server，并将本地验收数据放在项目 `tmp/` 下。应用侧应通过 SDK 调用数据、用户、分组、上传、named SQL 和时间 API；开发 Server 与其他部署使用同一套应用 API 路由契约，避免本地可用、线上不可用或反向漂移。
 
 ## 访问控制
 

@@ -2,60 +2,43 @@
 
 ## 平台概述
 
-你的应用运行在 LocalApp 平台上——React + TypeScript + Vite，运行在 native shell 中。平台自动处理用户认证和导航。
+你的应用运行在统一 LocalApp Server 上——React + TypeScript + Vite。每个本地或远程部署都是同一个 Server、同一套用户/权限/API/上传和 PlatformShell；它们是独立对等端，只有显式的应用同步或应用加数据同步，不存在单独的客户端后端。
 
 ## 开发工作流
 
 每次修改代码后，默认按顺序执行：
 
 1. `npm run build` — 构建前端
-2. `localapp check` — 检查平台契约
-3. `localapp build --package` — 生成 `.localapp`
-4. `localapp local install` — 安装或更新到 Desktop 本地应用库
+2. `localapp check --json` — 检查平台契约
+3. `localapp app install --target <server-profile>` — 构建并安装到明确的 Server
 
-个人本地正式运行不要求部署 LocalApp Server。只有用户明确要求团队共享、企业
-能力或远端部署时，才配置 Server profile 并执行
-`localapp upload --profile <name> --verify`。本地安装与远端发布是两个独立动作，
-不会自动同步数据库或文件。
+本地开发和远程发布使用同一个 `localapp app install` 流程，只是目标 Server profile 不同。应用包默认只包含代码、manifest、migration 和 backend contract；数据库、上传文件、用户和权限不会随应用更新自动同步。需要整体迁移时，显式使用 `localapp app sync --with-data --confirm-app <exact-name>`，目标端会先备份，失败自动回滚。
 
-平台会把本次成功上传的完整配置保存为只读的 `manifest.json` 快照。应用所有者还可以在“我的应用 → 设置”维护独立的 `manifest.platform.json`；运行时平台配置优先，未覆盖字段回退到应用自带配置，后续 upload 不会覆盖平台配置。排查本地与线上配置差异时，应在设置页切换查看两份配置。设置页“数据管理”提供生产数据库导出、备份、导入、恢复和恢复出厂设置；恢复出厂设置保留应用与部署版本，只重建空数据库并清除平台配置。
+Server 会保存每次发布的 `manifest.json` 快照。应用所有者可以在“我的应用 → 设置”维护平台覆盖配置；运行时平台配置优先，未覆盖字段回退到应用自带配置。设置页“数据管理”提供备份、导出、导入、恢复和恢复出厂设置，恢复出厂设置不会删除应用版本。
 
-本地安装后从 Desktop 打开应用，验证由 Local Runtime 提供的正式本地形态。
-远端发布后使用命令返回的 `/<userId>/<pageName>/` 地址验证 PlatformShell。
-自部署开发 Server 的完整示例是
-`http://localhost:3000/<userId>/<pageName>/`。
-`/serve/<userId>/<pageName>/` 是远端平台内部 raw app resource/API base，只用于
-静态资源、SPA fallback 或 API 诊断，不作为应用功能验收入口。
+正式应用 URL 是 `/<owner>/<app>/`，自部署 Server 的完整示例是 `http://localhost:3000/<userId>/<pageName>/`。必须在这个正式入口验证 PlatformShell、DOM、console、核心交互和权限；`/serve/<userId>/<pageName>/` 是 raw app resource/API base，只用于静态资源、SPA fallback 或 API 诊断，不作为应用功能验收入口。最终本地验收使用应用内 Browser。
 
 ### 本地开发（`npm run dev` / `localapp dev`）
 
-`npm run dev` 会委托给 `localapp dev`，启动本地 mini-server 和 Vite dev server。命令会写入 `.localapp/dev-config.json`，包含：
+`npm run dev` 会启动项目开发代理和当前配置的统一 Server，配置写入 `.localapp/dev-config.json`。Server 数据、上传和下载文件应显式配置在项目 `tmp/` 下；不要使用系统 `/tmp`。
 
-- `serverUrl` — 远程 server 地址
-- `userId` — 当前 API key 对应身份（用于 proxy 路径改写）
-- `pageName` — 取自 `manifest.json`
-- `apiKey` — 当前登录用户的 API key（**未登录时为空字符串**）
-- `miniServerPort` — 本地 mini-server 端口
+- `serverUrl` — 当前 Server 地址
+- `userId` / `pageName` — 应用正式路径上下文
+- `apiKey` — 当前登录用户的 API key（不写入应用代码）
+- `tmp/` 下的项目级数据目录 — 本地验收状态
 
-vite-plugin 读取 dev-config 实现：
-
-- `/api/llm/*` 转发到 `serverUrl`（需要登录/平台连接）
-- 其他 `/api/*` 转发到本地 mini-server，读写 `.localapp/dev.db`
-- 远端转发请求会自动注入 `X-API-Key` header（值来自 `apiKey`），无需手动处理鉴权
-- dev 模式自动注入 DevShell 工具栏（生产构建不含）
-
-**未登录（apiKey 为空）时**：本地应用 API、`useMe()`、`useUsers()`、`useGroups()`、文件上传、named SQL 和平台数据 mock 都应继续可用；只有远端平台数据、上传部署和 AI/LLM 等需要平台鉴权的能力不可用。需要连接平台时再运行 `localapp login`。
+开发代理只负责把应用请求接到当前 Server；SDK 自动处理同页 API 路径、认证和 named SQL。开发模式可注入 Dev Toolkit，生产构建不包含它。
 
 #### DevShell 验证工具
 
-`localapp dev` 会在左上角注入 **Dev Toolkit**。开发时优先用它验证本地行为：
+开发时优先用 Dev Toolkit 验证本地行为：
 
 - **Identity**：切换 `dev-user` / `alice` / `bob` / 未登录，检查 `defaultFrom: "currentUser.id"`、`recordAccess`、`useMe()` 和权限 UI。
 - **Time**：切换真实时间或固定 ISO 时间，检查 transition 的 `"now"`、进度、截止日期和时间相关视图。
-- **Data**：重置 `.localapp/dev.db`、创建 snapshot、restore snapshot。reset 会重新应用 migrations 和 `db/seeds/dev.sql`。
+- **Data**：重置项目 `tmp/` 下的本地 Server 数据、创建 snapshot、restore snapshot；reset 会重新应用 migrations 和 `db/seeds/dev.sql`。
 - **Diagnostics**：查看最近 API 请求，以及 `manifest.business` 中的 `recordAccess`、`defaultFields`、`transitions`、`enums`。
 
-Dev Toolkit 修改身份、时间或恢复数据后会派发 `localapp:dev-context-changed`，SDK 数据 hooks 会自动刷新订阅资源；通常不需要手动刷新页面。
+身份、时间或恢复数据变化后 SDK 数据 hooks 会自动刷新订阅资源；通常不需要手动刷新页面。
 
 ### 首次拉取项目（团队成员）
 
@@ -110,6 +93,20 @@ CLI 升级后（运行 `localapp update`），用户运行 `localapp sync --inte
 - **不要调用 hosted action**: `client.action()` / `useAction()` 仅保留为 legacy/unsupported helper；稳定应用应使用 `client.query()`、`client.mutate()`、`useQuery()`、`useMutation()` 或平台明确提供的原语。
 - **`src/main.tsx` 必须只渲染 `<App />`**: DevShell 由 vite-plugin 在 dev 模式自动注入，生产构建不进入 bundle。**不要在 main.tsx 中 import 或包裹 DevShell**——否则会破坏 dev/prod 隔离，导致生产构建包含 DevShell 工具栏
 - **禁止修改 CLI 领地**: `.localapp/runtime/` 和 `.claude/skills/localapp*/` 由 `localapp sync` 管理，手动改动会被覆盖；不要从应用脚本 patch runtime 或构建 `.localapp/runtime/server-core`，需要恢复时运行 `localapp sync --force`
+
+## Device Actions
+
+需要在当前点击按钮的这台电脑上完成本机操作时，使用通用 SDK `device.run()`，不要在 Server 中添加特定市场、特定工具或特定客户端的后端接口。请求应声明最小的 `filesystemRead` / `filesystemWrite` 目录，默认关闭 `network` 和 `childProcess`；child process 等价于当前操作系统用户权限下的任意代码执行，必须单独说明风险。
+
+在激活前向用户展示标题、描述、输入、目标路径和权限。脚本接收结构化 `input`，校验相对路径和大小，保持幂等，并返回有限大小、可 JSON 序列化的结果。`localapp://` 只携带短期激活票据，不携带脚本、依赖、凭据或用户数据。通用示例见 `.claude/skills/localapp-device-actions/SKILL.md`；应用专属目录布局和第三方工具适配器由应用自己定义。
+
+## 媒体上传与预览
+
+模板已固定 `react-pdf@10.4.1`、`pdfjs-dist@6.1.200` 和 `yet-another-react-lightbox@3.32.1`。文件仍通过 `useUpload()` 上传到 Server 内容存储，数据库只保存 key、MIME、大小和业务元数据。
+
+- PDF 预览用 `react-pdf` 的 `Document` / `Page`，从已安装的 `pdfjs-dist` worker 配置 Vite-safe worker URL；展示 loading、错误、页码导航，并在替换/卸载时清理 object URL。
+- 图片预览必须有描述性的 `alt`、键盘可操作的上一张/下一张和下载入口；本地预览产生的 object URL 在文件变化或组件卸载时调用 `URL.revokeObjectURL()`。
+- 预览组件不读取 raw `/serve/` 路径，也不绕过 authenticated content URL；正式验证从 `/<owner>/<app>/` 进行。
 
 ## SDK 快速上手
 
@@ -229,7 +226,7 @@ const result = await upload(file);  // { key: string, url: string }
 
 ## 部署注意事项
 
-- **上传目录结构**: `localapp upload` 自动保留 `dist/` 下的子目录结构（如 `assets/`）。如果手动调用上传 API，需要为每个文件提供 `filepath_N` 字段来保留目录层级。
+- **应用包目录结构**: `localapp app install --target <server-profile>` 会保留 `dist/` 下的子目录结构（如 `assets/`）。如果应用使用 SDK content upload，上传文件由 Server 内容 API 管理，不要把用户文件打进应用包。
 - **自定义查询**: 生产应用把所有数据 SQL 注册到 `backend/resources/<name>/queries.json` / `mutations.json`，前端用 `client.query()`、`client.mutate()`、`useQuery()` 或 `useMutation()` 调用。**没有 raw SQL 端点**——所有数据操作必须声明为 named SQL。
 
 ## SQL Migration 数据建模

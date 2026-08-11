@@ -143,7 +143,7 @@ function PublicHome() {
     { command: "localapp --version", title: "下载 CLI", text: "从下方选择对应平台下载命令行工具，并确认安装版本。", icon: Download },
     { command: `localapp login --server-url ${serverOrigin}`, title: "连接实例", text: "使用 API Key 将 CLI 绑定到当前 LocalApp 实例。", icon: LogIn },
     { command: "localapp init --name my-app", title: "创建并开发", text: "从内置模板开始，让 Agent 直接实现可维护的 React 业务应用。", icon: Package },
-    { command: "localapp check && localapp upload --verify", title: "检查并发布", text: "一次完成契约、测试、构建、上传和正式路径验收。", icon: UploadCloud },
+    { command: "localapp check && localapp app install --target local", title: "检查并发布", text: "一次完成契约、测试、构建、安装和正式路径验收。", icon: UploadCloud },
   ];
 
   const gates = [

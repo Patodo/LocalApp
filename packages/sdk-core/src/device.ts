@@ -101,7 +101,7 @@ export function createDeviceApi(environment: DeviceApiEnvironment = {}): DeviceA
 export const device = createDeviceApi();
 
 function rewriteDevicePath(value: string): string {
-  return value.replaceAll("/api/desktop-actions", "/api/device-actions");
+  return value.split("/api/desktop-actions").join("/api/device-actions");
 }
 
 interface EventSourceLike {

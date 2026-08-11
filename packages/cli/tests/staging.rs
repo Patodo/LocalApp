@@ -1,4 +1,4 @@
-//! Staging 行为测试：验证 build.rs 生成的 target/init-repo-staging/ 结构。
+//! Staging 行为测试：验证 localapp-template crate 生成的嵌入模板 staging 结构。
 //!
 //! 这些测试依赖 build.rs 已运行（cargo test 会自动先跑 build.rs）。
 
@@ -6,7 +6,7 @@ use std::path::Path;
 
 fn staging_dir() -> std::path::PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    Path::new(manifest_dir).join("target/init-repo-staging")
+    Path::new(manifest_dir).join("../localapp-template/target/init-repo-staging")
 }
 
 #[test]
@@ -97,8 +97,8 @@ fn staging_agent_skill_requires_the_full_delivery_loop() {
 
     assert!(content.contains("localapp check --json"));
     assert!(content.contains("localapp build --package"));
-    assert!(content.contains("localapp local install"));
-    assert!(content.contains("localapp upload --profile <name> --verify"));
+    assert!(content.contains("localapp app install --target <name>"));
+    assert!(content.contains("localapp app sync --peer <name>"));
     assert!(content.contains("localapp verify --as member --json"));
     assert!(content.contains("deployment.status=deployed"));
     assert!(content.contains("verification.status=pending-browser"));

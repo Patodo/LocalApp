@@ -28,7 +28,7 @@
 }
 ```
 
-发布前使用 `localapp check --json` 校验声明与实际代码，随后使用 `localapp upload --verify`。命令返回 `pending-browser` 时仍需在正式 URL 验证图片/PDF 读取，PDF 场景还应验证完整读取或 Range 请求。
+安装前使用 `localapp check --json` 校验声明与实际代码，随后使用 `localapp app install --target <server-profile>`。命令返回正式应用路径后，仍需在 `/<owner>/<app>/` 验证图片/PDF 读取，PDF 场景还应验证完整读取或 Range 请求。
 
 ## useUpload() — 上传图片
 
