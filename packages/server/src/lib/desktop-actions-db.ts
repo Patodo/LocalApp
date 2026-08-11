@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { flushMetaDb, getDb } from "./meta-sqlite.js";
+import {
+  canonicalizeDeviceActionPermissions,
+  deviceActionPermissionsDigest,
+  type DeviceActionPermissionSet,
+} from "./device-action-types.js";
 
 export const DESKTOP_ACTION_SCRIPT_MAX_BYTES = 256 * 1024;
 export const DESKTOP_ACTION_INPUT_MAX_BYTES = 1024 * 1024;
@@ -43,6 +48,7 @@ export interface CreateDesktopActionInput {
   dependencies?: Record<string, string>;
   input?: unknown;
   timeoutSeconds?: number;
+  permissions?: DeviceActionPermissionSet;
 }
 
 export interface DesktopActionError {
@@ -65,6 +71,8 @@ export interface DesktopActionRecord {
   dependencies: Record<string, string>;
   input: unknown;
   timeoutSeconds: number;
+  permissions: DeviceActionPermissionSet;
+  permissionsDigest: string;
   nonce: string;
   installationId: string | null;
   status: DesktopActionStatus;
@@ -97,6 +105,8 @@ export interface PendingDesktopAction {
   description: string | null;
   createdAt: string;
   expiresAt: string;
+  permissions: DeviceActionPermissionSet;
+  permissionsDigest: string;
 }
 
 type DesktopActionRow = Record<string, unknown>;
@@ -226,6 +236,8 @@ function actionFromRow(row: DesktopActionRow): DesktopActionRecord {
     dependencies: JSON.parse(String(row.dependencies_json)) as Record<string, string>,
     input: JSON.parse(String(row.input_json)) as unknown,
     timeoutSeconds: Number(row.timeout_seconds),
+    permissions: canonicalizeDeviceActionPermissions(JSON.parse(String(row.permissions_json ?? "{}"))),
+    permissionsDigest: String(row.permissions_digest ?? ""),
     nonce: String(row.nonce),
     installationId: row.installation_id === null ? null : String(row.installation_id),
     status: String(row.status) as DesktopActionStatus,
@@ -249,6 +261,14 @@ function selectAction(userId: string, id: string): DesktopActionRecord | null {
   return action;
 }
 
+function selectActionById(id: string): DesktopActionRecord | null {
+  const stmt = getDb().prepare("SELECT * FROM desktop_actions WHERE id = ?");
+  stmt.bind([id]);
+  const action = stmt.step() ? actionFromRow(stmt.getAsObject()) : null;
+  stmt.free();
+  return action;
+}
+
 function toSnapshot(action: DesktopActionRecord): DesktopActionSnapshot {
   const { script: _script, dependencies: _dependencies, input: _input, nonce: _nonce, installationId: _installationId, ...snapshot } = action;
   return snapshot;
@@ -265,6 +285,17 @@ export function createDesktopAction(input: CreateDesktopActionInput, now = new D
   const dependencies = validateDependencies(input.dependencies);
   const dependenciesJson = jsonStringify(dependencies, "DESKTOP_ACTION_INVALID_DEPENDENCIES");
   const inputJson = boundedJson(input.input ?? null, DESKTOP_ACTION_INPUT_MAX_BYTES, "DESKTOP_ACTION_INPUT_TOO_LARGE", "DESKTOP_ACTION_INVALID_INPUT");
+  let permissions: DeviceActionPermissionSet = {};
+  if (input.permissions !== undefined) {
+    try {
+      permissions = canonicalizeDeviceActionPermissions(input.permissions);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "DEVICE_ACTION_INVALID_PERMISSIONS";
+      fail(code.replace(/^DEVICE_ACTION_/, "DESKTOP_ACTION_"));
+    }
+  }
+  const permissionsJson = jsonStringify(permissions, "DESKTOP_ACTION_INVALID_PERMISSIONS");
+  const permissionsDigest = deviceActionPermissionsDigest(permissions);
   const timeoutSeconds = input.timeoutSeconds ?? DESKTOP_ACTION_DEFAULT_TIMEOUT_SECONDS;
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600) fail("DESKTOP_ACTION_INVALID_TIMEOUT");
 
@@ -284,6 +315,10 @@ export function createDesktopAction(input: CreateDesktopActionInput, now = new D
     input.publisherUserId, input.publisherDisplayName ?? null, input.title, input.description ?? null,
     input.script, dependenciesJson, inputJson, timeoutSeconds, nonce, createdAt, createdAt, expiresAt,
   ]);
+  getDb().run(
+    "UPDATE desktop_actions SET permissions_json = ?, permissions_digest = ? WHERE id = ?",
+    [permissionsJson, permissionsDigest, id],
+  );
   flushMetaDb();
   return selectAction(input.userId, id)!;
 }
@@ -327,6 +362,8 @@ export function listPendingDesktopActions(userId: string, now = new Date()): Pen
       description: action.description,
       createdAt: action.createdAt,
       expiresAt: action.expiresAt,
+      permissions: action.permissions,
+      permissionsDigest: action.permissionsDigest,
     });
   }
   stmt.free();
@@ -392,6 +429,50 @@ export function claimDesktopAction(
   return { outcome: "claimed", action: selectAction(userId, id)!, idempotent: false };
 }
 
+export type ClaimDeviceActionResult =
+  | { outcome: "claimed"; action: DesktopActionRecord; idempotent: boolean }
+  | { outcome: "conflict" | "expired" | "invalid_nonce" | "not_found" };
+
+/** Claim using the high-entropy activation nonce, without copying source identity. */
+export function claimDeviceAction(
+  id: string,
+  nonce: string,
+  installationId: string,
+  expectedServerOrigin?: string,
+  now = new Date(),
+): ClaimDeviceActionResult {
+  expirePendingDesktopActions(now);
+  const existing = selectActionById(id);
+  if (!existing) return { outcome: "not_found" };
+  if (expectedServerOrigin !== undefined && existing.serverOrigin !== expectedServerOrigin) {
+    return { outcome: "not_found" };
+  }
+  if (existing.nonce !== nonce) return { outcome: "invalid_nonce" };
+  if (existing.status === "expired") return { outcome: "expired" };
+  if (existing.installationId !== null) {
+    return existing.installationId === installationId
+      ? { outcome: "claimed", action: existing, idempotent: true }
+      : { outcome: "conflict" };
+  }
+  if (existing.status !== "pending") return { outcome: "conflict" };
+
+  const timestamp = now.toISOString();
+  const database = getDb();
+  database.run(`
+    UPDATE desktop_actions
+    SET installation_id = ?, status = 'claimed', claimed_at = ?, updated_at = ?
+    WHERE id = ? AND nonce = ? AND status = 'pending'
+      AND installation_id IS NULL AND expires_at > ?
+  `, [installationId, timestamp, timestamp, id, nonce, timestamp]);
+  if (database.getRowsModified() === 0) {
+    const winner = selectActionById(id);
+    if (winner?.installationId === installationId) return { outcome: "claimed", action: winner, idempotent: true };
+    return winner?.status === "expired" ? { outcome: "expired" } : { outcome: "conflict" };
+  }
+  flushMetaDb();
+  return { outcome: "claimed", action: selectActionById(id)!, idempotent: false };
+}
+
 export interface TransitionDesktopActionInput {
   userId: string;
   id: string;
@@ -445,6 +526,26 @@ export function transitionDesktopAction(
   }
   flushMetaDb();
   return { outcome: "updated", action: toSnapshot(selectAction(input.userId, input.id)!), changed: true };
+}
+
+export function transitionDeviceAction(input: {
+  id: string;
+  callbackToken: string;
+  installationId: string;
+  status: DesktopActionStatus;
+  result?: unknown;
+  error?: DesktopActionError | null;
+}, now = new Date()): TransitionDesktopActionResult {
+  const existing = selectActionById(input.id);
+  if (!existing || existing.nonce !== input.callbackToken) return { outcome: "not_found" };
+  return transitionDesktopAction({
+    userId: existing.userId,
+    id: input.id,
+    installationId: input.installationId,
+    status: input.status,
+    ...(input.result === undefined ? {} : { result: input.result }),
+    ...(input.error === undefined ? {} : { error: input.error }),
+  }, now);
 }
 
 export function cleanupDesktopActions(completedBefore: Date): number {

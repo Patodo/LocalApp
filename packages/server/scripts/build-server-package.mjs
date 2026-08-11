@@ -19,6 +19,7 @@ export async function buildServerPackage(options = {}) {
   const outputDirectory = path.resolve(options.outputDirectory ?? process.env.LOCALAPP_SERVER_PACKAGE_DIR ?? defaultOutputDirectory);
   const binDirectory = path.join(outputDirectory, "bin");
   const webDirectory = path.join(outputDirectory, "web");
+  const runnerDirectory = path.join(outputDirectory, "runner");
   const sqlDirectory = path.join(outputDirectory, "node_modules/sql.js");
   const sourcePackage = JSON.parse(await fs.readFile(path.join(serverDirectory, "package.json"), "utf8"));
   const webOutput = path.join(projectDirectory, "packages/web/out");
@@ -27,6 +28,8 @@ export async function buildServerPackage(options = {}) {
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
   await fs.cp(webOutput, webDirectory, { recursive: true });
+  await fs.mkdir(runnerDirectory, { recursive: true, mode: 0o755 });
+  await fs.cp(path.join(serverDirectory, "runner/localapp-runner.mjs"), path.join(runnerDirectory, "localapp-runner.mjs"));
 
   const bundleOptions = {
     bundle: true,

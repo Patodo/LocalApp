@@ -30,6 +30,7 @@ import { getSubscriptionStatus } from "../lib/subscriptions-db.js";
 import { shouldPushToSubscriber } from "../lib/notify-routing.js";
 import { wsManager } from "../lib/ws-manager.js";
 import { handleDesktopActionCreation } from "./desktop-actions.js";
+import { handleDeviceActionCreation } from "./device-actions.js";
 import {
   VERIFICATION_APP_COOKIE,
   VERIFICATION_ME_COOKIE,
@@ -293,9 +294,10 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
 
       req.verificationSession = resolveVerification(app, req, userId, pageName, VERIFICATION_APP_COOKIE);
       const isDesktopActionCreation = restPath === "api/desktop-actions" && req.method === "POST";
-      const desktopActionApiKey = isDesktopActionCreation ? req.headers["x-api-key"] : undefined;
-      const pageVisitorId = req.verificationSession?.actorId ?? (typeof desktopActionApiKey === "string"
-        ? validateApiKey(desktopActionApiKey)
+      const isDeviceActionCreation = restPath === "api/device-actions" && req.method === "POST";
+      const actionApiKey = isDesktopActionCreation || isDeviceActionCreation ? req.headers["x-api-key"] : undefined;
+      const pageVisitorId = req.verificationSession?.actorId ?? (typeof actionApiKey === "string"
+        ? validateApiKey(actionApiKey)
         : req.visitorId);
 
       // Page-level access control
@@ -310,7 +312,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
           return handleVerificationReport(app, req, reply, userId, pageName);
         }
 
-        if (req.verificationSession && (isDesktopActionCreation || restPath === "api/notify")) {
+        if (req.verificationSession && (isDesktopActionCreation || isDeviceActionCreation || restPath === "api/notify")) {
           return reply.status(409).send({
             success: false,
             error: "This platform side effect is disabled during isolated verification",
@@ -320,6 +322,9 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
 
         if (isDesktopActionCreation) {
           return handleDesktopActionCreation(req, reply, meta, userId, pageName);
+        }
+        if (isDeviceActionCreation) {
+          return handleDeviceActionCreation(req, reply, meta, userId, pageName);
         }
 
         const appRoute = matchAppApiRoute(req.method, restPath.slice("api".length));

@@ -31,6 +31,8 @@ import { llmRoutes } from "./routes/llm.js";
 import { platformDataRoutes } from "./routes/platform-data.js";
 import { dbRoutes } from "./routes/db.js";
 import { desktopActionsRoutes } from "./routes/desktop-actions.js";
+import { deviceActionsRoutes } from "./routes/device-actions.js";
+import { deviceControlRoutes } from "./routes/device-control.js";
 import { verificationRoutes } from "./routes/verification.js";
 import { setupRoutes } from "./routes/setup.js";
 import { cleanOldLogs, listUsers } from "./lib/meta-sqlite.js";
@@ -155,6 +157,8 @@ async function registerServerPluginsAndRoutes(
   app.register(inboxRoutes);
   app.register(wsRoutes);
   app.register(desktopActionsRoutes);
+  app.register(deviceActionsRoutes);
+  app.register(deviceControlRoutes);
   app.register(myServeRoutes);
   app.register(async (peerScope) => peersRoutes(peerScope, peerStore));
   app.register(serveRoutes, { webRoot });

@@ -15,6 +15,7 @@ export { useMutation, type UseMutationResult } from "./hooks/use-mutation.js";
 export { useTransaction, type UseTransactionResult } from "./hooks/use-transaction.js";
 export { useAction, type UseActionResult } from "./hooks/use-action.js";
 export { useDesktopAction, type UseDesktopActionResult } from "./hooks/use-desktop-action.js";
+export { useDeviceAction, type UseDeviceActionResult } from "./hooks/use-device-action.js";
 export { useUpload } from "./hooks/use-upload.js";
 export { useTransitions, type UseTransitionsOptions, type UseTransitionsResult } from "./hooks/use-transitions.js";
 export { usePermissions, type CanFn, type UsePermissionsResult } from "./hooks/use-permissions.js";

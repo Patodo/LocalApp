@@ -439,6 +439,15 @@ export async function initMetaDb(
       completed_at TEXT
     )
   `);
+  const desktopActionColumns = new Set(
+    (db.exec("PRAGMA table_info(desktop_actions)")[0]?.values ?? []).map((row) => String(row[1])),
+  );
+  if (!desktopActionColumns.has("permissions_json")) {
+    db.run("ALTER TABLE desktop_actions ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '{}'");
+  }
+  if (!desktopActionColumns.has("permissions_digest")) {
+    db.run("ALTER TABLE desktop_actions ADD COLUMN permissions_digest TEXT NOT NULL DEFAULT ''");
+  }
   db.run(`CREATE INDEX IF NOT EXISTS idx_desktop_actions_user_pending ON desktop_actions(user_id, status, created_at)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_desktop_actions_expiry ON desktop_actions(status, expires_at)`);
 

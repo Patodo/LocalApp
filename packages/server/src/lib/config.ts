@@ -30,6 +30,7 @@ export interface ServerConfig {
   appDataArchiveMaxBytes: number;
   appDataExpandedMaxBytes: number;
   appDataArchiveMaxFiles: number;
+  deviceControlToken?: string;
 }
 
 const DEFAULTS: ServerConfig = {
@@ -60,6 +61,7 @@ const DEFAULTS: ServerConfig = {
   appDataArchiveMaxBytes: 2 * 1024 * 1024 * 1024,
   appDataExpandedMaxBytes: 4 * 1024 * 1024 * 1024,
   appDataArchiveMaxFiles: 10_000,
+  deviceControlToken: "",
 };
 
 interface TomlConfigResult {
@@ -402,6 +404,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     appDataArchiveMaxBytes: pickPositiveInteger(env, "APP_DATA_ARCHIVE_MAX_BYTES", toml.appDataArchiveMaxBytes, DEFAULTS.appDataArchiveMaxBytes),
     appDataExpandedMaxBytes: pickPositiveInteger(env, "APP_DATA_EXPANDED_MAX_BYTES", toml.appDataExpandedMaxBytes, DEFAULTS.appDataExpandedMaxBytes),
     appDataArchiveMaxFiles: pickPositiveInteger(env, "APP_DATA_ARCHIVE_MAX_FILES", toml.appDataArchiveMaxFiles, DEFAULTS.appDataArchiveMaxFiles),
+    deviceControlToken: env.LOCALAPP_DEVICE_CONTROL_TOKEN ?? DEFAULTS.deviceControlToken,
   };
 
   // TEMPLATE_REPO_URL is no longer mandatory at startup.
