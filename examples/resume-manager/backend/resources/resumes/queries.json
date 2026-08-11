@@ -1,0 +1,79 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/queries.schema.json",
+  "queries": {
+    "$resumes.count": {
+      "access": "authenticated",
+      "kind": "query",
+      "params": {},
+      "result": {
+        "maxBytes": 4096,
+        "maxRows": 1,
+        "mode": "aggregate"
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:e8f4769f4fc50e0c60eb8e05816e232bcb9a17dca4ee084d6fcdc479117809a7",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-read-v1"
+      },
+      "sql": "SELECT COUNT(*) AS count FROM resumes WHERE created_by = :currentUserId"
+    },
+    "$resumes.get": {
+      "access": "authenticated",
+      "kind": "query",
+      "params": {
+        "id": {
+          "required": true,
+          "type": "number"
+        }
+      },
+      "result": {
+        "maxBytes": 8192,
+        "maxRows": 1,
+        "mode": "single"
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:a37c7caa229999d92b59c4012d62111478b580c29f7b4681ad6216d4af091a2e",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-read-v1"
+      },
+      "sql": "SELECT * FROM resumes WHERE id = :id AND created_by = :currentUserId"
+    },
+    "$resumes.list": {
+      "access": "authenticated",
+      "kind": "query",
+      "params": {
+        "limit": {
+          "required": true,
+          "type": "number"
+        },
+        "offset": {
+          "required": true,
+          "type": "number"
+        }
+      },
+      "result": {
+        "maxBytes": 65536,
+        "maxRows": 100,
+        "mode": "page"
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:0a333cce8104aac67bb6f87314ff7c464384f369691ab1f318d232ecb2d2542e",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-read-v1"
+      },
+      "sql": "SELECT * FROM resumes WHERE created_by = :currentUserId ORDER BY id DESC LIMIT :limit OFFSET :offset"
+    }
+  }
+}

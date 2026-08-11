@@ -97,29 +97,6 @@ describe("cli-db", () => {
     }
   });
 
-  it("excludes db/seeds from upload bundle", async () => {
-    const { dir, cleanup } = await createTmpProjectDir({
-      "manifest.json": JSON.stringify({ name: "seed-upload-test", description: "", distDir: "dist", platformVersion: "^1.0" }),
-      "index.html": "<h1>root upload</h1>",
-      "db/seeds/dev.sql": "INSERT INTO tasks (title) VALUES ('dev-only');",
-    });
-    try {
-      const newResult = await runCli(["new"], { cwd: dir, env: cliEnvVars(env) });
-      expect(newResult.exitCode).toBe(0);
-
-      const uploadResult = await runCli(["upload", "."], {
-        cwd: dir,
-        env: cliEnvVars(env),
-      });
-      expect(uploadResult.exitCode).toBe(0);
-
-      const seedRes = await fetch(`${env.baseUrl}/serve/${env.userId}/seed-upload-test/db/seeds/dev.sql`);
-      expect(seedRes.status).toBe(404);
-    } finally {
-      await cleanup();
-    }
-  });
-
   it("validates migrations against a prod snapshot and writes .last-validated", async () => {
     const { dir, cleanup } = await createTmpProjectDir({
       "manifest.json": JSON.stringify({ name: "db-validate-test", description: "", distDir: "dist", platformVersion: "^1.0" }),
@@ -181,46 +158,6 @@ describe("cli-db", () => {
       expect(JSON.parse(result.stderr).error).toContain("Validation FAILED");
       await expect(fs.stat(path.join(dir, ".localapp", "prod-snapshot.db"))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, ".localapp", ".last-validated"))).rejects.toBeTruthy();
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("runs validate automatically before upload when marker is missing", async () => {
-    const { dir, cleanup } = await createTmpProjectDir({
-      "manifest.json": JSON.stringify({ name: "upload-auto-validate-test", description: "", distDir: "dist", platformVersion: "^1.0" }),
-      "dist/index.html": "<h1>validated upload</h1>",
-      "migrations/001_init.sql": "CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT);",
-    });
-    try {
-      const newResult = await runCli(["new"], { cwd: dir, env: cliEnvVars(env) });
-      expect(newResult.exitCode).toBe(0);
-
-      const result = await runCli(["upload", "./dist"], {
-        cwd: dir,
-        env: cliEnvVars(env),
-      });
-
-      expect(result.exitCode).toBe(0);
-      await expect(fs.stat(path.join(dir, ".localapp", ".last-validated"))).resolves.toBeTruthy();
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("requires project-name confirmation when skipping upload validation", async () => {
-    const { dir, cleanup } = await createTmpProjectDir({
-      "manifest.json": JSON.stringify({ name: "skip-validate-test", description: "", distDir: "dist", platformVersion: "^1.0" }),
-      "dist/index.html": "<h1>skip validate</h1>",
-    });
-    try {
-      const result = await runCli(["upload", "--skip-validate"], {
-        cwd: dir,
-        env: cliEnvVars(env),
-      });
-
-      expect(result.exitCode).toBe(1);
-      expect(JSON.parse(result.stderr).error).toContain("Skipping validation is dangerous. Add --confirm-project-name skip-validate-test to proceed.");
     } finally {
       await cleanup();
     }

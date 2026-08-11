@@ -28,6 +28,27 @@ describe("device action executor", () => {
     }
   });
 
+  it("allows a declared filesystem root to be created by the action", async () => {
+    const root = path.join(fixtureRoot, "created-write-root");
+    await fs.rm(root, { recursive: true, force: true });
+    const output = path.join(root, "nested", "output.txt");
+    try {
+      const result = await executeDeviceAction({
+        id: "33333333-3333-4333-8333-333333333333",
+        script: "const { mkdir, writeFile } = await import('node:fs/promises'); const { dirname } = await import('node:path'); await mkdir(dirname(input.path), { recursive: true }); await writeFile(input.path, input.value); return { ok: true };",
+        input: { path: output, value: "created-root" },
+        permissions: { filesystemWrite: [root] },
+        timeoutSeconds: 10,
+        workingDirectory: fixtureRoot,
+        dataDirectory: fixtureRoot,
+      });
+      expect(result).toEqual({ ok: true });
+      expect(await fs.readFile(output, "utf8")).toBe("created-root");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a write outside the declared permission", async () => {
     const root = path.join(fixtureRoot, "undeclared-write");
     await fs.rm(root, { recursive: true, force: true });

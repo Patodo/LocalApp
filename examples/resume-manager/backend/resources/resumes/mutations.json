@@ -1,0 +1,97 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/mutations.schema.json",
+  "mutations": {
+    "$resumes.create": {
+      "access": "authenticated",
+      "kind": "mutation",
+      "params": {
+        "candidate_name": {
+          "type": "string"
+        },
+        "file_key": {
+          "type": "string"
+        },
+        "file_name": {
+          "type": "string"
+        },
+        "file_url": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        }
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:7473f2b50ad0fd37a4c428e95f38c922d91a0489e98c10ddf8d06dd7bf9a9435",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-create-v1"
+      },
+      "sql": "INSERT INTO resumes (candidate_name, file_key, file_url, file_name, mime_type, size_bytes, created_by) VALUES (:candidate_name, :file_key, :file_url, :file_name, :mime_type, :size_bytes, :currentUserId)"
+    },
+    "$resumes.delete": {
+      "access": "authenticated",
+      "kind": "mutation",
+      "params": {
+        "id": {
+          "required": true,
+          "type": "number"
+        }
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:495723ab38670b5c2bc009c00dc1d9cd1b376e923df6984b749b4198701c6ffd",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-delete-v1"
+      },
+      "sql": "DELETE FROM resumes WHERE id = :id AND created_by = :currentUserId"
+    },
+    "$resumes.update": {
+      "access": "authenticated",
+      "kind": "mutation",
+      "params": {
+        "candidate_name": {
+          "type": "string"
+        },
+        "file_key": {
+          "type": "string"
+        },
+        "file_name": {
+          "type": "string"
+        },
+        "file_url": {
+          "type": "string"
+        },
+        "id": {
+          "required": true,
+          "type": "number"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        }
+      },
+      "security": {
+        "config": {
+          "identityField": "created_by"
+        },
+        "digest": "sha256:fdbb22d0bb04e49201021fb8362ccde960363c03b56fc15b5a14ad3e01ef0f5b",
+        "mode": "generated",
+        "resource": "resumes",
+        "template": "owner-update-v1"
+      },
+      "sql": "UPDATE resumes SET candidate_name = COALESCE(:candidate_name, candidate_name), file_key = COALESCE(:file_key, file_key), file_url = COALESCE(:file_url, file_url), file_name = COALESCE(:file_name, file_name), mime_type = COALESCE(:mime_type, mime_type), size_bytes = COALESCE(:size_bytes, size_bytes) WHERE id = :id AND created_by = :currentUserId"
+    }
+  }
+}

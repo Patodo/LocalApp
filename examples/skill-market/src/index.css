@@ -1,0 +1,4 @@
+/* CLI 领地的 Tailwind/shadcn/主题预设。用户可在下方追加自定义主题覆盖。 */
+@import "@localapp/app-kit/styles/preset.css";
+
+/* ── 用户自定义主题变量（示例，按需修改） ── */

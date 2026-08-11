@@ -1,0 +1,33 @@
+{
+  "$schema": "https://localapp.dev/schemas/backend/resource-schema.schema.json",
+  "fields": {
+    "candidate_name": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "file_key": {
+      "type": "string"
+    },
+    "file_name": {
+      "type": "string"
+    },
+    "file_url": {
+      "type": "string"
+    },
+    "id": {
+      "type": "number"
+    },
+    "mime_type": {
+      "type": "string"
+    },
+    "size_bytes": {
+      "type": "number"
+    }
+  },
+  "name": "resumes"
+}

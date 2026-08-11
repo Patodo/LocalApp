@@ -1,0 +1,37 @@
+{
+  "name": "resume-manager",
+  "description": "LocalApp 简历管理",
+  "pageAccess": {
+    "level": "owner"
+  },
+  "distDir": "dist",
+  "db": {
+    "mode": "crud",
+    "sqlAccess": "authenticated"
+  },
+  "backend": {
+    "root": "backend"
+  },
+  "requires": {
+    "content": {
+      "mimeTypes": [
+        "image/png",
+        "image/jpeg",
+        "application/pdf"
+      ],
+      "maxBytes": 10485760,
+      "inlinePreview": [
+        "image/png",
+        "image/jpeg",
+        "application/pdf"
+      ]
+    },
+    "backend": "named-sql",
+    "identity": [
+      "currentUser",
+      "pageOwner"
+    ],
+    "primitives": []
+  },
+  "platformVersion": "^1.2"
+}

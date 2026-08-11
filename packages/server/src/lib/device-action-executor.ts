@@ -127,7 +127,18 @@ function permissionArguments(
   for (const root of permissions.filesystemRead ?? []) args.push(`--allow-fs-read=${realPermissionPath(root)}`);
   for (const root of permissions.filesystemWrite ?? []) {
     const realRoot = realPermissionPath(root);
-    args.push(`--allow-fs-read=${root}`, `--allow-fs-read=${realRoot}`, `--allow-fs-write=${root}`, `--allow-fs-write=${realRoot}`);
+    // Node's permission glob must cover descendants when the user-selected
+    // root does not exist yet; allowing only the root path rejects mkdir(root/*).
+    args.push(
+      `--allow-fs-read=${root}`,
+      `--allow-fs-read=${path.join(root, "*")}`,
+      `--allow-fs-read=${realRoot}`,
+      `--allow-fs-read=${path.join(realRoot, "*")}`,
+      `--allow-fs-write=${root}`,
+      `--allow-fs-write=${path.join(root, "*")}`,
+      `--allow-fs-write=${realRoot}`,
+      `--allow-fs-write=${path.join(realRoot, "*")}`,
+    );
   }
   if (permissions.network) args.push("--allow-net");
   if (permissions.childProcess) args.push("--allow-child-process", "--allow-worker");

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 24+, TypeScript, Fastify 4, Next.js 15 static export, Vitest 4, Playwright, sql.js, Rust 2024, Tauri 2, pnpm, Cargo.
 
-**Implementation status (2026-08-10):** Tasks 1–6 are implemented and reviewed on `main`. Task 7 is implemented and in its final durability review. Tasks 8–15 are pending. The SDD progress ledger records commit-level evidence and is updated after every review round.
+**Implementation status (2026-08-11):** Tasks 1–14 are implemented and committed on `main`. The two real applications build from the builtin template, install through the formal Server package endpoint, and pass the deterministic local acceptance suite. Task 15 is partially complete: the bundled Tauri Server and formal Browser UI have been exercised locally, while the in-app Browser security policy blocked dispatching the external `localapp://` navigation needed to complete the final native-activation observation. The SDD progress ledger records the exact evidence and remaining boundary.
 
 ## Global Constraints
 
@@ -1130,6 +1130,8 @@ git commit -m "refactor: remove local runtime and legacy client workflows"
 
 ### Task 13: Upgrade the application template, media tooling, and agent guidance
 
+**Implementation record:** Complete in `f2090c1` (`feat(template): add device actions and media preview guidance`). Template tests, builtin initialization smoke tests, generated-app tests/builds, and CLI staging checks passed.
+
 **Files:**
 - Modify: `AGENTS.md`
 - Create: `init-repo/AGENTS.md`
@@ -1150,7 +1152,7 @@ git commit -m "refactor: remove local runtime and legacy client workflows"
 - Every generated repository exposes the same `AGENTS.md` guidance to coding agents and documents generic `device.run()` without SKILL-specific Server APIs.
 - All local examples, generated apps, Server state, uploads, and downloads are placed below the repository `tmp/` directory.
 
-- [ ] **Step 1: Write failing template dependency and guidance tests**
+- [x] **Step 1: Write failing template dependency and guidance tests**
 
 ```ts
 test("template includes supported PDF and image preview packages", () => {
@@ -1165,27 +1167,27 @@ test("agent guidance uses the unified Server and generic Device Actions", () => 
 });
 ```
 
-- [ ] **Step 2: Run template tests and verify RED**
+- [x] **Step 2: Run template tests and verify RED**
 
 Run: `pnpm -C init-repo test && cargo test --manifest-path packages/localapp-template/Cargo.toml`
 
 Expected: FAIL because media dependencies, `.npmrc`, generated `AGENTS.md`, and the Device Action skill do not exist.
 
-- [ ] **Step 3: Add stable media-preview foundations**
+- [x] **Step 3: Add stable media-preview foundations**
 
 Pin the three preview packages exactly. Configure the PDF.js worker from the installed `pdfjs-dist` asset in a Vite-safe way and document a reusable PDF preview component with loading/error states, page navigation, and object-URL cleanup. Document image preview with keyboard navigation, alt text, download, and object-URL cleanup. Do not add a Server-specific media renderer: application uploads remain ordinary file resources.
 
-- [ ] **Step 4: Rewrite app-development instructions from real workflows**
+- [x] **Step 4: Rewrite app-development instructions from real workflows**
 
 Replace MiniServer, `localapp upload`, `/tmp`, and raw `/serve/` navigation instructions with one Server, `localapp app install --target`, formal `/<owner>/<app>/` URLs, repository-local `tmp/`, and Browser self-verification. Explain that Device Actions are privileged current-computer operations: declare the narrowest permissions, keep scripts deterministic, display the operation before activation, and treat child-process permission as full current-user code execution.
 
 The Device Action skill contains a generic example that writes an explicitly selected file and reports a typed result. SKILL catalog metadata, install layouts, and target-tool adapters remain outside this skill because they belong to consumer applications.
 
-- [ ] **Step 5: Ensure builtin initialization copies every new artifact**
+- [x] **Step 5: Ensure builtin initialization copies every new artifact**
 
 Update the embedded-template package and smoke tests so `localapp init` emits `.npmrc`, `AGENTS.md`, the Device Action skill, media dependencies, migrations, and runtime files byte-for-byte. Initialize a fixture under `<repo>/tmp/template-smoke`, install dependencies, and build it without reaching into the source template.
 
-- [ ] **Step 6: Run template, CLI-init, and workspace checks**
+- [x] **Step 6: Run template, CLI-init, and workspace checks**
 
 Run:
 
@@ -1199,7 +1201,7 @@ git diff --check
 
 Expected: PASS, and the generated fixture resolves both PDF and image preview packages without warnings or source-template path dependencies.
 
-- [ ] **Step 7: Commit template and agent guidance**
+- [x] **Step 7: Commit template and agent guidance**
 
 ```bash
 git add AGENTS.md init-repo packages/localapp-template
@@ -1209,6 +1211,8 @@ git commit -m "feat(template): add device actions and media preview guidance"
 ---
 
 ### Task 14: Generate, publish, and exercise two realistic local applications
+
+**Implementation record:** Complete in the current acceptance commit. `examples/skill-market` and `examples/resume-manager` are generated from builtin `localapp init`; `pnpm test:real-apps` passes the formal package install, resume content round trip, ownership boundary, and generic Device Action execution checks.
 
 **Files:**
 - Create: `examples/skill-market/**`
@@ -1229,7 +1233,7 @@ git commit -m "feat(template): add device actions and media preview guidance"
 - The resume manager uses Named SQL and the upload API, previews uploaded images and PDFs, and downloads the original bytes through authenticated application APIs.
 - Produces `pnpm test:real-apps` for deterministic non-Browser setup and assertions.
 
-- [ ] **Step 1: Write failing real-application acceptance tests**
+- [x] **Step 1: Write failing real-application acceptance tests**
 
 ```ts
 test("skill market publishes a narrowly scoped local install action", async () => {
@@ -1247,29 +1251,29 @@ test("resume manager preserves upload, preview, and download bytes", async () =>
 });
 ```
 
-- [ ] **Step 2: Run real-application tests and verify RED**
+- [x] **Step 2: Run real-application tests and verify RED**
 
 Run: `pnpm test:real-apps`
 
 Expected: FAIL because neither generated application nor its end-to-end contract exists.
 
-- [ ] **Step 3: Generate and implement the SKILL marketplace application**
+- [x] **Step 3: Generate and implement the SKILL marketplace application**
 
 Initialize from the builtin template into `examples/skill-market`, then use the generated skills and `AGENTS.md` while implementing. Provide catalog cards, SKILL detail, selected install root, exact permission disclosure, install state, action result, and failure recovery. The install script validates a bounded relative SKILL name, creates the selected directory, writes the fixture `SKILL.md` atomically, and returns installed paths and digest. It never assumes Codex, Claude, or another target tool in Server code.
 
-- [ ] **Step 4: Generate and implement the resume manager application**
+- [x] **Step 4: Generate and implement the resume manager application**
 
 Initialize from the builtin template into `examples/resume-manager`, then implement resume records, upload controls, authenticated image/PDF retrieval, inline image lightbox, PDF page preview, original-file download, replacement, deletion, loading/error/empty states, and durable metadata through Named SQL. Include tiny deterministic image and PDF fixtures whose license permits repository inclusion.
 
-- [ ] **Step 5: Build, package, and install both applications locally**
+- [x] **Step 5: Build, package, and install both applications locally**
 
 Start two clean loopback Servers below `<repo>/tmp/unified-acceptance`: a source Web Server and the current-computer Server supervised through the native bridge contract. Initialize administrators, build both applications, install their `.localapp` packages on the source, and record formal URLs from Server responses. Do not hand-edit installed files or use raw `/serve/` routes as the product URL.
 
-- [ ] **Step 6: Exercise nonvisual contracts and persist reproducible fixtures**
+- [x] **Step 6: Exercise nonvisual contracts and persist reproducible fixtures**
 
 Use the source APIs to create an install action and the local control endpoint to claim it; explicitly grant the first publisher as local admin; assert the fixture SKILL bytes appear only below the selected repository-local target. Upload image/PDF fixtures to the resume manager, assert database metadata, content type, byte-for-byte download, authorization boundaries, and deletion. Leave Browser-only assertions for Task 15.
 
-- [ ] **Step 7: Run both application suites and commit**
+- [x] **Step 7: Run both application suites and commit**
 
 Run:
 
@@ -1292,6 +1296,8 @@ git commit -m "feat(examples): add skill market and resume manager"
 ---
 
 ### Task 15: Run cross-distribution acceptance and Browser self-verification
+
+**Current boundary:** The packaged Tauri bridge starts its bundled Server on loopback and the in-app Browser renders the formal SKILL market URL with login and permission disclosure. The Browser tool blocks the external `localapp://` navigation as a browser security action, so the final “Web click → native bridge → trust → success” observation still requires a user-level activation in an environment that permits the registered Scheme. No Browser or OS security boundary is bypassed by the test harness.
 
 **Files:**
 - Create: `packages/server/tests/e2e-unified/two-peer.spec.ts`

@@ -23,6 +23,8 @@
     "build:cli:debug": "cargo build --manifest-path packages/cli/Cargo.toml",
     "build:cli": "node scripts/release-cli.mjs",
     "build:cli:only": "node scripts/release-cli.mjs --build-only",
+    "build:real-apps": "VITE_LOCALAPP_ACCEPTANCE_ROOT=\"$PWD/tmp/unified-acceptance/installed-skills\" pnpm -C examples/skill-market build && pnpm -C examples/resume-manager build",
+    "test:real-apps": "pnpm run build:real-apps && pnpm -C packages/server exec vitest run tests/e2e-unified/real-apps.spec.ts",
     "test:e2e-ui": "npx playwright test"
   },
   "devDependencies": {

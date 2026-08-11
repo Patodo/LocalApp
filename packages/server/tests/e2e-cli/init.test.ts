@@ -73,8 +73,9 @@ describe("cli-init", () => {
       "utf-8",
     );
     expect(skill).toContain("localapp build --package");
-    expect(skill).toContain("localapp local install");
-    expect(skill).toContain("localapp upload --profile company --verify");
+    expect(skill).toContain("localapp app install --target");
+    expect(skill).not.toContain("localapp local install");
+    expect(skill).not.toContain("localapp upload");
     expect(skill).toContain("verification.status=pending-browser");
   });
 

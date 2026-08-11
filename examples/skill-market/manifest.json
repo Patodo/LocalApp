@@ -1,0 +1,21 @@
+{
+  "name": "skill-market",
+  "description": "LocalApp Skill 市场",
+  "distDir": "dist",
+  "db": {
+    "mode": "crud",
+    "sqlAccess": "authenticated"
+  },
+  "backend": {
+    "root": "backend"
+  },
+  "requires": {
+    "backend": "named-sql",
+    "identity": [
+      "currentUser",
+      "pageOwner"
+    ],
+    "primitives": []
+  },
+  "platformVersion": "^1.2"
+}
