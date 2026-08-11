@@ -49,7 +49,7 @@ interface AppInstallTransaction {
   id: string;
   ownerId: string;
   appName: string;
-  state: "prepared" | "rolling-back" | "recovery-required";
+  state: "prepared" | "rolling-back" | "committed" | "recovery-required";
   issue?: string;
   jobDir: string;
   database: { existed: boolean; backupPath: string | null; backupDigest: string | null };
@@ -252,6 +252,7 @@ async function installInspectedPackage(
   let finalVersionDir: string | undefined;
   let retainedPackage: { relativePath: string; created: boolean } | undefined;
   let transaction: AppInstallTransaction | undefined;
+  let commitCompleted = false;
   try {
     const previousSourceManifest = previousManifest
       ? JSON.parse(previousManifest.toString("utf8")) as Record<string, unknown>
@@ -371,7 +372,15 @@ async function installInspectedPackage(
       sourceManifest,
       updatedMeta,
     );
-    removeInstallTransaction(pageDir);
+    commitCompleted = true;
+    transaction.state = "committed";
+    try {
+      writeInstallTransaction(pageDir, transaction);
+    } catch {
+      // The committed manifest and metadata are authoritative. The original
+      // prepared journal remains safe to replay if this marker cannot publish.
+    }
+    cleanupCommittedInstallTransaction(pageDir, transaction);
     transaction = undefined;
     try {
       cleanupOldVersions(pageDir, allVersions, updatedMeta.versions);
@@ -390,7 +399,11 @@ async function installInspectedPackage(
       idempotent: false,
     };
   } catch (error) {
-    if (transaction && fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) {
+    if (commitCompleted) {
+      // Manifest and metadata are already durably committed. Never restore the
+      // previous database or version merely because post-commit cleanup failed.
+      transaction = undefined;
+    } else if (transaction && fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) {
       const activeTransaction = transaction;
       try {
         activeTransaction.state = "rolling-back";
@@ -453,7 +466,10 @@ async function reconcileInstallTransaction(dataDir: string, pageDir: string): Pr
   try {
     recoverSourceManifestAndMeta(pageDir, getPageMetaPath(dataDir, transaction.ownerId, transaction.appName));
     const visibleMeta = readRawPageMeta(dataDir, transaction.ownerId, transaction.appName);
-    if (transaction.state === "rolling-back" || sameJson(visibleMeta, transaction.previous.meta)) {
+    if (transaction.state === "committed" && !isNextInstallMeta(visibleMeta, transaction)) {
+      throw new Error("Committed installation transaction does not identify the activated version");
+    }
+    if (transaction.state !== "committed" && (transaction.state === "rolling-back" || sameJson(visibleMeta, transaction.previous.meta))) {
       if (transaction.state !== "rolling-back") {
         transaction.state = "rolling-back";
         writeInstallTransaction(pageDir, transaction);
@@ -463,8 +479,10 @@ async function reconcileInstallTransaction(dataDir: string, pageDir: string): Pr
     }
     if (isNextInstallMeta(visibleMeta, transaction)) {
       await verifyCompletedInstall(pageDir, transaction);
-      removeInstallTransaction(pageDir);
-      removeDirRecursive(resolveTransactionJobDir(dataDir, transaction));
+      cleanupCommittedInstallTransaction(pageDir, transaction);
+      if (!fs.existsSync(path.join(pageDir, INSTALL_TRANSACTION_FILE))) {
+        removeDirRecursive(resolveTransactionJobDir(dataDir, transaction));
+      }
       return;
     }
     throw new Error("Visible application metadata matches neither the previous nor activated version");
@@ -552,6 +570,18 @@ function removeInstallTransaction(pageDir: string): void {
   syncDirectory(pageDir);
 }
 
+function cleanupCommittedInstallTransaction(pageDir: string, transaction: AppInstallTransaction): void {
+  try {
+    removeInstallTransaction(pageDir);
+  } catch {
+    // Unlinking can succeed while the parent-directory fsync fails. Recreate a
+    // committed marker so a restart can verify the visible deployment and
+    // retry cleanup; this must never enter the rollback path.
+    transaction.state = "committed";
+    try { writeInstallTransaction(pageDir, transaction); } catch { /* retry on the next maintenance pass */ }
+  }
+}
+
 function markRecoveryRequired(pageDir: string, transaction: AppInstallTransaction, error: unknown): void {
   transaction.state = "recovery-required";
   transaction.issue = error instanceof Error ? error.message : String(error);
@@ -565,7 +595,7 @@ function validateInstallTransaction(dataDir: string, pageDir: string, transactio
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(transaction.id)) {
     throw new Error("Invalid application installation transaction ID");
   }
-  if (!["prepared", "rolling-back", "recovery-required"].includes(transaction.state)) throw new Error("Invalid recovery state");
+  if (!["prepared", "rolling-back", "committed", "recovery-required"].includes(transaction.state)) throw new Error("Invalid recovery state");
   const expectedPageDir = path.resolve(getPageDir(dataDir, transaction.ownerId, transaction.appName));
   if (expectedPageDir !== path.resolve(pageDir)
     || transaction.ownerId !== path.basename(path.dirname(pageDir))

@@ -480,3 +480,54 @@ No Web/shared response shape changed in round 2, so the round 1 full Web evidenc
 - No production `withData: true` path or Task 8 behavior was introduced. No Web production file or API shape changed.
 - Round 2 scope is 8 files: 4 production files, 3 test files, and this report. Preserved untracked `.zcode/`, `tmp/`, and `docs/superpowers/plans/2026-08-09-local-app-install.md` remain untouched.
 - No unresolved Critical or Important defect was found in the final diff review.
+
+---
+
+# Task 7 review fix round 3/5
+
+## RED evidence
+
+The regression was written before changing the installer. It injects a successful installer-journal unlink followed by a single parent-directory fsync failure, then checks that the committed version, manifest/meta, migrated database, staging job, and replay journal survive. The fixture uses the repository `tmp/` directory.
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts -t "keeps a committed install replay-safe when journal cleanup fsync fails after unlink"
+```
+
+Exit code: `1` before the fix. The old catch path saw the missing journal, restored version 1/database state, returned the injected `EIO`, and left no replay journal. The existing interrupted-before-activation test continued to cover rollback of an uncommitted transaction.
+
+## GREEN evidence
+
+The installer now writes an explicit `committed` transaction phase after durable manifest/meta publication. Post-commit cleanup is replay-safe: if unlink or directory fsync fails, a committed journal is retained/recreated and cleanup never enters rollback. Startup verifies the activated package and migration history before retrying cleanup. The previous rollback path remains unchanged for migration/activation failures before commit.
+
+Focused test:
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts -t "keeps a committed install replay-safe when journal cleanup fsync fails after unlink"
+```
+
+Exit code: `0`; `1` test passed and `9` were skipped by the name filter.
+
+Task 7 regression group:
+
+```text
+pnpm -C packages/server exec vitest run tests/integration/app-installer-recovery.test.ts tests/integration/app-package-install.test.ts tests/integration/two-peer-sync.test.ts
+```
+
+Exit code: `0`; `3` files and `43` tests passed.
+
+Full Server verification:
+
+```text
+pnpm -C packages/server test
+pnpm -C packages/server build
+```
+
+Both exited `0`; the full suite passed `139` files and `952` tests with `1` skipped. Only the existing Fastify `reply.redirect()` deprecation warning was emitted.
+
+## Self-review
+
+- `commitCompleted` is set only after `commitSourceManifestAndMeta` returns, so no pre-commit failure can bypass rollback.
+- A `committed` journal is accepted only when visible metadata identifies the exact new version; a contradictory journal fails closed.
+- A crash between durable metadata publication and the committed marker is recovered by the existing “visible next version” verification path.
+- The cleanup failure test proves the new state is not rolled back and a fresh Server removes the replay journal and staging job without reinstalling.
+- No unresolved implementation finding remains in this round; an independent subagent review was unavailable because the subagent service exhausted its usage limit, so this round was reviewed locally with the focused and full test evidence above.

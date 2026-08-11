@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import initSqlJs from "sql.js";
@@ -112,6 +111,86 @@ describe("durable application installer recovery", () => {
     expect(durableBeforeInstallerJournalRemoval).toBe(true);
   });
 
+  it("keeps a committed install replay-safe when journal cleanup fsync fails after unlink", async () => {
+    const fixture = await installedV1Fixture();
+    const applicationDir = pageDir(fixture.dataDir);
+    const transactionPath = path.join(applicationDir, ".app-install-transaction.json");
+    const descriptors = new Map<number, string>();
+    const originalOpen = fs.openSync;
+    const originalFsync = fs.fsyncSync;
+    const originalRm = fs.rmSync;
+    let journalUnlinked = false;
+    let cleanupFailureInjected = false;
+    vi.spyOn(fs, "openSync").mockImplementation((target, flags, mode) => {
+      const descriptor = originalOpen(target, flags, mode);
+      descriptors.set(descriptor, path.resolve(String(target)));
+      return descriptor;
+    });
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const result = originalRm(target, options);
+      if (path.resolve(String(target)) === transactionPath) journalUnlinked = true;
+      return result;
+    });
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      if (journalUnlinked && !cleanupFailureInjected && descriptors.get(descriptor) === applicationDir) {
+        cleanupFailureInjected = true;
+        const error = Object.assign(new Error("injected installer journal cleanup fsync failure"), { code: "EIO" });
+        throw error;
+      }
+      return originalFsync(descriptor);
+    });
+
+    let installError: unknown;
+    let outcome: Awaited<ReturnType<typeof installAppPackage>> | undefined;
+    try {
+      outcome = await installAppPackage({ dataDir: fixture.dataDir, ownerId: "owner", packagePath: fixture.v2Path });
+    } catch (error) {
+      installError = error;
+    }
+
+    expect.soft(cleanupFailureInjected).toBe(true);
+    expect.soft(installError).toBeUndefined();
+    expect.soft(outcome).toMatchObject({ appVersion: "2.0.0", localVersion: 2 });
+    expect.soft(readMeta(fixture.dataDir).currentAppVersion).toBe("2.0.0");
+    const currentColumns = await columns(fixture.dataDir);
+    expect.soft(currentColumns).toContain("upgraded");
+    if (currentColumns.includes("upgraded")) {
+      expect.soft(await rows(fixture.dataDir, "SELECT id, value, upgraded FROM notes"))
+        .toEqual([["keep", "target", 1]]);
+    }
+
+    const journalExists = fs.existsSync(transactionPath);
+    expect.soft(journalExists).toBe(true);
+    if (!journalExists) return;
+    const journal = JSON.parse(fs.readFileSync(transactionPath, "utf8")) as {
+      state: string;
+      jobDir: string;
+      database: { backupPath: string | null };
+    };
+    expect.soft(journal.state).toBe("committed");
+    expect.soft(fs.existsSync(path.resolve(fixture.dataDir, journal.jobDir))).toBe(true);
+    expect.soft(journal.database.backupPath).not.toBeNull();
+    if (journal.database.backupPath) {
+      expect.soft(fs.existsSync(path.resolve(fixture.dataDir, journal.database.backupPath))).toBe(true);
+    }
+
+    const committedMeta = readMeta(fixture.dataDir);
+    vi.restoreAllMocks();
+    const app = await buildServer({ env: serverEnv(fixture.dataDir) });
+    await app.ready();
+    try {
+      expect(readMeta(fixture.dataDir)).toEqual(committedMeta);
+      expect(readMeta(fixture.dataDir).currentAppVersion).toBe("2.0.0");
+      expect(await rows(fixture.dataDir, "SELECT id, value, upgraded FROM notes"))
+        .toEqual([["keep", "target", 1]]);
+      expect(fs.existsSync(path.join(applicationDir, "versions", "v2"))).toBe(true);
+      expect(fs.existsSync(transactionPath)).toBe(false);
+      expect(fs.existsSync(path.resolve(fixture.dataDir, journal.jobDir))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("fails closed without deleting an upload named by a malicious versionPath", async () => {
     const fixture = await interruptedV2Fixture();
     const victim = path.join(pageDir(fixture.dataDir), "uploads", "protected", "keep.txt");
@@ -169,7 +248,7 @@ describe("durable application installer recovery", () => {
   });
 
   async function installedV1Fixture(): Promise<{ dataDir: string; v2Path: string }> {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-installer-recovery-"));
+    const dataDir = fs.mkdtempSync(path.join(path.resolve(import.meta.dirname, "../../../..", "tmp"), "localapp-installer-recovery-"));
     roots.push(dataDir);
     const v1Path = await packageFixture(dataDir, "1.0.0", [
       ["001_init.sql", "CREATE TABLE notes (id TEXT PRIMARY KEY, value TEXT); INSERT INTO notes VALUES ('keep', 'target');"],
