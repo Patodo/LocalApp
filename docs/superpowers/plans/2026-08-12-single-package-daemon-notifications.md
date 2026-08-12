@@ -136,7 +136,7 @@ git commit -m "feat(package): add unified localapp npm package"
 - Produces: `LocalAppClient.requestJson`, `getJson`, `postJson`, `installPackage` with redirects disabled.
 - Consumes: `CliIo` from Task 1.
 
-- [ ] **Step 1: Write failing profile and HTTP boundary tests**
+- [x] **Step 1: Write failing profile and HTTP boundary tests**
 
 ```ts
 it("writes profiles atomically with user-only POSIX permissions", async () => {
@@ -159,13 +159,13 @@ it("validates login through api/me before saving the profile", async () => {
 });
 ```
 
-- [ ] **Step 2: Run targeted tests and verify RED**
+- [x] **Step 2: Run targeted tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/profile-store.test.ts tests/localapp-client.test.ts tests/login.test.ts`
 
 Expected: FAIL because the TypeScript profile store and authenticated client do not exist.
 
-- [ ] **Step 3: Implement secure profiles and HTTP commands**
+- [x] **Step 3: Implement secure profiles and HTTP commands**
 
 Normalize profiles to HTTP(S) origins with no credentials or fragments. Use
 `LOCALAPP_CONFIG_DIR` when set; otherwise use the platform user config root.
@@ -175,13 +175,13 @@ Publish writes with a same-directory temporary file, `fsync`, rename, and mode
 `login` validates `/api/me`; `logout` removes only the selected credential;
 `whoami` prints the authenticated envelope.
 
-- [ ] **Step 4: Run targeted and Server authentication tests**
+- [x] **Step 4: Run targeted and Server authentication tests**
 
 Run: `pnpm -C packages/localapp test && pnpm -C packages/server exec vitest run tests/integration/auth.test.ts tests/integration/global-auth.test.ts`
 
 Expected: PASS with no API Key in stdout, stderr, redirect targets, or snapshots.
 
-- [ ] **Step 5: Commit TypeScript authentication**
+- [x] **Step 5: Commit TypeScript authentication**
 
 ```bash
 git add packages/localapp
