@@ -629,7 +629,7 @@ git commit -m "feat(native): replace Tauri with Scheme adapters"
 - Produces: authenticated `GET /api/inbox/delivery?afterSequence=&limit=&since=`.
 - Extends: live `notify:notification` payload with `sequence`; `bus:ready` with protocol version and latest sequence.
 
-- [ ] **Step 1: Write failing ordering, migration, and mute tests**
+- [x] **Step 1: Write failing ordering, migration, and mute tests**
 
 ```ts
 it("returns eligible notifications oldest first after an exclusive cursor", () => {
@@ -647,13 +647,13 @@ it("never catch-up delivers a notification muted when it was created", async () 
 });
 ```
 
-- [ ] **Step 2: Run notification delivery tests and verify RED**
+- [x] **Step 2: Run notification delivery tests and verify RED**
 
 Run: `pnpm -C packages/server exec vitest run tests/notification-delivery.test.ts tests/integration/notification-delivery-api.test.ts tests/integration/notify-routing.test.ts`
 
 Expected: FAIL because notifications have neither a monotonic sequence nor creation-time delivery eligibility.
 
-- [ ] **Step 3: Implement delivery metadata and protocol version 2**
+- [x] **Step 3: Implement delivery metadata and protocol version 2**
 
 Add nullable `delivery_seq` and `delivery_eligible` columns. Existing rows remain
 ineligible. Allocate new sequences monotonically inside the single database
@@ -662,13 +662,13 @@ only eligible rows through the new endpoint. Keep ordinary `/api/inbox`
 unchanged. Live events and catch-up use the same serializer so their payloads
 cannot diverge.
 
-- [ ] **Step 4: Run the complete inbox/notify/WebSocket suite**
+- [x] **Step 4: Run the complete inbox/notify/WebSocket suite**
 
 Run: `pnpm -C packages/server exec vitest run tests/integration/inbox-api.test.ts tests/integration/notify-e2e-flow.test.ts tests/integration/notify-levels-integration.test.ts tests/integration/ws-bus.test.ts tests/ws-manager-desktop.test.ts`
 
 Expected: PASS; old inbox behavior remains, live delivery is ordered, and mute cannot be bypassed by reconnect.
 
-- [ ] **Step 5: Commit durable notification delivery**
+- [x] **Step 5: Commit durable notification delivery**
 
 ```bash
 git add packages/server
