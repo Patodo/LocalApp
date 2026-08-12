@@ -1,8 +1,15 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { spawnOwnedProcess, type OwnedProcess } from "../src/process/process-tree.js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  spawnOwnedProcess,
+  type OwnedProcess,
+  type OwnedProcessExit,
+  type UnixOwnedProcessHandle,
+  type UnixProcessTreeAdapter,
+} from "../src/process/process-tree.js";
 
 const repositoryRoot = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(repositoryRoot, "tmp/task-6-process-tree-tests");
@@ -19,6 +26,43 @@ afterEach(async () => {
 });
 
 describe("owned process trees", () => {
+  it("fails closed without signaling a replacement group when guardian identity retires before escalation", async () => {
+    // Break caught: a cached numeric PGID can be reused after graceful polling and then receive the owned tree's SIGKILL.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new ReusedUnixGroupModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 20,
+        unixAdapter: model,
+      });
+      ownedProcesses.push(owned);
+      const termination = owned.terminate().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(19);
+
+      expect(model.signalAttempts).toEqual([{ identity: "owned", signal: "SIGTERM" }]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(termination).resolves.toEqual(expect.objectContaining({
+        message: expect.stringMatching(/ownership identity.*lost/i),
+      }));
+
+      expect(model.signalAttempts).toEqual([
+        { identity: "owned", signal: "SIGTERM" },
+        { identity: "replacement", signal: "SIGKILL" },
+      ]);
+      expect(model.ownedSignals).toEqual(["SIGTERM"]);
+      expect(model.replacementSignals).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("terminates a stubborn descendant after its process-group leader already exited", async () => {
     // Break caught: signaling only the child PID leaves a TERM-resistant grandchild orphaned after the leader exits.
     if (process.platform === "win32") return;
@@ -82,6 +126,51 @@ describe("owned process trees", () => {
     })).toThrow(/Windows process-tree adapter.*unavailable/i);
   });
 });
+
+class ReusedUnixGroupModel implements UnixProcessTreeAdapter {
+  readonly signalAttempts: Array<{ identity: "owned" | "replacement"; signal: NodeJS.Signals }> = [];
+  readonly ownedSignals: NodeJS.Signals[] = [];
+  readonly replacementSignals: NodeJS.Signals[] = [];
+  private identity: "owned" | "replacement" = "owned";
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 42_424,
+      exitCode: null,
+      signalCode: null,
+      stdout: null,
+      stderr: null,
+      stdin: null,
+    }) as ChildProcess;
+    return {
+      child,
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise,
+      signalOwnedTree: async (force) => {
+        const signal = force ? "SIGKILL" : "SIGTERM";
+        this.signalAttempts.push({ identity: this.identity, signal });
+        if (this.identity === "replacement") {
+          return "ownership-lost";
+        }
+        this.ownedSignals.push(signal);
+        if (!force) {
+          this.identity = "replacement";
+          this.commandExit.resolve({ code: 0, signal: null });
+          this.guardianExit.resolve({ code: 0, signal: null });
+        }
+        return "signaled";
+      },
+    };
+  }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(testRoot, "case-"));

@@ -13,6 +13,19 @@ export interface OwnedProcess {
   terminate(): Promise<void>;
 }
 
+export interface UnixOwnedProcessHandle {
+  readonly child: ChildProcess;
+  readonly commandExited: Promise<OwnedProcessExit>;
+  readonly guardianExited: Promise<OwnedProcessExit>;
+  signalOwnedTree(force: boolean): "signaled" | "ownership-lost" | Promise<"signaled" | "ownership-lost">;
+  dispose?(): void | Promise<void>;
+}
+
+export interface UnixProcessTreeAdapter {
+  /** The handle must signal through a live, non-reusable ownership identity, never a cached numeric PGID. */
+  spawnOwned(command: string, args: readonly string[], options: SpawnOptions): UnixOwnedProcessHandle;
+}
+
 export interface WindowsOwnedProcessHandle {
   readonly child: ChildProcess;
   treeExists(): boolean | Promise<boolean>;
@@ -30,12 +43,13 @@ export interface SpawnOwnedProcessOptions {
   env?: NodeJS.ProcessEnv;
   stdio?: StdioOptions;
   platform?: NodeJS.Platform;
+  unixAdapter?: UnixProcessTreeAdapter;
   windowsAdapter?: WindowsProcessTreeAdapter;
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
 }
 
-const DEFAULT_GRACEFUL_TIMEOUT_MS = 3_000;
+const DEFAULT_GRACEFUL_TIMEOUT_MS = 250;
 const DEFAULT_FORCE_TIMEOUT_MS = 3_000;
 
 export function spawnOwnedProcess(
@@ -51,67 +65,28 @@ export function spawnOwnedProcess(
     shell: false,
     windowsHide: true,
   };
-  let child: ChildProcess;
-  let treeExists: () => boolean | Promise<boolean>;
-  let signalTree: (force: boolean) => void | Promise<void>;
-  let dispose: (() => void | Promise<void>) | undefined;
 
   if (platform === "win32") {
     if (options.windowsAdapter === undefined) {
       throw new Error("Windows process-tree adapter is unavailable; refusing to spawn without atomic Job Object ownership");
     }
-    const handle = options.windowsAdapter.spawnOwned(command, args, spawnOptions);
-    child = handle.child;
-    treeExists = () => handle.treeExists();
-    signalTree = (force) => handle.signalTree(force);
-    dispose = handle.dispose?.bind(handle);
-  } else {
-    child = spawn(command, args, { ...spawnOptions, detached: true });
-    const rootPid = requireSafeRootPid(child.pid);
-    let retired = false;
-    treeExists = () => {
-      if (retired) return false;
-      try {
-        process.kill(-rootPid, 0);
-        return true;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "ESRCH") {
-          retired = true;
-          return false;
-        }
-        if (code === "EPERM") return true;
-        throw error;
-      }
-    };
-    signalTree = (force) => {
-      if (retired) return;
-      requireSafeRootPid(rootPid);
-      try {
-        process.kill(-rootPid, force ? "SIGKILL" : "SIGTERM");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-          retired = true;
-          return;
-        }
-        throw error;
-      }
-    };
+    return ownedWindowsProcess(options.windowsAdapter.spawnOwned(command, args, spawnOptions), options);
   }
 
-  const pid = requireSafeRootPid(child.pid);
-  const exited = observeExit(child);
+  const adapter = options.unixAdapter ?? nodeUnixProcessTreeAdapter;
+  return ownedUnixProcess(adapter.spawnOwned(command, args, spawnOptions), options);
+}
+
+function ownedUnixProcess(handle: UnixOwnedProcessHandle, options: SpawnOwnedProcessOptions): OwnedProcess {
+  const pid = requireSafeRootPid(handle.child.pid);
   let termination: Promise<void> | undefined;
   return {
-    child,
+    child: handle.child,
     pid,
-    exited,
+    exited: handle.commandExited,
     terminate() {
-      termination ??= terminateOwnedTree({
-        exited,
-        treeExists,
-        signalTree,
-        dispose,
+      termination ??= terminateUnixOwnedTree({
+        ...handle,
         gracefulTimeoutMs: options.gracefulTimeoutMs ?? DEFAULT_GRACEFUL_TIMEOUT_MS,
         forceTimeoutMs: options.forceTimeoutMs ?? DEFAULT_FORCE_TIMEOUT_MS,
         pid,
@@ -119,6 +94,170 @@ export function spawnOwnedProcess(
       return termination;
     },
   };
+}
+
+function ownedWindowsProcess(handle: WindowsOwnedProcessHandle, options: SpawnOwnedProcessOptions): OwnedProcess {
+  const pid = requireSafeRootPid(handle.child.pid);
+  const exited = observeExit(handle.child);
+  let termination: Promise<void> | undefined;
+  return {
+    child: handle.child,
+    pid,
+    exited,
+    terminate() {
+      termination ??= terminateWindowsOwnedTree({
+        exited,
+        treeExists: () => handle.treeExists(),
+        signalTree: (force) => handle.signalTree(force),
+        dispose: handle.dispose?.bind(handle),
+        gracefulTimeoutMs: options.gracefulTimeoutMs ?? DEFAULT_GRACEFUL_TIMEOUT_MS,
+        forceTimeoutMs: options.forceTimeoutMs ?? DEFAULT_FORCE_TIMEOUT_MS,
+        pid,
+      });
+      return termination;
+    },
+  };
+}
+
+export async function terminateUnixOwnedTree(options: UnixOwnedProcessHandle & {
+  gracefulTimeoutMs: number;
+  forceTimeoutMs: number;
+  pid: number;
+}): Promise<void> {
+  try {
+    await requestOwnedSignal(options, false, options.forceTimeoutMs);
+    await gracePeriod(options.gracefulTimeoutMs);
+    await requestOwnedSignal(options, true, options.forceTimeoutMs);
+    await Promise.race([
+      options.guardianExited,
+      timeout(options.forceTimeoutMs, `Owned process guardian ${options.pid} was not reaped`),
+    ]);
+  } finally {
+    await options.dispose?.();
+  }
+}
+
+async function requestOwnedSignal(
+  options: Pick<UnixOwnedProcessHandle, "signalOwnedTree"> & { pid: number },
+  force: boolean,
+  timeoutMs: number,
+): Promise<void> {
+  const result = await Promise.race([
+    Promise.resolve(options.signalOwnedTree(force)),
+    timeout(timeoutMs, `Owned process guardian ${options.pid} did not accept ${force ? "SIGKILL" : "SIGTERM"}`),
+  ]);
+  if (result === "ownership-lost") {
+    throw new Error(`Owned process tree ${options.pid} ownership identity was lost; refusing to signal a possibly reused process group`);
+  }
+}
+
+const nodeUnixProcessTreeAdapter: UnixProcessTreeAdapter = {
+  spawnOwned(command, args, options) {
+    const guardian = spawn(process.execPath, ["--input-type=module", "--eval", UNIX_GUARDIAN_SOURCE], {
+      ...options,
+      detached: true,
+      stdio: guardianStdio(options.stdio),
+    });
+    requireSafeRootPid(guardian.pid);
+    return superviseUnixGuardian(guardian, command, args, options.cwd);
+  },
+};
+
+function superviseUnixGuardian(
+  guardian: ChildProcess,
+  command: string,
+  args: readonly string[],
+  cwd: string | URL | undefined,
+): UnixOwnedProcessHandle {
+  let commandSettled = false;
+  let finishCommand!: (exit: OwnedProcessExit) => void;
+  const commandExited = new Promise<OwnedProcessExit>((resolve) => { finishCommand = resolve; });
+  const guardianExited = observeExit(guardian);
+  const signalRequests = new Map<number, (result: "signaled" | "ownership-lost") => void>();
+  let requestId = 0;
+
+  const settleCommand = (exit: OwnedProcessExit) => {
+    if (commandSettled) return;
+    commandSettled = true;
+    finishCommand(exit);
+  };
+  const loseOwnership = () => {
+    for (const resolve of signalRequests.values()) resolve("ownership-lost");
+    signalRequests.clear();
+  };
+  const onMessage = (message: unknown) => {
+    if (!isRecord(message)) return;
+    if (message.type === "commandExit") {
+      settleCommand({
+        code: typeof message.code === "number" ? message.code : null,
+        signal: typeof message.signal === "string" ? message.signal as NodeJS.Signals : null,
+        ...(typeof message.error === "string" ? { error: new Error(message.error) } : {}),
+      });
+      return;
+    }
+    if (message.type === "signalResult" && Number.isSafeInteger(message.id)) {
+      const resolve = signalRequests.get(message.id as number);
+      if (resolve === undefined) return;
+      signalRequests.delete(message.id as number);
+      resolve(message.result === "signaled" ? "signaled" : "ownership-lost");
+    }
+  };
+  guardian.on("message", onMessage);
+  guardianExited.then((exit) => {
+    loseOwnership();
+    settleCommand(exit.error === undefined
+      ? { code: null, signal: exit.signal, error: new Error("Owned process guardian exited before the command reported completion") }
+      : exit);
+  });
+  void sendGuardianMessage(guardian, {
+    type: "start",
+    command,
+    args: [...args],
+    ...(cwd === undefined ? {} : { cwd: String(cwd) }),
+  }).catch((error) => settleCommand({ code: null, signal: null, error }));
+
+  return {
+    child: guardian,
+    commandExited,
+    guardianExited,
+    signalOwnedTree(force) {
+      const id = ++requestId;
+      return new Promise((resolve) => {
+        signalRequests.set(id, resolve);
+        void sendGuardianMessage(guardian, { type: "signal", id, force }).catch(() => {
+          if (!signalRequests.delete(id)) return;
+          resolve("ownership-lost");
+        });
+      });
+    },
+    dispose() {
+      guardian.off("message", onMessage);
+      loseOwnership();
+    },
+  };
+}
+
+function guardianStdio(stdio: StdioOptions | undefined): StdioOptions {
+  if (stdio === undefined || stdio === "inherit") return ["inherit", "inherit", "inherit", "ipc"];
+  if (stdio === "ignore") return ["ignore", "ignore", "ignore", "ipc"];
+  if (stdio === "pipe") return ["pipe", "pipe", "pipe", "ipc"];
+  if (Array.isArray(stdio)) {
+    if (stdio.length > 3 || stdio.includes("ipc")) {
+      throw new Error("Unix process guardian supports only stdin/stdout/stderr stdio entries");
+    }
+    return [stdio[0] ?? "pipe", stdio[1] ?? "pipe", stdio[2] ?? "pipe", "ipc"];
+  }
+  throw new Error("Unix process guardian received unsupported stdio configuration");
+}
+
+function sendGuardianMessage(guardian: ChildProcess, message: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!guardian.connected) {
+      reject(new Error("Owned process guardian IPC is unavailable"));
+      return;
+    }
+    guardian.send(message, (error) => error ? reject(error) : resolve());
+  });
 }
 
 function requireSafeRootPid(pid: number | undefined): number {
@@ -144,7 +283,7 @@ function observeExit(child: ChildProcess): Promise<OwnedProcessExit> {
   });
 }
 
-async function terminateOwnedTree(options: {
+async function terminateWindowsOwnedTree(options: {
   exited: Promise<OwnedProcessExit>;
   treeExists(): boolean | Promise<boolean>;
   signalTree(force: boolean): void | Promise<void>;
@@ -191,3 +330,87 @@ function timeout(timeoutMs: number, message: string): Promise<never> {
     timer.unref?.();
   });
 }
+
+function gracePeriod(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const UNIX_GUARDIAN_SOURCE = String.raw`
+import { spawn } from "node:child_process";
+
+let started = false;
+let commandSettled = false;
+
+process.on("SIGTERM", () => {});
+process.on("SIGINT", () => {});
+
+function send(message, callback) {
+  if (typeof process.send !== "function" || !process.connected) {
+    callback?.(new Error("guardian IPC disconnected"));
+    return;
+  }
+  process.send(message, callback);
+}
+
+function reportCommandExit(exit) {
+  if (commandSettled) return;
+  commandSettled = true;
+  send({ type: "commandExit", ...exit });
+}
+
+function signalOwnedGroup(signal) {
+  if (!Number.isSafeInteger(process.pid) || process.pid <= 1) {
+    throw new Error("guardian has unsafe process-group identity");
+  }
+  process.kill(-process.pid, signal);
+}
+
+process.on("message", (message) => {
+  if (message?.type === "start" && !started) {
+    started = true;
+    let child;
+    try {
+      child = spawn(message.command, message.args, {
+        cwd: message.cwd,
+        env: process.env,
+        stdio: "inherit",
+        shell: false,
+        windowsHide: true,
+      });
+    } catch (error) {
+      reportCommandExit({ code: null, signal: null, error: error instanceof Error ? error.message : "command spawn failed" });
+      return;
+    }
+    child.once("error", (error) => reportCommandExit({ code: null, signal: null, error: error.message }));
+    child.once("exit", (code, signal) => reportCommandExit({ code, signal }));
+    return;
+  }
+  if (message?.type !== "signal" || !Number.isSafeInteger(message.id)) return;
+  const signal = message.force ? "SIGKILL" : "SIGTERM";
+  if (message.force) {
+    send({ type: "signalResult", id: message.id, result: "signaled" }, () => {
+      setImmediate(() => signalOwnedGroup(signal));
+    });
+    return;
+  }
+  try {
+    signalOwnedGroup(signal);
+    send({ type: "signalResult", id: message.id, result: "signaled" });
+  } catch {
+    send({ type: "signalResult", id: message.id, result: "ownership-lost" });
+  }
+});
+
+process.on("disconnect", () => {
+  try { signalOwnedGroup("SIGKILL"); } catch { process.exit(1); }
+});
+
+setInterval(() => {}, 2 ** 30);
+`;
