@@ -1,0 +1,28 @@
+{
+  "name": "localapp",
+  "version": "0.1.0",
+  "description": "LocalApp command-line interface",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "localapp": "bin/localapp.mjs"
+  },
+  "files": [
+    "bin",
+    ".localapp-artifact.json"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:package": "node scripts/build-package.mjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "esbuild": "^0.27.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}
