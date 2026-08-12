@@ -17,6 +17,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:package": "node scripts/build-package.mjs",
+    "prepack": "node scripts/prepare-pack.mjs",
+    "postpack": "node scripts/cleanup-pack.mjs",
     "test": "vitest run"
   },
   "devDependencies": {

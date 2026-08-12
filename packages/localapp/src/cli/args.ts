@@ -169,7 +169,9 @@ function consumeOptions(args: string[], allowed: Set<string>, flags = new Set<st
       positionals.push(argument);
       continue;
     }
-    const [option, inlineValue] = argument.split("=", 2);
+    const equalsIndex = argument.indexOf("=");
+    const option = equalsIndex < 0 ? argument : argument.slice(0, equalsIndex);
+    const inlineValue = equalsIndex < 0 ? undefined : argument.slice(equalsIndex + 1);
     if (!allowed.has(option)) throw new LocalAppArgumentError(`Unknown option: ${option}`, option);
     if (options.has(option)) throw new LocalAppArgumentError(`Option may only be supplied once: ${option}`, option);
     if (flags.has(option)) {
