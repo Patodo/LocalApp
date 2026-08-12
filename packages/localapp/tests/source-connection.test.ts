@@ -65,12 +65,12 @@ describe("SourceConnection", () => {
     socket.open();
     socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 2 } });
     await waitFor(() => fetch.mock.calls.length === 1);
-    socket.frame({ type: "notify:notification", data: delivery(2) });
-    resolveFetch(Response.json({ success: true, data: { items: [delivery(1)], nextSequence: 1, snapshotHighWater: 1, hasMore: false, omittedCount: 0 } }));
-    await waitFor(async () => (await store.readSource("11111111-1111-4111-8111-111111111111"))?.cursor === 2);
+    socket.frame({ type: "notify:notification", data: delivery(3) });
+    resolveFetch(Response.json({ success: true, data: { items: [delivery(2)], nextSequence: 2, snapshotHighWater: 2, hasMore: false, omittedCount: 0 } }));
+    await waitFor(async () => (await store.readSource("11111111-1111-4111-8111-111111111111"))?.cursor === 3);
     await waitFor(() => statuses.some((status: any) => status.state === "connected"));
-    expect(native.showNotification.mock.calls.map((call) => call[0].title)).toEqual(["Title 1", "Title 2"]);
-    expect(statuses).toEqual(expect.arrayContaining([expect.objectContaining({ state: "connected", cursor: 2 })]));
+    expect(native.showNotification.mock.calls.map((call) => call[0].title)).toEqual(["Title 2", "Title 3"]);
+    expect(statuses).toEqual(expect.arrayContaining([expect.objectContaining({ state: "connected", cursor: 3 })]));
     await active.stop();
   });
 
@@ -100,6 +100,19 @@ describe("SourceConnection", () => {
     active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
     socket.open(); socket.frame({ type: "bus:ready", data: { userId: "other-user", notificationProtocolVersion: 2, latestSequence: 0 } });
     await waitFor(() => statuses.some((status: any) => status.error?.code === "SOURCE_IDENTITY_MISMATCH"));
+    await active.stop();
+  });
+
+  it("advances an empty authoritative page and rejects malformed frames after ready", async () => {
+    const { id, store, socket, statuses, connection } = await fixture(3);
+    const fetch = vi.fn(async () => Response.json({ success: true, data: { items: [], nextSequence: 10, snapshotHighWater: 10, hasMore: false, omittedCount: 0 } })) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 10 } });
+    await waitFor(async () => (await store.readSource(id))?.cursor === 10);
+    socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 10 } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(statuses).toEqual(expect.arrayContaining([expect.objectContaining({ error: expect.objectContaining({ code: "SOURCE_PROTOCOL_INVALID" }) })]));
     await active.stop();
   });
 });

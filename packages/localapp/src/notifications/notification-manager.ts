@@ -10,6 +10,7 @@ export interface NotificationConnectionManagerOptions {
   dispatcher: NotificationDispatcher;
   fetch?: typeof globalThis.fetch;
   createSocket?: (url: string, credential: string) => SourceSocket;
+  snapshotTimeoutMs?: number;
 }
 
 export class NotificationConnectionManager {
@@ -24,8 +25,11 @@ export class NotificationConnectionManager {
     this.options = options;
   }
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.pollPromise !== undefined) return;
+    const snapshot = await this.fetchSnapshot("");
+    await this.reconfigure(snapshot.sources);
+    this.generation = snapshot.generation;
     this.pollPromise = this.poll().finally(() => { this.pollPromise = undefined; });
     void this.pollPromise.catch(() => undefined);
   }
@@ -47,13 +51,7 @@ export class NotificationConnectionManager {
     while (!this.controller.signal.aborted) {
       try {
         const query = this.generation === undefined ? "" : `?generation=${this.generation}&waitMs=30000`;
-        const response = await (this.options.fetch ?? globalThis.fetch)(`${this.options.localServerOrigin}/api/internal/device-notifications/sources${query}`, {
-          headers: { "x-localapp-notification-control": this.options.controlToken },
-          redirect: "error",
-          signal: this.controller.signal,
-        });
-        if (!response.ok || response.redirected) throw new Error("notification source snapshot failed");
-        const snapshot = parseSnapshot(await response.json());
+        const snapshot = await this.fetchSnapshot(query);
         if (snapshot.generation !== this.generation) await this.reconfigure(snapshot.sources);
         this.generation = snapshot.generation;
       } catch {
@@ -61,6 +59,16 @@ export class NotificationConnectionManager {
         await delay(500, this.controller.signal).catch(() => undefined);
       }
     }
+  }
+
+  private async fetchSnapshot(query: string): Promise<{ generation: number; sources: NotificationSourceConfig[] }> {
+    const timeout = AbortSignal.timeout(query === "" ? (this.options.snapshotTimeoutMs ?? 10_000) : 35_000);
+    const signal = AbortSignal.any([this.controller.signal, timeout]);
+    const response = await (this.options.fetch ?? globalThis.fetch)(`${this.options.localServerOrigin}/api/internal/device-notifications/sources${query}`, {
+      headers: { "x-localapp-notification-control": this.options.controlToken }, redirect: "error", signal,
+    });
+    if (!response.ok || response.redirected) throw new Error("notification source snapshot failed");
+    return parseSnapshot(await response.json());
   }
 
   private async reconfigure(nextSources: NotificationSourceConfig[]): Promise<void> {
@@ -118,10 +126,7 @@ export class NotificationActivationResolver implements NotificationTicketResolve
     if (intent === null) return;
     const source = this.options.manager.currentSource(intent.sourceId);
     if (source === undefined) return;
-    if (!source.enabled) {
-      if (source.capabilityReason?.includes("CREDENTIAL")) await this.options.open(`${source.sourceOrigin}/`);
-      return;
-    }
+    if (!source.enabled) return;
     if (intent.kind === "summary") { await this.options.open(`${source.sourceOrigin}/`); return; }
     if (!source.credential) { await this.options.open(`${source.sourceOrigin}/`); return; }
     const item = await this.fetchItem(source, intent);
@@ -150,6 +155,7 @@ export class NotificationActivationResolver implements NotificationTicketResolve
     if (!record(value) || !exactKeys(value, ["success", "data"]) || value.success !== true || !record(value.data)) return null;
     const data = value.data;
     if (!exactKeys(data, ["id", "user_id", "app_owner", "app_name", "title", "body", "url", "priority", "data", "created_at", "read_at", "deleted_at"])
+      || data.user_id !== source.targetUserId
       || data.id !== intent.notificationId || typeof data.app_owner !== "string" || !safeRouteSegment(data.app_owner)
       || typeof data.app_name !== "string" || !safeRouteSegment(data.app_name) || (data.url !== null && typeof data.url !== "string")) return null;
     return { appOwner: data.app_owner, appName: data.app_name, url: data.url };
@@ -173,7 +179,9 @@ function safeRouteSegment(value: string): boolean { return value.length > 0 && v
 function parseSnapshot(value: unknown): { generation: number; sources: NotificationSourceConfig[] } {
   if (!record(value) || !exactKeys(value, ["success", "data"]) || value.success !== true || !record(value.data)
     || !exactKeys(value.data, ["generation", "sources"]) || !Number.isSafeInteger(value.data.generation) || value.data.generation < 0 || !Array.isArray(value.data.sources)) throw new Error("Notification source snapshot is invalid");
-  return { generation: value.data.generation, sources: value.data.sources.map(parseSource) };
+  const sources = value.data.sources.map(parseSource);
+  if (new Set(sources.map((source) => source.id)).size !== sources.length) throw new Error("Notification source snapshot is invalid");
+  return { generation: value.data.generation, sources };
 }
 function parseSource(value: unknown): NotificationSourceConfig {
   if (!record(value) || !exactKeys(value, ["id", "kind", "generation", "sourceOrigin", "targetUserId", "accountLabel", "sourceLabel", "enabled", "capability", ...(value.credential === undefined ? [] : ["credential"])])

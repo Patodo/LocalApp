@@ -103,6 +103,7 @@ export interface LocalAppDaemonOptions {
   openExternal?: BrowserOpener;
   fetch?: typeof globalThis.fetch;
   createNotificationRuntime?: (options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }) => Promise<DaemonNotificationRuntime>;
+  notificationStopTimeoutMs?: number;
 }
 
 export interface DaemonNotificationRuntime {
@@ -234,7 +235,7 @@ export class LocalAppDaemon {
         open,
       });
       this.notificationResolver = this.notificationRuntime.resolver;
-      this.notificationRuntime.manager.start();
+      await this.notificationRuntime.manager.start();
       this.serverStatus = "ready";
       void server.exited.then(() => {
         if (this.server === server && this.stopPromise === undefined && this.serverStatus !== "stopping") {
@@ -263,15 +264,18 @@ export class LocalAppDaemon {
     const notificationRuntime = this.notificationRuntime;
     this.notificationRuntime = undefined;
     this.notificationResolver = undefined;
-    await notificationRuntime?.manager.stop();
     const server = this.server;
-    if (server === undefined) return;
-    await server.terminate();
+    let failure: unknown;
+    try {
+      if (notificationRuntime !== undefined) await withCleanupTimeout(notificationRuntime.manager.stop(), this.options.notificationStopTimeoutMs ?? 15_000);
+    } catch (error) { failure = error; }
+    try { await server?.terminate(); } catch (error) { failure ??= error; }
     if (this.server === server) this.server = undefined;
     this.listenUrl = undefined;
     this.deviceControlToken = undefined;
     this.notificationControlToken = undefined;
     this.serverStatus = "stopped";
+    if (failure !== undefined) throw failure;
   }
 
   private async createDefaultNotificationRuntime(options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }): Promise<DaemonNotificationRuntime> {
@@ -388,3 +392,13 @@ async function unlinkOwned(filePath: string, identity: FileIdentity): Promise<bo
 }
 
 function digestDataRoot(dataDir: string): string { return crypto.createHash("sha256").update(path.resolve(dataDir)).digest("hex"); }
+
+async function withCleanupTimeout(operation: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(lifecycleError("notification_cleanup_timeout", "Notification manager cleanup timed out")), timeoutMs);
+      timer.unref?.();
+    })]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}

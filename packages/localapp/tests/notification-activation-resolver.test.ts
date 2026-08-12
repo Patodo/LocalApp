@@ -50,6 +50,14 @@ describe("NotificationActivationResolver", () => {
     }
   });
 
+  it("rejects a row bound to a different source user", async () => {
+    const { store, pending, source, open } = await fixture();
+    const fetch = vi.fn(async () => Response.json({ success: true, data: { ...inboxData("/owner/app/"), user_id: "other-user" } }));
+    await new NotificationActivationResolver({ store, manager: { currentSource: () => source }, open, fetch }).resolve(pending.ticket);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("opens source fallback on missing credential/auth and summary without marking a row", async () => {
     const first = await fixture();
     await new NotificationActivationResolver({ store: first.store, manager: { currentSource: () => ({ ...first.source, credential: undefined }) }, open: first.open }).resolve(first.pending.ticket);
@@ -63,5 +71,11 @@ describe("NotificationActivationResolver", () => {
     const summary = await second.store.issueSummary(second.source.id);
     await new NotificationActivationResolver({ store: second.store, manager: { currentSource: () => second.source }, open: second.open, fetch }).resolve(summary.ticket);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing for a disabled source even when its capability lost credentials", async () => {
+    const { store, pending, source, open } = await fixture();
+    await new NotificationActivationResolver({ store, manager: { currentSource: () => ({ ...source, enabled: false, credential: undefined, capabilityReason: "PEER_CREDENTIAL_INVALID" }) }, open }).resolve(pending.ticket);
+    expect(open).not.toHaveBeenCalled();
   });
 });

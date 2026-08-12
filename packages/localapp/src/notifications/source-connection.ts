@@ -41,6 +41,7 @@ export interface SourceConnectionOptions {
   jitter?: () => number;
   connectTimeoutMs?: number;
   heartbeatMs?: number;
+  readTimeoutMs?: number;
 }
 
 const SOURCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -93,34 +94,42 @@ export class SourceConnection {
     const live: DeliveryNotification[] = [];
     let ready: { userId: string; latestSequence: number } | undefined;
     let pongAt = Date.now();
-    let authenticatedClose = false;
-    const readyPromise = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new SourceConnectionError("SOURCE_CONNECT_TIMEOUT")), this.options.connectTimeoutMs ?? 10_000);
+    let protocolFailure: unknown;
+    let rejectConnection!: (error: unknown) => void;
+    const connectionFailure = new Promise<never>((_resolve, reject) => { rejectConnection = reject; });
+    void connectionFailure.catch(() => undefined);
+    const readyPromise = new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => rejectConnection(new SourceConnectionError("SOURCE_CONNECT_TIMEOUT")), this.options.connectTimeoutMs ?? 10_000);
       timeout.unref?.();
       socket.on("message", (raw: unknown) => {
         try {
           const frame = parseFrame(raw);
-          if (frame.type === "bus:ready") { ready = frame.data; clearTimeout(timeout); resolve(); }
+          if (frame.type === "bus:ready") {
+            if (ready !== undefined) throw new SourceConnectionError("SOURCE_PROTOCOL_INVALID");
+            ready = frame.data; clearTimeout(timeout); resolve();
+          }
           else if (frame.type === "bus:pong") pongAt = Date.now();
           else if (frame.type === "notify:notification") live.push(frame.data);
-        } catch (error) { clearTimeout(timeout); reject(error); }
+        } catch (error) { protocolFailure = error; clearTimeout(timeout); rejectConnection(error); socket.close(1002, "Invalid notification protocol"); }
       });
-      socket.on("close", (code: number) => { authenticatedClose = code === 4401; clearTimeout(timeout); reject(new SourceConnectionError(authenticatedClose ? "SOURCE_AUTHENTICATION_FAILED" : "SOURCE_SOCKET_CLOSED")); });
-      socket.on("error", () => { clearTimeout(timeout); reject(new SourceConnectionError("SOURCE_SOCKET_ERROR")); });
+      socket.on("close", (code: number) => { clearTimeout(timeout); rejectConnection(protocolFailure ?? new SourceConnectionError(code === 4401 ? "SOURCE_AUTHENTICATION_FAILED" : "SOURCE_SOCKET_CLOSED")); });
+      socket.on("error", () => { clearTimeout(timeout); rejectConnection(new SourceConnectionError("SOURCE_SOCKET_ERROR")); });
     });
     try {
-      await readyPromise;
+      await Promise.race([readyPromise, connectionFailure]);
       if (ready === undefined || ready.userId !== this.source.targetUserId) throw new SourceConnectionError("SOURCE_IDENTITY_MISMATCH");
-      const current = await this.options.store.readSource(this.source.id);
-      if (current === null) {
-        await this.options.store.baseline(this.source.id, ready.latestSequence);
-      } else {
-        if (current.pending !== null) await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: this.controller.signal });
-        await this.catchUp();
-      }
-      for (const delivery of live.sort((a, b) => a.sequence - b.sequence)) await this.dispatch(delivery);
+      await Promise.race([(async () => {
+        const current = await this.options.store.readSource(this.source.id);
+        if (current === null) {
+          await this.options.store.baseline(this.source.id, ready!.latestSequence);
+        } else {
+          if (current.pending !== null) await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: this.controller.signal });
+          await this.catchUp();
+        }
+        for (const delivery of live.sort((a, b) => a.sequence - b.sequence)) await this.dispatch(delivery);
+      })(), connectionFailure]);
       await this.report("connected", await this.cursor(), null);
-      await this.liveLoop(socket, live, () => pongAt, (value) => { pongAt = value; });
+      await this.liveLoop(socket, live, () => pongAt, connectionFailure, () => protocolFailure);
     } finally {
       socket.close();
       if (this.socket === socket) this.socket = undefined;
@@ -141,35 +150,42 @@ export class SourceConnection {
       }
       for (const delivery of page.items) await this.dispatch(delivery);
       source = (await this.options.store.readSource(this.source.id))!;
-      if (!page.hasMore) return;
+      if (!page.hasMore) {
+        await this.options.store.advanceCursor(this.source.id, source.cursor, page.nextSequence);
+        return;
+      }
       first = false;
     }
   }
 
   private async fetchPage(afterSequence: number, since: string): Promise<DeliveryPage> {
     const url = `${this.source.sourceOrigin}/api/inbox/delivery?afterSequence=${afterSequence}&limit=100&since=${encodeURIComponent(since)}`;
-    const response = await (this.options.fetch ?? globalThis.fetch)(url, { headers: { "X-API-Key": this.source.credential! }, redirect: "error", signal: this.controller.signal });
-    if (response.status === 401 || response.status === 403) throw new SourceConnectionError("SOURCE_AUTHENTICATION_FAILED");
-    if (!response.ok || response.redirected) throw new SourceConnectionError("SOURCE_DELIVERY_FAILED");
-    return parseDeliveryPage(await response.json(), afterSequence);
+    return withDeadline(async (signal) => {
+      const response = await (this.options.fetch ?? globalThis.fetch)(url, { headers: { "X-API-Key": this.source.credential! }, redirect: "error", signal });
+      if (response.status === 401 || response.status === 403) throw new SourceConnectionError("SOURCE_AUTHENTICATION_FAILED");
+      if (!response.ok || response.redirected) throw new SourceConnectionError("SOURCE_DELIVERY_FAILED");
+      return parseDeliveryPage(await response.json(), afterSequence);
+    }, this.controller.signal, this.options.readTimeoutMs ?? 10_000);
   }
 
   private async dispatch(delivery: DeliveryNotification): Promise<void> {
     const current = await this.options.store.readSource(this.source.id);
     if (current === null || delivery.sequence <= current.cursor) return;
+    if (current.pending === null && delivery.sequence > current.cursor + 1) {
+      await this.options.store.advanceCursor(this.source.id, current.cursor, delivery.sequence - 1);
+    }
     await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, policy: "native", delivery, signal: this.controller.signal });
   }
 
-  private async liveLoop(socket: SourceSocket, live: DeliveryNotification[], getPong: () => number, setPong: (value: number) => void): Promise<void> {
+  private async liveLoop(socket: SourceSocket, live: DeliveryNotification[], getPong: () => number, connectionFailure: Promise<never>, getProtocolFailure: () => unknown): Promise<void> {
     const heartbeat = this.options.heartbeatMs ?? 15_000;
     while (!this.controller.signal.aborted && socket.readyState === WebSocket.OPEN) {
       while (live.length > 0) await this.dispatch(live.shift()!);
       if (Date.now() - getPong() > heartbeat * 2 + 5_000) throw new SourceConnectionError("SOURCE_HEARTBEAT_TIMEOUT");
       socket.send(JSON.stringify({ type: "bus:ping", data: { t: Date.now() } }));
-      setPong(getPong());
-      await (this.options.delay ?? abortableDelay)(heartbeat, this.controller.signal);
+      await Promise.race([(this.options.delay ?? abortableDelay)(heartbeat, this.controller.signal), connectionFailure]);
     }
-    if (!this.controller.signal.aborted) throw new SourceConnectionError("SOURCE_SOCKET_CLOSED");
+    if (!this.controller.signal.aborted) throw getProtocolFailure() ?? new SourceConnectionError("SOURCE_SOCKET_CLOSED");
   }
 
   private async cursor(): Promise<number | null> { return (await this.options.store.readSource(this.source.id))?.cursor ?? null; }
@@ -226,3 +242,9 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 function publicCode(error: unknown): string { return error instanceof SourceConnectionError ? error.code : "SOURCE_CONNECTION_FAILED"; }
 class SourceConnectionError extends Error { constructor(readonly code: string) { super(code); } }
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> { return new Promise((resolve, reject) => { if (signal.aborted) return reject(signal.reason); const timer = setTimeout(resolve, ms); timer.unref?.(); signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true }); }); }
+async function withDeadline<T>(operation: (signal: AbortSignal) => Promise<T>, parent: AbortSignal, timeoutMs: number): Promise<T> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = AbortSignal.any([parent, timeout]);
+  try { return await operation(signal); }
+  catch (error) { if (timeout.aborted && !parent.aborted) throw new SourceConnectionError("SOURCE_READ_TIMEOUT"); throw error; }
+}

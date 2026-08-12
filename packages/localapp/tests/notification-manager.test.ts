@@ -33,7 +33,7 @@ describe("NotificationConnectionManager", () => {
     const socket = new FakeSocket();
     const createSocket = vi.fn(() => socket);
     const manager = new NotificationConnectionManager({ localServerOrigin: "http://127.0.0.1:43127", controlToken: "notification_control_123456789", store, dispatcher, fetch, createSocket });
-    manager.start();
+    await manager.start();
     await waitFor(() => createSocket.mock.calls.length === 1);
     expect(manager.currentSource(source.id)).toMatchObject({ sourceOrigin: source.sourceOrigin, credential: source.credential });
     expect(calls[0]).toMatchObject({ url: "http://127.0.0.1:43127/api/internal/device-notifications/sources", init: { redirect: "error" } });
@@ -41,6 +41,16 @@ describe("NotificationConnectionManager", () => {
     expect(JSON.stringify(calls.filter((call) => call.url.endsWith("/status")))).not.toContain(source.credential);
     await manager.stop();
     expect(socket.readyState).toBe(3);
+  });
+
+  it("fails initial startup on duplicate source identities", async () => {
+    const root = await fs.mkdtemp(path.join(repositoryRoot, "tmp/task-10c-manager-duplicate-")); roots.push(root);
+    const store = new DeliveryStore({ statePath: path.join(root, "state.json") });
+    const dispatcher = new NotificationDispatcher({ store, adapter: { permissionState: async () => "unsupported", showNotification: async () => undefined }, iconPath: path.join(root, "icon.png") });
+    const source = { id: "11111111-1111-4111-8111-111111111111", kind: "local", generation: 1, sourceOrigin: "http://127.0.0.1:43127", targetUserId: "u", accountLabel: "U", sourceLabel: "Local", enabled: false, capability: { available: true, reason: null } };
+    const manager = new NotificationConnectionManager({ localServerOrigin: "http://127.0.0.1:43127", controlToken: "notification_control_123456789", store, dispatcher, fetch: vi.fn(async () => Response.json({ success: true, data: { generation: 1, sources: [source, source] } })) as unknown as typeof globalThis.fetch });
+    await expect(manager.start()).rejects.toThrow(/snapshot.*invalid/i);
+    await manager.stop();
   });
 });
 

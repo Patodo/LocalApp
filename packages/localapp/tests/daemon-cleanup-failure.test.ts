@@ -54,6 +54,44 @@ describe("daemon cleanup failures", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it.skipIf(process.platform === "win32")("tears down Server and lock when the initial notification snapshot fails", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "m-")); directories.push(root);
+    const artifact = path.join(root, "packed"); await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    const terminate = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const failure = new Error("initial notification snapshot rejected");
+    const daemon = new LocalAppDaemon({
+      layout,
+      spawnOwnedProcess: () => readyOwnedProcess(terminate, () => undefined),
+      createNotificationRuntime: async () => ({ manager: { start: async () => { throw failure; }, stop, currentSource: () => undefined }, resolver: { resolve: async () => undefined } }),
+    });
+    await expect(daemon.start()).rejects.toBe(failure);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(fs.lstat(layout.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.skipIf(process.platform === "win32")("terminates Server even when notification manager stop rejects", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "s-")); directories.push(root);
+    const artifact = path.join(root, "packed"); await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    const terminate = vi.fn(async () => undefined);
+    const failure = new Error("notification stop failed");
+    const daemon = new LocalAppDaemon({
+      layout,
+      spawnOwnedProcess: () => readyOwnedProcess(terminate, () => undefined),
+      createNotificationRuntime: async () => ({ manager: { start: async () => undefined, stop: async () => { throw failure; }, currentSource: () => undefined }, resolver: { resolve: async () => undefined } }),
+    });
+    await daemon.start();
+    await expect(daemon.stop()).rejects.toBe(failure);
+    expect(terminate).toHaveBeenCalledTimes(1);
+  });
+
   it.skipIf(process.platform === "win32")("retains the startup-owned Server and lock when readiness cleanup rejects", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "startup-"));
     directories.push(root);
@@ -63,7 +101,7 @@ describe("daemon cleanup failures", () => {
     await publishRelease({ sourceDirectory: artifact, layout });
     const failure = new Error("startup tree cleanup failed");
     const terminate = vi.fn(async () => { throw failure; });
-    const daemon = new LocalAppDaemon({ layout, readinessTimeoutMs: 20, spawnOwnedProcess: () => silentOwnedProcess(terminate) });
+    const daemon = new LocalAppDaemon({ layout, readinessTimeoutMs: 20, spawnOwnedProcess: () => silentOwnedProcess(terminate), createNotificationRuntime: noNotificationRuntime });
 
     try {
       await expect(daemon.start()).rejects.toBe(failure);
@@ -83,7 +121,7 @@ describe("daemon cleanup failures", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     let exit!: () => void;
     const terminate = vi.fn(async () => undefined);
-    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: () => readyOwnedProcess(terminate, (resolve) => { exit = resolve; }) });
+    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: () => readyOwnedProcess(terminate, (resolve) => { exit = resolve; }), createNotificationRuntime: noNotificationRuntime });
     await daemon.start();
     exit();
     await expect(daemon.stopped).rejects.toMatchObject({ code: "server_exited" });
@@ -102,7 +140,7 @@ describe("daemon cleanup failures", () => {
     let releaseTerminate!: () => void;
     const terminate = vi.fn(() => new Promise<void>((resolve) => { releaseTerminate = resolve; }));
     const spawn = vi.fn(() => readyOwnedProcess(terminate, () => undefined));
-    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: spawn });
+    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: spawn, createNotificationRuntime: noNotificationRuntime });
     await daemon.start();
     const restarting = daemon.restart();
     while (terminate.mock.calls.length === 0) await new Promise((resolve) => setImmediate(resolve));
@@ -157,7 +195,7 @@ async function startDaemonWithFailingServer() {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
   const failure = new Error("owned Server cleanup failed");
   const terminate = vi.fn(async () => { throw failure; });
-  const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: () => failingOwnedProcess(terminate) });
+  const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: () => failingOwnedProcess(terminate), createNotificationRuntime: noNotificationRuntime });
   await daemon.start();
   return { daemon, layout, terminate, failure };
 }
@@ -182,4 +220,8 @@ function readyOwnedProcess(terminate: () => Promise<void>, setExit: (resolve: ()
   child.pid = 41_275;
   const exited = new Promise<{ code: number }>((resolve) => setExit(() => resolve({ code: 1 })));
   return { child: child as unknown as OwnedProcess["child"], pid: child.pid, exited, terminate };
+}
+
+async function noNotificationRuntime() {
+  return { manager: { start: async () => undefined, stop: async () => undefined, currentSource: () => undefined }, resolver: { resolve: async () => undefined } };
 }
