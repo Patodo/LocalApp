@@ -5,7 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApiKey } from "../../server/src/lib/meta-sqlite.js";
 import { createTestServer, registerUser } from "../../server/tests/integration/helpers.js";
 import { installApplication } from "../src/commands/app-install.js";
-import { SyncJobFailure, syncApplication } from "../src/commands/app-sync.js";
+import { type SyncJob, SyncJobFailure, syncApplication } from "../src/commands/app-sync.js";
+import { sanitizeCredential } from "../src/commands/shared.js";
 import { ProfileStore } from "../src/config/profile-store.js";
 
 const repositoryRoot = path.resolve(process.cwd(), "../..");
@@ -151,6 +152,26 @@ describe("application synchronization", () => {
     } finally {
       await close(server);
     }
+  });
+
+  it("redacts mixed-case surrogate-pair credential escapes from nested terminal jobs", async () => {
+    // Break caught: encoding a non-BMP credential as one invalid JSON escape leaves valid UTF-16 surrogate-pair forms in serialized error.job data.
+    const apiKey = "source-😀-key";
+    const jsonEscapedApiKey = "\\u0073\\u006F\\u0075\\u0072\\u0063\\u0065\\u002D\\uD83d\\uDe00\\u002d\\u006B\\u0065\\u0079";
+    const rawJob = {
+      id: "job-non-bmp", status: "failed",
+      nested: {
+        [jsonEscapedApiKey]: [jsonEscapedApiKey, { [apiKey]: apiKey }, { nested: { [jsonEscapedApiKey]: jsonEscapedApiKey } }],
+      },
+    };
+    const thrown = new SyncJobFailure("failed", sanitizeCredential(rawJob, apiKey) as SyncJob, "Application synchronization failed");
+    const serialized = JSON.stringify(thrown);
+
+    expect(serialized).not.toContain(apiKey);
+    expect(serialized).not.toContain(JSON.stringify(jsonEscapedApiKey).slice(1, -1));
+    expect(thrown.job).toMatchObject({
+      nested: { "[REDACTED]": ["[REDACTED]", { "[REDACTED]": "[REDACTED]" }, { nested: { "[REDACTED]": "[REDACTED]" } }] },
+    });
   });
 });
 
