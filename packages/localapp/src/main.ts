@@ -14,6 +14,7 @@ import { writeCredentialSafeJson } from "./commands/shared.js";
 import { resolveProjectTarget } from "./project/target.js";
 import { loadPackageVersion } from "./version.js";
 import { LocalAppLifecycleError } from "./errors.js";
+import { runDev } from "./commands/dev.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,6 +60,8 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
         success: true, status: job.status, job, sourceServer: profile.serverUrl,
         peer: command.peer, withData: command.withData,
       }, profile.apiKey);
+    } else if (command.kind === "dev") {
+      return await runDev({ projectDir: process.cwd(), signal: new AbortController().signal, io });
     }
     return 0;
   } catch (error) {

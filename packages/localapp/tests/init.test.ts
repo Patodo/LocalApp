@@ -51,6 +51,7 @@ describe("builtin project initialization", () => {
     expect(packageJson.dependencies["@localapp/sdk"]).toBe("file:./.localapp/runtime/sdk/core");
     expect(packageJson.scripts.postinstall).toBe("node .localapp/runtime/sync-template.cjs");
     expect(await exists(path.join(project, ".localapp/runtime/sync-template.cjs"))).toBe(true);
+    expect(await fs.readFile(path.join(project, ".npmrc"), "utf8")).toContain("public-hoist-pattern[]=pdfjs-dist");
     expect(JSON.stringify(packageJson)).not.toContain("workspace:");
   });
 

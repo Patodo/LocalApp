@@ -125,7 +125,7 @@ export function buildProxy(devConfig, serverUrl) {
 
 function requireCanonicalDevConfig(devConfig) {
   const missing = [];
-  for (const field of ["serverUrl", "userId", "pageName", "apiKey"]) {
+  for (const field of ["serverUrl", "userId", "pageName"]) {
     if (typeof devConfig?.[field] !== "string" || !devConfig[field].trim()) missing.push(field);
   }
   if (!Number.isInteger(devConfig?.appServerPort) || devConfig.appServerPort < 1 || devConfig.appServerPort > 65535) {
@@ -179,9 +179,12 @@ function installDevProxySecurity(server, devConfig, csrfToken) {
   });
 }
 
-export function buildDevServer(devConfig, userServer = {}) {
+export function buildDevServer(devConfig, userServer = {}, apiKey) {
   requireCanonicalDevConfig(devConfig);
-  const proxyConfig = buildProxy(devConfig, devConfig.serverUrl);
+  if (typeof apiKey !== "string" || !apiKey) {
+    throw new Error("localapp: private LOCALAPP_DEV_API_KEY is unavailable. Run 'localapp dev' instead of starting Vite directly.");
+  }
+  const proxyConfig = buildProxy({ ...devConfig, apiKey }, devConfig.serverUrl);
   return {
     ...userServer,
     ...(proxyConfig ?? {}),
@@ -241,6 +244,7 @@ function buildDevShellVirtualModule() {
 export function localapp(options = {}) {
   const projectRoot = process.cwd();
   const devConfig = options.devConfig ?? loadDevConfig(projectRoot);
+  const devApiKey = options.devApiKey ?? process.env.LOCALAPP_DEV_API_KEY;
   const devCsrfToken = options.devCsrfToken ?? randomBytes(32).toString("hex");
   let command = options.command;
 
@@ -249,7 +253,7 @@ export function localapp(options = {}) {
     config(userConfig, configEnv) {
       command = command || configEnv?.command;
       const devServer = command === "serve"
-        ? buildDevServer(devConfig, userConfig.server)
+        ? buildDevServer(devConfig, userConfig.server, devApiKey)
         : userConfig.server;
       return {
         ...userConfig,

@@ -9,6 +9,7 @@
   },
   "files": [
     "bin",
+    "runtime",
     "template",
     ".localapp-artifact.json"
   ],
@@ -22,10 +23,8 @@
     "postpack": "node scripts/cleanup-pack.mjs",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@localapp/server": "workspace:*"
-  },
   "devDependencies": {
+    "@localapp/server": "workspace:*",
     "@types/node": "^25.9.1",
     "esbuild": "^0.27.0",
     "typescript": "^5.4.0",

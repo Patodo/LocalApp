@@ -3,9 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(__dirname, "..");
+const runtimeRoot = fs.existsSync(path.join(root, "runtime")) ? "runtime" : path.join(".localapp", "runtime");
 
 function readTemplateFile(relativePath: string) {
-  return fs.readFileSync(path.join(root, relativePath), "utf-8");
+  const parts = relativePath.split(/[\\/]/);
+  const resolved = parts[0] === "runtime" ? path.join(runtimeRoot, ...parts.slice(1)) : relativePath;
+  return fs.readFileSync(path.join(root, resolved), "utf-8");
 }
 
 describe("shadcn UI template files", () => {

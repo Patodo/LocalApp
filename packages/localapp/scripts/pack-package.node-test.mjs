@@ -23,8 +23,12 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.equal(unpacked.code, 0, unpacked.stderr);
 
   const binary = path.join(extracted, "package/bin/localapp.mjs");
+  const manifest = JSON.parse(await fs.readFile(path.join(extracted, "package/package.json"), "utf8"));
   assert.equal((await fs.stat(binary)).isFile(), true);
   assert.equal((await fs.stat(path.join(extracted, "package/.localapp-artifact.json"))).isFile(), true);
+  assert.deepEqual(manifest.dependencies ?? {}, {});
+  assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
+  assert.equal((await fs.stat(path.join(extracted, "package/runtime/server/bin/localapp-server.mjs"))).isFile(), true);
   const version = await run(process.execPath, [binary, "--version"], extracted);
   assert.equal(version.code, 0, version.stderr);
   assert.equal(version.stdout.trim(), "localapp 0.1.0");

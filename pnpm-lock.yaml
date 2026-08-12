@@ -172,11 +172,10 @@ importers:
         version: 2.11.4
 
   packages/localapp:
-    dependencies:
+    devDependencies:
       '@localapp/server':
         specifier: workspace:*
         version: link:../server
-    devDependencies:
       '@types/node':
         specifier: ^25.9.1
         version: 25.9.1

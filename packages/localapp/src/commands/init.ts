@@ -73,6 +73,8 @@ export async function copyUserZone(templateDirectory: string, projectDirectory: 
   await copyDirectory(templateDirectory, projectDirectory, userExcludes);
   const stagedGitignore = path.join(templateDirectory, "template.gitignore");
   if (await pathExists(stagedGitignore)) await fs.copyFile(stagedGitignore, path.join(projectDirectory, ".gitignore"));
+  const stagedNpmrc = path.join(templateDirectory, "template.npmrc");
+  if (await pathExists(stagedNpmrc)) await fs.copyFile(stagedNpmrc, path.join(projectDirectory, ".npmrc"));
 }
 
 export async function copyManagedZone(

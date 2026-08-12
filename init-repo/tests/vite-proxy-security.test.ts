@@ -6,7 +6,7 @@ import path from "node:path";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-ignore - .mjs file has no type declarations
-import { localapp } from "../runtime/vite-plugin.mjs";
+import { localapp } from "@localapp/app-kit/vite";
 
 describe("credential-injecting Vite proxy security", () => {
   let backend: http.Server | undefined;
@@ -44,7 +44,6 @@ describe("credential-injecting Vite proxy security", () => {
     const origin = `http://127.0.0.1:${appPort}`;
     const devConfig = {
       serverUrl: `http://127.0.0.1:${backendAddress.port}`,
-      apiKey: "proxy-admin-key",
       userId: "dev-user",
       pageName: "demo-app",
       appServerPort: appPort,
@@ -54,7 +53,7 @@ describe("credential-injecting Vite proxy security", () => {
       configFile: false,
       logLevel: "silent",
       // @ts-ignore - LocalApp plugin accepts deterministic security material for tests.
-      plugins: localapp({ command: "serve", devConfig, devCsrfToken: "a".repeat(64) }),
+      plugins: localapp({ command: "serve", devConfig, devApiKey: "proxy-admin-key", devCsrfToken: "a".repeat(64) }),
     });
     await vite.listen();
 
@@ -112,7 +111,6 @@ describe("credential-injecting Vite proxy security", () => {
     const appPort = await freeLoopbackPort();
     const devConfig = {
       serverUrl: `http://127.0.0.1:${backendAddress.port}`,
-      apiKey: "proxy-admin-key",
       userId: "dev-user",
       pageName: "demo-app",
       appServerPort: appPort,
@@ -122,7 +120,7 @@ describe("credential-injecting Vite proxy security", () => {
       configFile: false,
       logLevel: "silent",
       // @ts-ignore - LocalApp plugin accepts deterministic security material for tests.
-      plugins: localapp({ command: "serve", devConfig, devCsrfToken: "b".repeat(64) }),
+      plugins: localapp({ command: "serve", devConfig, devApiKey: "proxy-admin-key", devCsrfToken: "b".repeat(64) }),
     });
     await vite.listen();
 

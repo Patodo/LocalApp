@@ -22,6 +22,7 @@ import {
 export interface BuildApplicationPackageOptions {
   projectDir: string;
   outputPath?: string;
+  versionOverride?: string;
   overwrite?: boolean;
   run?: ProjectCommandRunner;
   fileHooks?: ProjectFileReadHooks;
@@ -64,9 +65,11 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
   }
 
   const packageJson = await readProjectJson(projectDir, "package.json", options.fileHooks);
-  const version = typeof packageJson.version === "string" && packageJson.version.trim()
-    ? packageJson.version.trim()
-    : "0.0.0";
+  const version = options.versionOverride ?? (
+    typeof packageJson.version === "string" && packageJson.version.trim()
+      ? packageJson.version.trim()
+      : "0.0.0"
+  );
   const files = await collectCanonicalFiles(projectDir, manifest, options.fileHooks);
   const prepared = await preparePackageOutput(output.path, options.overwrite === true);
   const operations: PackageOperations = {

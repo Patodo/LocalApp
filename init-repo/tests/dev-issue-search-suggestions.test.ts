@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDevIssueSearchSuggestion, getDevIssueSearchSuggestions } from "../runtime/dev-shell";
+import { applyDevIssueSearchSuggestion, getDevIssueSearchSuggestions } from "@localapp/app-kit/dev-shell";
 
 const context = {
   currentUserId: "alice",

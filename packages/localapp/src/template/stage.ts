@@ -20,6 +20,7 @@ export async function stageBuiltinTemplate({ repositoryRoot, outputDirectory, ve
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await copyDirectory(initRepository, outputDirectory, TEMPLATE_EXCLUDED_NAMES);
   await preserveProjectGitignore(outputDirectory);
+  await preserveProjectNpmrc(outputDirectory);
 
   await stageRuntimePackage(repositoryRoot, outputDirectory, "sdk-core", "core");
   await stageRuntimePackage(repositoryRoot, outputDirectory, "sdk-react", "react");
@@ -57,5 +58,11 @@ async function isFile(filePath: string): Promise<boolean> {
 async function preserveProjectGitignore(outputDirectory: string): Promise<void> {
   const source = path.join(outputDirectory, ".gitignore");
   const destination = path.join(outputDirectory, "template.gitignore");
+  if (await isFile(source)) await fs.rename(source, destination);
+}
+
+async function preserveProjectNpmrc(outputDirectory: string): Promise<void> {
+  const source = path.join(outputDirectory, ".npmrc");
+  const destination = path.join(outputDirectory, "template.npmrc");
   if (await isFile(source)) await fs.rename(source, destination);
 }

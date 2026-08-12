@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 // @ts-ignore - .mjs file has no type declarations
-import { buildDevServer, buildProxy, localapp } from "../runtime/vite-plugin.mjs";
+import { buildDevServer, buildProxy, localapp } from "@localapp/app-kit/vite";
 
 type VitePlugin = {
   name: string;
@@ -14,15 +14,14 @@ type VitePlugin = {
 
 const TEST_DEV_CONFIG = {
   serverUrl: "http://127.0.0.1:43127",
-  apiKey: "test-key",
   userId: "testuser",
   pageName: "demo",
   appServerPort: 5182,
 };
 
-function getLocalAppworkPlugin(options: { command?: "serve" | "build"; devConfig?: Record<string, unknown> } = {}): VitePlugin {
+function getLocalAppworkPlugin(options: { command?: "serve" | "build"; devConfig?: Record<string, unknown>; devApiKey?: string } = {}): VitePlugin {
   // @ts-ignore - localapp accepts vite UserConfig-style options
-  const plugins = localapp({ ...options, devConfig: options.devConfig ?? TEST_DEV_CONFIG });
+  const plugins = localapp({ devApiKey: "test-key", ...options, devConfig: options.devConfig ?? TEST_DEV_CONFIG });
   return plugins.find((p: VitePlugin) => p.name === "localapp-runtime");
 }
 
@@ -184,26 +183,14 @@ describe("vite-plugin App path checks", () => {
 });
 
 describe("vite-plugin dev auth injection", () => {
-  it("loads plugin config when dev-config contains apiKey", () => {
+  it("injects a private process credential without requiring it in dev-config", () => {
+    // Break caught: persisting the proxy credential in public dev-config leaks it into project state.
     const qplugin = getLocalAppworkPlugin({ command: "serve" });
-    expect(qplugin).toBeDefined();
-    expect(typeof qplugin.config).toBe("function");
-  });
+    const config = qplugin.config?.({}, { command: "serve" });
+    const request = applyProxyRequest(config.server.proxy["/api"], "GET", "/api/tasks");
 
-  it("buildProxy source contains apiKey configure hook", async () => {
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const src = fs.readFileSync(path.resolve(__dirname, "../runtime/vite-plugin.mjs"), "utf-8");
-    expect(src).toContain("buildAuthConfigure");
-    expect(src).toContain('proxyReq.setHeader("X-API-Key"');
-    expect(src).toContain("devConfig.apiKey");
-  });
-
-  it("buildAuthConfigure returns undefined when auth and dev context are both absent", async () => {
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const src = fs.readFileSync(path.resolve(__dirname, "../runtime/vite-plugin.mjs"), "utf-8");
-    expect(src).toMatch(/if\s*\(\s*!apiKey\s*&&\s*!devConfig\.pageName\s*\)\s*return\s+undefined/);
+    expect(TEST_DEV_CONFIG).not.toHaveProperty("apiKey");
+    expect(request.headers.get("X-API-Key")).toBe("test-key");
   });
 });
 
@@ -400,13 +387,14 @@ describe("vite-plugin dependency prebundling", () => {
 
 describe("vite-plugin dev server address", () => {
   it("fails clearly when canonical Server development configuration is incomplete", () => {
-    expect(() => buildDevServer({})).toThrow(/dev-config\.json.*serverUrl.*userId.*pageName.*apiKey.*appServerPort/i);
+    expect(() => buildDevServer({}, {}, "test-key")).toThrow(/dev-config\.json.*serverUrl.*userId.*pageName.*appServerPort/i);
   });
 
   it("forces the credential-injecting Vite listener to loopback", () => {
     const server = buildDevServer(
       TEST_DEV_CONFIG,
       { host: "0.0.0.0", open: false },
+      "test-key",
     );
 
     expect(server).toMatchObject({
@@ -431,7 +419,7 @@ describe("vite-plugin dev server address", () => {
     "http://127.0.0.1:65536",
     "http://127.0.0.1",
   ])("rejects a non-canonical credential proxy target: %s", (serverUrl) => {
-    expect(() => buildDevServer({ ...TEST_DEV_CONFIG, serverUrl })).toThrow(
+    expect(() => buildDevServer({ ...TEST_DEV_CONFIG, serverUrl }, {}, "test-key")).toThrow(
       /serverUrl.*http:\/\/127\.0\.0\.1:<nonzero-port>/i,
     );
   });

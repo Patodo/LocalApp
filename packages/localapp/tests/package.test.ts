@@ -72,6 +72,25 @@ describe("application package creation", () => {
     expect((await inspectAppPackage(built.path)).metadata.version).toBe("0.0.0");
   });
 
+  it("uses an explicit unique development version without rewriting package.json", async () => {
+    // Break caught: reusing the durable project version can make repeated dev installs indistinguishable or mutate user-owned package metadata.
+    const projectDir = await createProject();
+    const packageJsonPath = path.join(projectDir, "package.json");
+    const before = await fs.readFile(packageJsonPath);
+    const developmentVersion = "0.0.0-dev.1234.c0ffee";
+
+    const built = await buildApplicationPackage({
+      projectDir,
+      outputPath: path.join(projectDir, "development.localapp"),
+      versionOverride: developmentVersion,
+      run: successfulRunner([]),
+    });
+
+    expect(built.version).toBe(developmentVersion);
+    expect((await inspectAppPackage(built.path)).metadata.version).toBe(developmentVersion);
+    expect(await fs.readFile(packageJsonPath)).toEqual(before);
+  });
+
   it("never writes a package after failed tests even when stale dist exists", async () => {
     // Break caught: collecting a pre-existing dist after failed tests publishes stale application code.
     const projectDir = await createProject();

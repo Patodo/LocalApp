@@ -21,6 +21,8 @@ export async function buildLocalAppPackage(options = {}) {
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
   await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
+  const { buildServerPackage } = await import(pathToFileURL(path.join(projectDirectory, "packages/server/scripts/build-server-package.mjs")).href);
+  const serverArtifact = await buildServerPackage({ outputDirectory: path.join(outputDirectory, "runtime/server") });
   await build({
     absWorkingDir: projectDirectory,
     alias: {
@@ -59,6 +61,8 @@ export async function buildLocalAppPackage(options = {}) {
     nodeMajor: 24,
     entrypoint: "bin/localapp.mjs",
     bundleDigest: await sha256(path.join(binDirectory, "localapp.mjs")),
+    serverBundleDigest: serverArtifact.bundleDigest,
+    serverEntrypoint: "runtime/server/bin/localapp-server.mjs",
   });
 
   return { outputDirectory, tarballInput: outputDirectory, manifestPath };

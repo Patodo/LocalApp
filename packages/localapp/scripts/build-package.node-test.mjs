@@ -87,6 +87,7 @@ test("packed tarball keeps the builtin runtime available to init", async (t) => 
   const packedPackage = path.join(unpackDirectory, "package");
   await run(packedPackage, ["init", "tarball-app", "--skip-install", "--skip-deploy"], projectDirectory);
   assert.equal(await fs.stat(path.join(projectDirectory, "tarball-app/.localapp/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
+  assert.match(await fs.readFile(path.join(projectDirectory, "tarball-app/.npmrc"), "utf8"), /public-hoist-pattern\[\]=pdfjs-dist/);
 });
 
 test("packed postinstall wrapper treats only a missing localapp executable as a warning", async (t) => {

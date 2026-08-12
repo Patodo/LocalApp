@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestDevContext } from "../runtime/dev-shell";
+import { requestDevContext } from "@localapp/app-kit/dev-shell";
 
 describe("requestDevContext", () => {
   afterEach(() => {

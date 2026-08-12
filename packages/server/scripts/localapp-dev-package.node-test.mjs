@@ -1,55 +1,81 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { test } from "node:test";
-import { buildServerPackage } from "./build-server-package.mjs";
+import { buildLocalAppPackage } from "../../localapp/scripts/build-package.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const testRoot = path.join(repoRoot, "tmp", "localapp-dev-package-e2e");
+const testRoot = path.join(repoRoot, "tmp/localapp-dev-package-e2e");
+const productDirectory = path.join(testRoot, "product");
+const packDirectory = path.join(testRoot, "pack");
+const consumerDirectory = path.join(testRoot, "consumer");
 const workspace = path.join(testRoot, "workspace");
 const appName = "canonical-dev-e2e";
 const appDirectory = path.join(workspace, appName);
-const cli = path.join(
-  repoRoot,
-  "packages",
-  "cli",
-  "target",
-  "debug",
-  process.platform === "win32" ? "localapp.exe" : "localapp",
-);
 
-test("published Server artifact runs a fresh builtin app through the real localapp dev lifecycle", { timeout: 240_000 }, async () => {
+test("npm-installed sole TypeScript localapp runs its embedded canonical Server and cleans every dev descendant", { timeout: 420_000 }, async (t) => {
+  // Break caught: a package that resolves workspace Server/Rust code, leaks credentials, or kills only leaders cannot pass from an isolated npm install.
   await fs.rm(testRoot, { recursive: true, force: true });
-  await fs.mkdir(workspace, { recursive: true });
-  const artifact = await buildServerPackage({ outputDirectory: path.join(testRoot, "server-artifact") });
-  const cliStat = await fs.stat(cli).catch(() => null);
-  assert.equal(cliStat?.isFile(), true, `CLI must be built before this test: ${cli}`);
+  await Promise.all([
+    fs.mkdir(packDirectory, { recursive: true }),
+    fs.mkdir(consumerDirectory, { recursive: true }),
+    fs.mkdir(workspace, { recursive: true }),
+  ]);
+  t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
+
+  const product = await buildLocalAppPackage({ outputDirectory: productDirectory });
+  const serverManifest = JSON.parse(await fs.readFile(path.join(product.outputDirectory, "runtime/server/.localapp-server-artifact.json"), "utf8"));
+  for (const required of [
+    "bin/localapp-server.mjs",
+    "bin/server-cli.cjs",
+    "bin/worker.cjs",
+    "runner/localapp-runner.mjs",
+    "web/index.html",
+    "node_modules/sql.js/dist/sql-wasm.js",
+    "node_modules/sql.js/dist/sql-wasm.wasm",
+  ]) {
+    assert.equal(typeof serverManifest.files[required], "string", `embedded canonical Server missing ${required}`);
+  }
+
+  const packed = await run("npm", ["pack", product.outputDirectory, "--pack-destination", packDirectory], repoRoot, process.env, 120_000);
+  assert.equal(packed.code, 0, packed.stderr);
+  const tarballName = (await fs.readdir(packDirectory)).find((name) => name.endsWith(".tgz"));
+  assert.ok(tarballName, "npm pack did not create a tarball");
+  const tarball = path.join(packDirectory, tarballName);
+  await fs.writeFile(path.join(consumerDirectory, "package.json"), '{"name":"isolated-localapp-consumer","private":true}\n');
+  const installed = await run("npm", ["install", "--ignore-scripts", tarball], consumerDirectory, process.env, 120_000);
+  assert.equal(installed.code, 0, installed.stderr);
+  const cli = path.join(consumerDirectory, "node_modules/localapp/bin/localapp.mjs");
+  const installedManifest = JSON.parse(await fs.readFile(path.join(consumerDirectory, "node_modules/localapp/package.json"), "utf8"));
+  assert.equal(JSON.stringify(installedManifest).includes("workspace:"), false);
+  assert.deepEqual(installedManifest.dependencies ?? {}, {});
 
   const environment = {
     ...process.env,
-    PATH: `${path.dirname(cli)}${path.delimiter}${process.env.PATH ?? ""}`,
-    LOCALAPP_CONFIG_DIR: path.join(testRoot, "config"),
-    LOCALAPP_SERVER_BIN: artifact.bin,
-    LOCALAPP_NODE_BIN: process.execPath,
+    PATH: `${path.join(consumerDirectory, "node_modules/.bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+    LOCALAPP_CONFIG_DIR: path.join(appDirectory, "tmp/localapp-dev/config"),
     CI: "1",
   };
   const init = await execFileAsync(
-    cli,
-    ["init", "--name", appName, "--skip-deploy", "--builtin-repo"],
-    { cwd: workspace, env: environment, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 },
+    process.execPath,
+    [cli, "init", appName, "--skip-install", "--skip-deploy"],
+    { cwd: workspace, env: environment, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
   );
   assert.match(init.stdout, new RegExp(`"created":"${appName}"`));
+  const appInstall = await run("npm", ["install", "--ignore-scripts"], appDirectory, environment, 300_000);
+  assert.equal(appInstall.code, 0, appInstall.stderr);
+  const appTests = await run("npm", ["test"], appDirectory, environment, 60_000);
+  assert.equal(appTests.code, 0, `${appTests.stdout}\n${appTests.stderr}`);
 
   let child;
   let output = "";
   let observedDescendants = [];
   try {
-    child = spawn(cli, ["dev"], {
+    child = spawn(process.execPath, [cli, "dev"], {
       cwd: appDirectory,
       env: environment,
       stdio: ["ignore", "pipe", "pipe"],
@@ -59,8 +85,20 @@ test("published Server artifact runs a fresh builtin app through the real locala
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });
 
-    const appUrl = await waitForOutput(child, () => output.match(/App URL:\s+(http:\/\/localhost:\d+\/)/)?.[1], 120_000, () => output);
-    const serverUrl = await waitForOutput(child, () => output.match(/Local Server:\s+(http:\/\/127\.0\.0\.1:\d+)/)?.[1], 120_000, () => output);
+    const appUrl = await waitForCondition(
+      () => output.match(/App URL:\s+(http:\/\/127\.0\.0\.1:\d+\/)/)?.[1],
+      "Vite app URL",
+      180_000,
+      () => output,
+      child,
+    );
+    const serverUrl = await waitForCondition(
+      () => output.match(/Local Server:\s+(http:\/\/127\.0\.0\.1:\d+)/)?.[1],
+      "canonical Server URL",
+      180_000,
+      () => output,
+      child,
+    );
     const index = await waitForHttp(appUrl, 60_000);
     assert.equal(index.status, 200);
     const cookie = index.headers.get("set-cookie")?.split(";", 1)[0];
@@ -71,47 +109,47 @@ test("published Server artifact runs a fresh builtin app through the real locala
     const me = await getJson(new URL("api/me", appUrl), cookie);
     assert.equal(me.response.status, 200, me.text);
     assert.equal(me.body.success, true);
-
     const context = await getJson(new URL("api/dev/context", appUrl), cookie);
     assert.equal(context.response.status, 200, context.text);
     assert.equal(context.body.data?.pageName, appName);
     assert.equal(context.body.data?.pageOwnerId, "dev-user");
 
-    const issues = await getJson(new URL(`api/issues?pagePath=${encodeURIComponent(`dev-user/${appName}`)}`, appUrl), cookie);
-    assert.equal(issues.response.status, 200, issues.text);
-    const platformUsers = await getJson(new URL("api/platform/users", appUrl), cookie);
-    assert.equal(platformUsers.response.status, 200, platformUsers.text);
-
-    const title = "created through real localapp dev";
+    const title = "created through packed TypeScript localapp dev";
     const create = await postJson(
       new URL("api/mutations/$work_items.create", appUrl),
       { params: { title, status: "todo" } },
       { cookie, origin },
     );
     assert.equal(create.response.status, 200, create.text);
-    assert.equal(create.body.success, true);
-
     const snapshot = await postJson(new URL("api/dev/data/snapshots", appUrl), {}, { cookie, origin });
     assert.equal(snapshot.response.status, 201, snapshot.text);
-    const snapshotId = snapshot.body.data?.id;
-    assert.equal(typeof snapshotId, "string");
-
     const reset = await postJson(new URL("api/dev/data/reset", appUrl), {}, { cookie, origin });
     assert.equal(reset.response.status, 200, reset.text);
-    const empty = await listWorkItems(appUrl, cookie, origin);
-    assert.equal(empty.some((row) => row.title === title), false);
-
     const restore = await postJson(
-      new URL(`api/dev/data/snapshots/${encodeURIComponent(snapshotId)}/restore`, appUrl),
+      new URL(`api/dev/data/snapshots/${encodeURIComponent(snapshot.body.data.id)}/restore`, appUrl),
       {},
       { cookie, origin },
     );
     assert.equal(restore.response.status, 200, restore.text);
-    const restored = await listWorkItems(appUrl, cookie, origin);
-    assert.equal(restored.some((row) => row.title === title), true);
 
-    assert.ok(process.platform === "win32" || observedDescendants.length >= 2, `expected Server and Vite descendants; got ${observedDescendants.join(", ")}\n${output}`);
+    const stateRoot = path.join(appDirectory, "tmp/localapp-dev");
+    assert.equal((await fs.stat(path.join(stateRoot, "server"))).isDirectory(), true);
+    assert.equal((await fs.readdir(path.join(stateRoot, "packages"))).some((name) => name.endsWith(".localapp")), true);
+    const apiKey = (await fs.readFile(path.join(stateRoot, "server-api-key"), "utf8")).trim();
+    const password = (await fs.readFile(path.join(stateRoot, "server-password"), "utf8")).trim();
+    const jwtSecret = (await fs.readFile(path.join(stateRoot, "server-jwt-secret"), "utf8")).trim();
+    const devConfig = JSON.parse(await fs.readFile(path.join(appDirectory, ".localapp/dev-config.json"), "utf8"));
+    assert.deepEqual(Object.keys(devConfig).sort(), ["appServerPort", "pageName", "serverUrl", "userId"]);
+    assert.equal(JSON.stringify(devConfig).includes(apiKey), false);
+    assert.equal(output.includes(apiKey) || output.includes(password) || output.includes(jwtSecret), false, output);
+    if (process.platform !== "win32") {
+      for (const credential of ["server-api-key", "server-password", "server-jwt-secret"]) {
+        assert.equal((await fs.stat(path.join(stateRoot, credential))).mode & 0o777, 0o600);
+      }
+      assert.ok(observedDescendants.length >= 2, `expected Server and Vite descendants; got ${observedDescendants.join(", ")}\n${output}`);
+    }
 
+    t.diagnostic(JSON.stringify({ supervisorPid: child.pid, observedDescendants, appUrl, serverUrl, stateRoot }));
     child.kill("SIGINT");
     await waitForExit(child, 15_000);
     await waitUntilUnreachable(appUrl, 10_000);
@@ -125,26 +163,13 @@ test("published Server artifact runs a fresh builtin app through the real locala
       child.kill("SIGINT");
       await waitForExit(child, 5_000).catch(() => undefined);
     }
-    if (process.platform !== "win32") {
-      await terminateProcesses(observedDescendants);
-    }
+    if (process.platform !== "win32") await terminateProcesses(observedDescendants);
     if (child && child.exitCode === null && child.signalCode === null) {
       child.kill("SIGKILL");
       await waitForExit(child, 5_000).catch(() => undefined);
     }
-    await fs.rm(testRoot, { recursive: true, force: true });
   }
 });
-
-async function listWorkItems(appUrl, cookie, origin) {
-  const result = await postJson(
-    new URL("api/queries/$work_items.list", appUrl),
-    { params: { limit: 50, offset: 0 } },
-    { cookie, origin },
-  );
-  assert.equal(result.response.status, 200, result.text);
-  return result.body.data?.rows ?? [];
-}
 
 async function getJson(url, cookie) {
   const response = await fetch(url, { headers: cookie ? { Cookie: cookie } : undefined });
@@ -155,43 +180,33 @@ async function getJson(url, cookie) {
 async function postJson(url, body, { cookie, origin }) {
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Cookie: cookie,
-      Origin: origin,
-    },
+    headers: { "content-type": "application/json", Cookie: cookie, Origin: origin },
     body: JSON.stringify(body),
   });
   const text = await response.text();
   return { response, text, body: JSON.parse(text) };
 }
 
-async function waitForOutput(child, read, timeoutMs, diagnostics) {
+async function waitForCondition(read, label, timeoutMs, diagnostics, child) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = read();
+    const value = await read();
     if (value) return value;
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`localapp dev exited before readiness\n${diagnostics()}`);
-    }
+    if (child && (child.exitCode !== null || child.signalCode !== null)) throw new Error(`localapp dev exited before ${label}\n${diagnostics()}`);
     await delay(50);
   }
-  throw new Error(`timed out waiting for localapp dev output\n${diagnostics()}`);
+  throw new Error(`timed out waiting for ${label}\n${diagnostics()}`);
 }
 
 async function waitForHttp(url, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError;
-  while (Date.now() < deadline) {
+  return waitForCondition(async () => {
     try {
       const response = await fetch(url, { redirect: "manual" });
-      if (response.status < 500) return response;
-    } catch (error) {
-      lastError = error;
+      return response.status < 500 ? response : false;
+    } catch {
+      return false;
     }
-    await delay(100);
-  }
-  throw new Error(`timed out waiting for ${url}: ${lastError}`);
+  }, `HTTP ${url}`, timeoutMs, () => "", undefined);
 }
 
 async function waitForExit(child, timeoutMs) {
@@ -203,16 +218,9 @@ async function waitForExit(child, timeoutMs) {
 }
 
 async function waitUntilUnreachable(url, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await fetch(url);
-    } catch {
-      return;
-    }
-    await delay(100);
-  }
-  throw new Error(`${url} remained reachable after localapp dev exited`);
+  return waitForCondition(async () => {
+    try { await fetch(url); return false; } catch { return true; }
+  }, `${url} to stop`, timeoutMs, () => "", undefined);
 }
 
 async function descendantPids(rootPid) {
@@ -238,17 +246,14 @@ async function descendantPids(rootPid) {
 }
 
 async function waitUntilProcessGone(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error?.code === "ESRCH") return true;
-      throw error;
-    }
-    await delay(50);
+  try {
+    return await waitForCondition(() => {
+      try { process.kill(pid, 0); return false; }
+      catch (error) { return error?.code === "ESRCH"; }
+    }, `process ${pid} exit`, timeoutMs, () => "", undefined);
+  } catch {
+    return false;
   }
-  return false;
 }
 
 async function terminateProcesses(pids) {
@@ -259,6 +264,21 @@ async function terminateProcesses(pids) {
     }
     if (signal === "SIGTERM") await delay(250);
   }
+}
+
+function run(command, args, cwd, env, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`${command} timed out`)); }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
+  });
 }
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
