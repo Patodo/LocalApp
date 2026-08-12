@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CliIo } from "../src/cli/output.js";
-import { runDev, writeDevConfig } from "../src/commands/dev.js";
+import { DevLifecycle, runDev, writeDevConfig, type RunDevDependencies } from "../src/commands/dev.js";
 import { readOrCreateDevCredentials } from "../src/dev/credentials.js";
 import { spawnOwnedProcess, type OwnedProcess } from "../src/process/process-tree.js";
 import { waitForServerReady } from "../src/process/readiness.js";
@@ -12,13 +12,24 @@ const repositoryRoot = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(repositoryRoot, "tmp/task-6-dev-tests");
 const directories: string[] = [];
 const processes: OwnedProcess[] = [];
+const blockedFetches: Array<(error: Error) => void> = [];
+const buildFixtures: Array<{ cleanupPath: string; pidsPath: string }> = [];
+type BuildSignalCarrier = { signal?: AbortSignal };
 
 beforeAll(async () => {
   await fs.mkdir(testRoot, { recursive: true });
 });
 
 afterEach(async () => {
+  for (const reject of blockedFetches.splice(0)) reject(new Error("dev test released blocked fetch"));
+  await Promise.all(buildFixtures.map((fixture) => fs.writeFile(fixture.cleanupPath, "stop\n").catch(() => undefined)));
   await Promise.allSettled(processes.splice(0).map((process) => process.terminate()));
+  await Promise.allSettled(buildFixtures.splice(0).flatMap((fixture) => [
+    fs.readFile(fixture.pidsPath, "utf8")
+      .then((value) => JSON.parse(value) as number[])
+      .then((pids) => Promise.all(pids.map((pid) => waitForProcessExit(pid)))),
+  ]));
+  vi.unstubAllGlobals();
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
 
@@ -136,6 +147,275 @@ describe("canonical local development", () => {
     await expect(running).resolves.toBe(0);
     expect(Date.now() - started).toBeLessThan(1_000);
     await expect(waitForProcessExit(pid)).resolves.toBe(true);
+  });
+
+  it("aborts a never-resolving package build and starts Server cleanup exactly once", async () => {
+    // Break caught: awaiting an injected or wedged package build prevents abort from reaching the owned Server cleanup path.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const controller = new AbortController();
+    const buildStarted = deferred<void>();
+    const buildRelease = deferred<ReturnType<typeof fakePackageResult>>();
+    let buildSignal: AbortSignal | undefined;
+    let serverTerminateCalls = 0;
+    const running = runDev({ projectDir, signal: controller.signal, io: captureIo().io }, {
+      serverLauncher,
+      buildApplicationPackage: async (options) => {
+        buildSignal = (options as BuildSignalCarrier).signal;
+        buildStarted.resolve();
+        return buildRelease.promise;
+      },
+      spawnOwnedProcess: (...args) => {
+        const owned = spawnOwnedProcess(...args);
+        const tracked = {
+          ...owned,
+          terminate() {
+            serverTerminateCalls += 1;
+            return owned.terminate();
+          },
+        };
+        processes.push(tracked);
+        return tracked;
+      },
+    });
+    await buildStarted.promise;
+
+    controller.abort();
+
+    try {
+      await expect(settleWithin(running)).resolves.toBe(0);
+      expect(buildSignal?.aborted).toBe(true);
+      expect(serverTerminateCalls).toBe(1);
+      await expect(fs.stat(path.join(projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      buildRelease.resolve(fakePackageResult(path.join(fixtureRoot, "released.localapp")));
+      await settleWithin(running).catch(() => undefined);
+    }
+  });
+
+  it("awaits a Server acquired after abort cleanup has already started", async () => {
+    // Break caught: re-entrant abort during spawn can settle empty cleanup before own() registers the newly acquired process.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = path.join(fixtureRoot, "late-owned-server.mjs");
+    await fs.writeFile(serverLauncher, "setInterval(() => {}, 1000);\n");
+    const controller = new AbortController();
+    const terminateStarted = deferred<void>();
+    const terminateRelease = deferred<void>();
+    let terminateCalls = 0;
+    const running = runDev({ projectDir, signal: controller.signal, io: captureIo().io }, {
+      serverLauncher,
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      spawnOwnedProcess: (...args) => {
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        controller.abort();
+        return {
+          ...owned,
+          terminate() {
+            terminateCalls += 1;
+            terminateStarted.resolve();
+            return terminateRelease.promise.then(() => owned.terminate());
+          },
+        };
+      },
+    });
+
+    try {
+      await expect(settleWithin(terminateStarted.promise, 500)).resolves.toBeUndefined();
+      await expect(isSettled(running)).resolves.toBe(false);
+      expect(terminateCalls).toBe(1);
+      terminateRelease.resolve();
+      await expect(settleWithin(running)).resolves.toBe(0);
+    } finally {
+      terminateRelease.resolve();
+      await settleWithin(running, 5_000).catch(() => undefined);
+    }
+  });
+
+  it("keeps the original abort cleanup promise open for ownership acquired before sealing", async () => {
+    // Break caught: a settled empty cleanup promise cannot supervise a process acquired in an abort race.
+    const projectDir = await fixtureProject();
+    const lifecycle = new DevLifecycle();
+    lifecycle.abort();
+    const cleanup = lifecycle.cleanup();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(await isSettled(cleanup)).toBe(false);
+
+    const late = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: projectDir,
+      stdio: "ignore",
+    });
+    processes.push(late);
+    lifecycle.own(late);
+    lifecycle.sealOwnership();
+
+    await expect(settleWithin(cleanup)).resolves.toBeUndefined();
+    await expect(waitForProcessExit(late.pid)).resolves.toBe(true);
+  });
+
+  it("cancels a blocked Server initialization fetch and settles after Server cleanup", async () => {
+    // Break caught: setup fetch without the lifecycle signal can hold runDev and the owned Server open after abort.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const controller = new AbortController();
+    const fetchStarted = deferred<void>();
+    const blocked = deferred<Response>();
+    let fetchSignal: AbortSignal | undefined;
+    let spawnCalls = 0;
+    vi.stubGlobal("fetch", (_input: URL | RequestInfo, init?: RequestInit) => {
+      fetchSignal = init?.signal ?? undefined;
+      fetchStarted.resolve();
+      fetchSignal?.addEventListener("abort", () => blocked.reject(new DOMException("Aborted", "AbortError")), { once: true });
+      return blocked.promise;
+    });
+    const running = runDev({ projectDir, signal: controller.signal, io: captureIo().io }, {
+      serverLauncher,
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    });
+    await fetchStarted.promise;
+
+    controller.abort();
+
+    try {
+      await expect(settleWithin(running)).resolves.toBe(0);
+      expect(fetchSignal?.aborted).toBe(true);
+      expect(spawnCalls).toBe(1);
+      await expect(fs.stat(path.join(projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      blocked.reject(new Error("release initialization fetch"));
+      await settleWithin(running).catch(() => undefined);
+    }
+  });
+
+  it("wakes from an install fetch that ignores abort without publishing config or Vite", async () => {
+    // Break caught: even an abort-ignoring fetch implementation must not hold runDev or let its late result advance startup.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const controller = new AbortController();
+    const installStarted = deferred<void>();
+    const blocked = deferred<Response>();
+    let installSignal: AbortSignal | undefined;
+    let spawnCalls = 0;
+    blockedFetches.push((error) => blocked.reject(error));
+    vi.stubGlobal("fetch", (input: URL | RequestInfo, init?: RequestInit) => {
+      if (String(input).endsWith("/api/setup/initialize")) {
+        return Promise.resolve({ status: 201 } as Response);
+      }
+      installSignal = init?.signal ?? undefined;
+      installStarted.resolve();
+      return blocked.promise;
+    });
+    const running = runDev({ projectDir, signal: controller.signal, io: captureIo().io }, {
+      serverLauncher,
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    });
+    await installStarted.promise;
+
+    controller.abort();
+
+    try {
+      await expect(settleWithin(running)).resolves.toBe(0);
+      expect(installSignal?.aborted).toBe(true);
+      expect(spawnCalls).toBe(1);
+      await expect(fs.stat(path.join(projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      blocked.reject(new Error("release install fetch"));
+      await settleWithin(running).catch(() => undefined);
+    }
+  });
+
+  it("lets abort win a concurrent config-phase rejection without spawning Vite or leaking rejection", async () => {
+    // Break caught: a phase completion racing abort can publish Vite, while an abandoned phase rejection can become unhandled.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const controller = new AbortController();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    let configPhaseCalled = false;
+    let spawnCalls = 0;
+    process.on("unhandledRejection", onUnhandled);
+    const dependencies: RunDevDependencies = {
+      serverLauncher,
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      writeDevConfig: async () => {
+        configPhaseCalled = true;
+        controller.abort();
+        await Promise.resolve();
+        throw new Error("late config phase rejection");
+      },
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    };
+
+    try {
+      await expect(settleWithin(runDev({ projectDir, signal: controller.signal, io: captureIo().io }, dependencies))).resolves.toBe(0);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(configPhaseCalled).toBe(true);
+      expect(spawnCalls).toBe(1);
+      expect(unhandled).toEqual([]);
+      await expect(fs.stat(path.join(projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("terminates the package build command and its stubborn descendant on abort", async () => {
+    // Break caught: raw package-manager spawn leaves test/build descendants alive after the dev Server cleanup begins.
+    const fixture = await fixtureBuildProject();
+    const fixtureRoot = path.join(fixture.projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const controller = new AbortController();
+    let spawnCalls = 0;
+    const running = runDev({ projectDir: fixture.projectDir, signal: controller.signal, io: captureIo().io }, {
+      serverLauncher,
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    });
+    const buildPids = JSON.parse(await waitForFile(fixture.pidsPath)) as number[];
+
+    controller.abort();
+
+    try {
+      await expect(settleWithin(running, 2_000)).resolves.toBe(0);
+      expect(spawnCalls).toBe(2);
+      for (const pid of buildPids) await expect(waitForProcessExit(pid)).resolves.toBe(true);
+      await expect(fs.stat(path.join(fixtureRoot, "vite.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.writeFile(fixture.cleanupPath, "stop\n").catch(() => undefined);
+      await settleWithin(running, 5_000).catch(() => undefined);
+    }
   });
 
   it("fails closed when abort cleanup cannot confirm an owned process tree exited", async () => {
@@ -260,6 +540,52 @@ async function fixtureProject(): Promise<string> {
   return projectDir;
 }
 
+async function fixtureBuildProject(): Promise<{ projectDir: string; cleanupPath: string; pidsPath: string }> {
+  const projectDir = await fixtureProject();
+  const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/build-fixture");
+  const cleanupPath = path.join(fixtureRoot, "cleanup");
+  const pidsPath = path.join(fixtureRoot, "pids.json");
+  const buildScript = path.join(fixtureRoot, "stubborn-build.mjs");
+  const descendantSource = `
+    const fs = require("node:fs");
+    const cleanupPath = process.argv[1];
+    process.on("SIGTERM", () => {});
+    setInterval(() => {
+      if (fs.existsSync(cleanupPath)) process.exit(0);
+    }, 20);
+  `;
+  await fs.mkdir(path.join(projectDir, "dist"), { recursive: true });
+  await fs.mkdir(fixtureRoot, { recursive: true });
+  await fs.writeFile(path.join(projectDir, "manifest.json"), `${JSON.stringify({
+    name: "task-six-app",
+    description: "Task six build fixture",
+    distDir: "dist",
+    requires: { identity: [], primitives: [] },
+    platformVersion: "^1.2",
+  }, null, 2)}\n`);
+  await fs.writeFile(path.join(projectDir, "package.json"), `${JSON.stringify({
+    name: "task-six-build-fixture",
+    version: "1.0.0",
+    packageManager: "npm@10.0.0",
+    scripts: { build: `node ${JSON.stringify(buildScript)}` },
+  }, null, 2)}\n`);
+  await fs.writeFile(path.join(projectDir, "dist/index.html"), "<main>build fixture</main>\n");
+  await fs.writeFile(buildScript, `
+    import { spawn } from "node:child_process";
+    import fs from "node:fs";
+    const cleanupPath = ${JSON.stringify(cleanupPath)};
+    const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, cleanupPath], { stdio: "ignore" });
+    fs.writeFileSync(${JSON.stringify(pidsPath)}, JSON.stringify([process.pid, descendant.pid]));
+    process.on("SIGTERM", () => {});
+    setInterval(() => {
+      if (fs.existsSync(cleanupPath)) process.exit(0);
+    }, 20);
+  `);
+  const fixture = { projectDir, cleanupPath, pidsPath };
+  buildFixtures.push(fixture);
+  return fixture;
+}
+
 async function writeFakeServer(fixtureRoot: string): Promise<string> {
   const filePath = path.join(fixtureRoot, "fake-server.mjs");
   await fs.writeFile(filePath, `
@@ -333,6 +659,10 @@ function fakePackageBuilder(fixtureRoot: string) {
   };
 }
 
+function fakePackageResult(packagePath: string) {
+  return { path: packagePath, appId: "task-six-app", version: "0.0.0-dev.fixture", sha256: "fixture", size: 26 };
+}
+
 function captureIo(): { io: CliIo; stdout: string; stderr: string } {
   const capture = {
     stdout: "",
@@ -359,6 +689,38 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
       return (error as NodeJS.ErrnoException).code === "ESRCH";
     }
   }, `process ${pid} exit`, 5_000);
+}
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs = 1_500): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`runDev did not settle within ${timeoutMs} ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function isSettled(promise: Promise<unknown>): Promise<boolean> {
+  const pending = Symbol("pending");
+  return await Promise.race([
+    promise.then(() => true, () => true),
+    new Promise<typeof pending>((resolve) => setImmediate(() => resolve(pending))),
+  ]) !== pending;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 async function waitForCondition<T>(condition: () => T | undefined | false | Promise<T | undefined | false>, label: string, timeoutMs: number): Promise<T> {

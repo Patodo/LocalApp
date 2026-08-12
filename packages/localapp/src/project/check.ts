@@ -42,6 +42,7 @@ export interface ProjectCommandInvocation {
   args: string[];
   cwd: string;
   phase: "tests" | "build";
+  signal?: AbortSignal;
 }
 
 export interface ProjectCommandResult {
@@ -57,6 +58,7 @@ export interface CheckProjectOptions {
   projectDir: string;
   run?: ProjectCommandRunner;
   fileHooks?: ProjectFileReadHooks;
+  signal?: AbortSignal;
 }
 
 export interface ValidatedProjectManifest {
@@ -76,11 +78,13 @@ export interface ValidatedProjectManifest {
 const RESERVED_NAMES = new Set(["api", "serve", "health", "cli", "keys", "upload", "pages", "schemas"]);
 
 export async function checkProject(options: CheckProjectOptions): Promise<CheckReport> {
+  throwIfCheckAborted(options.signal);
   const projectDir = path.resolve(options.projectDir);
   const report = createReport();
   let manifest: ValidatedProjectManifest;
   try {
     manifest = await loadAndValidateProjectManifest(projectDir, options.fileHooks);
+    throwIfCheckAborted(options.signal);
     report.project.name = manifest.name;
     pass(report, "project");
   } catch (error) {
@@ -105,6 +109,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
       required: false,
       hooks: options.fileHooks,
     });
+    throwIfCheckAborted(options.signal);
     const validation = validateMigrationFilenames(migrations
       .filter((file) => file.relativePath.endsWith(".sql"))
       .map((file) => file.relativePath));
@@ -122,6 +127,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
       platformVersion: manifest.platformVersion,
       fileHooks: options.fileHooks,
     });
+    throwIfCheckAborted(options.signal);
     pass(report, "backend");
   } catch (error) {
     fail(report, "backend", errorDiagnostic("BACKEND_CONTRACT_INVALID", "backend", safeMessage(error)));
@@ -132,6 +138,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   try {
     packageJson = await readProjectJson(projectDir, "package.json", options.fileHooks);
     report.project.packageManager = await detectPackageManager(projectDir, packageJson);
+    throwIfCheckAborted(options.signal);
   } catch (error) {
     fail(report, "tests", errorDiagnostic("PACKAGE_JSON_INVALID", "tests", safeMessage(error), "package.json"));
     return report;
@@ -143,8 +150,10 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   } else {
     let result: ProjectCommandResult;
     try {
-      result = await runScript(runner, report.project.packageManager, projectDir, "test", "tests");
+      result = await runScript(runner, report.project.packageManager, projectDir, "test", "tests", options.signal);
+      throwIfCheckAborted(options.signal);
     } catch {
+      throwIfCheckAborted(options.signal);
       fail(report, "tests", errorDiagnostic("APP_TEST_FAILED", "tests", "Could not run project test script"));
       return report;
     }
@@ -160,8 +169,10 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   } else {
     let result: ProjectCommandResult;
     try {
-      result = await runScript(runner, report.project.packageManager, projectDir, "build", "build");
+      result = await runScript(runner, report.project.packageManager, projectDir, "build", "build", options.signal);
+      throwIfCheckAborted(options.signal);
     } catch {
+      throwIfCheckAborted(options.signal);
       fail(report, "build", errorDiagnostic("BUILD_FAILED", "build", "Could not run project build script"));
       return report;
     }
@@ -180,6 +191,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
       required: true,
       hooks: options.fileHooks,
     });
+    throwIfCheckAborted(options.signal);
     if (!dist.some((file) => file.relativePath === "index.html")) {
       throw new Error(`${manifest.distDir}/index.html is required`);
     }
@@ -241,6 +253,7 @@ export async function runProjectCommand(invocation: ProjectCommandInvocation): P
       shell: false,
       stdio: "ignore",
       windowsHide: true,
+      signal: invocation.signal,
     });
     child.once("error", reject);
     child.once("exit", (code) => resolve({ exitCode: code ?? 1, stdout: "", stderr: "" }));
@@ -425,9 +438,14 @@ function runScript(
   cwd: string,
   script: "test" | "build",
   phase: "tests" | "build",
+  signal?: AbortSignal,
 ): Promise<ProjectCommandResult> {
   if (manager === undefined) throw new Error("Package manager detection did not complete");
-  return runner({ command: manager, args: ["run", script], cwd, phase });
+  return runner({ command: manager, args: ["run", script], cwd, phase, ...(signal === undefined ? {} : { signal }) });
+}
+
+function throwIfCheckAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("Project validation aborted");
 }
 
 function requireString(value: unknown, label: string): string {

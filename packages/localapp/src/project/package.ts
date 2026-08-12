@@ -28,6 +28,7 @@ export interface BuildApplicationPackageOptions {
   fileHooks?: ProjectFileReadHooks;
   outputHooks?: PackageOutputHooks;
   packageOperations?: Partial<PackageOperations>;
+  signal?: AbortSignal;
 }
 
 export interface PackageOperations {
@@ -48,8 +49,10 @@ export interface BuildApplicationPackageResult {
 }
 
 export async function buildApplicationPackage(options: BuildApplicationPackageOptions): Promise<BuildApplicationPackageResult> {
+  throwIfPackageBuildAborted(options.signal);
   const projectDir = path.resolve(options.projectDir);
   const manifest = await loadAndValidateProjectManifest(projectDir, options.fileHooks);
+  throwIfPackageBuildAborted(options.signal);
   const backendRoot = manifest.backend?.root ?? "backend";
   const output = await resolveSafePackageOutput({
     projectDir,
@@ -58,28 +61,35 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
     protectedDirectories: [manifest.distDir, "migrations", backendRoot],
     overwrite: options.overwrite === true,
   });
-  const report = await checkProject({ projectDir, run: options.run, fileHooks: options.fileHooks });
+  throwIfPackageBuildAborted(options.signal);
+  const report = await checkProject({ projectDir, run: options.run, fileHooks: options.fileHooks, signal: options.signal });
+  throwIfPackageBuildAborted(options.signal);
   if (!report.success) {
     const diagnostic = report.diagnostics.find((item) => item.severity === "error");
     throw lifecycleError("project_check_failed", diagnostic?.message ?? "Project check failed");
   }
 
   const packageJson = await readProjectJson(projectDir, "package.json", options.fileHooks);
+  throwIfPackageBuildAborted(options.signal);
   const version = options.versionOverride ?? (
     typeof packageJson.version === "string" && packageJson.version.trim()
       ? packageJson.version.trim()
       : "0.0.0"
   );
   const files = await collectCanonicalFiles(projectDir, manifest, options.fileHooks);
+  throwIfPackageBuildAborted(options.signal);
   const prepared = await preparePackageOutput(output.path, options.overwrite === true);
+  throwIfPackageBuildAborted(options.signal);
   const operations: PackageOperations = {
     writePackage: options.packageOperations?.writePackage ?? writeAppPackageToStream,
     inspectPackage: options.packageOperations?.inspectPackage ?? inspectAppPackage,
   };
   let candidate: AnchoredPackageCandidate | undefined;
   try {
-    candidate = await createAnchoredPackageCandidate(prepared, options.outputHooks);
+    candidate = await createAnchoredPackageCandidate(prepared, options.outputHooks, options.signal);
+    throwIfPackageBuildAborted(options.signal);
     const written = waitForHelperMessage(candidate.child, "written");
+    void written.catch(() => undefined);
     const generated = await operations.writePackage({
       output: candidate.output,
       metadata: {
@@ -90,16 +100,21 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
       },
       files,
     });
+    throwIfPackageBuildAborted(options.signal);
     const helperWrite = await written;
+    throwIfPackageBuildAborted(options.signal);
     if (helperWrite.digest !== generated.digest) {
       throw lifecycleError("application_package_invalid", "Application package changed while writing the candidate");
     }
     const temporaryIdentity = await capturePreparedTemporary(prepared);
+    throwIfPackageBuildAborted(options.signal);
     const inspected = await operations.inspectPackage(prepared.temporaryPath);
+    throwIfPackageBuildAborted(options.signal);
     if (generated.digest !== inspected.digest) {
       throw lifecycleError("application_package_invalid", "Application package changed before publication");
     }
     await commandPackageHelper(candidate.child, { action: "publish", digest: inspected.digest }, "published");
+    candidate.disposeAbort();
     candidate = undefined;
     return {
       path: output.path,
@@ -109,7 +124,7 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
       size: helperWrite.size ?? temporaryIdentity.size,
     };
   } catch (error) {
-    if (candidate !== undefined) await cleanupAnchoredCandidate(candidate);
+    if (candidate !== undefined) await cleanupAnchoredCandidate(candidate, options.signal);
     if (error instanceof Error && "code" in error && error.code === "APP_PACKAGE_INVALID") {
       throw lifecycleError("application_package_invalid", error.message);
     }
@@ -120,6 +135,7 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
 interface AnchoredPackageCandidate {
   child: ChildProcess;
   output: Writable;
+  disposeAbort(): void;
 }
 
 interface PackageHelperMessage {
@@ -286,8 +302,11 @@ let candidateIdentity;
 async function createAnchoredPackageCandidate(
   prepared: Awaited<ReturnType<typeof preparePackageOutput>>,
   hooks?: PackageOutputHooks,
+  signal?: AbortSignal,
 ): Promise<AnchoredPackageCandidate> {
+  throwIfPackageBuildAborted(signal);
   await hooks?.beforeCandidateCreate?.();
+  throwIfPackageBuildAborted(signal);
   const config = Buffer.from(JSON.stringify({
     dev: prepared.parent.dev.toString(),
     ino: prepared.parent.ino.toString(),
@@ -303,8 +322,24 @@ async function createAnchoredPackageCandidate(
   const ready = waitForHelperMessage(child, "ready");
   const output = child.stdin;
   if (output === null) throw lifecycleError("package_output_failed", "Could not create application package candidate");
-  await ready;
-  return { child, output };
+  const onAbort = () => {
+    if (!output.destroyed) output.destroy();
+    if (child.connected) child.disconnect();
+    child.kill("SIGKILL");
+  };
+  const disposeAbort = () => signal?.removeEventListener("abort", onAbort);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  try {
+    await ready;
+    throwIfPackageBuildAborted(signal);
+    return { child, output, disposeAbort };
+  } catch (error) {
+    disposeAbort();
+    if (!output.destroyed) output.destroy();
+    child.kill("SIGKILL");
+    throw error;
+  }
 }
 
 function waitForHelperMessage(
@@ -348,6 +383,7 @@ async function commandPackageHelper(
   expected: "published" | "cleaned",
 ): Promise<PackageHelperMessage> {
   const response = waitForHelperMessage(child, expected);
+  void response.catch(() => undefined);
   await new Promise<void>((resolve, reject) => {
     child.send(command, (error) => error ? reject(error) : resolve());
   });
@@ -356,13 +392,28 @@ async function commandPackageHelper(
   return message;
 }
 
-async function cleanupAnchoredCandidate(candidate: AnchoredPackageCandidate): Promise<void> {
+async function cleanupAnchoredCandidate(candidate: AnchoredPackageCandidate, signal?: AbortSignal): Promise<void> {
+  candidate.disposeAbort();
+  if (signal?.aborted) {
+    if (!candidate.output.destroyed) candidate.output.destroy();
+    if (candidate.child.connected) candidate.child.disconnect();
+    candidate.child.kill("SIGKILL");
+    return;
+  }
   try {
     if (!candidate.output.destroyed) candidate.output.destroy();
     if (candidate.child.connected) await commandPackageHelper(candidate.child, { action: "cleanup" }, "cleaned");
   } catch {
     candidate.child.kill();
   }
+}
+
+function throwIfPackageBuildAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortedPackageBuild();
+}
+
+function abortedPackageBuild(): Error {
+  return new Error("Application package build aborted");
 }
 
 function isPackageHelperMessage(value: unknown): value is PackageHelperMessage {

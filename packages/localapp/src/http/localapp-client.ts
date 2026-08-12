@@ -11,6 +11,7 @@ export interface JsonRequestOptions {
   method?: "GET" | "POST";
   body?: unknown;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
@@ -40,6 +41,7 @@ export class LocalAppClient {
       body,
       timeoutMs: options.timeoutMs ?? 30_000,
       headers: options.body === undefined ? {} : { "content-type": "application/json" },
+      signal: options.signal,
     });
   }
 
@@ -51,10 +53,10 @@ export class LocalAppClient {
     return this.requestJson(path, { method: "POST", body, timeoutMs });
   }
 
-  async installPackage(packagePath: string): Promise<JsonResult> {
+  async installPackage(packagePath: string, signal?: AbortSignal): Promise<JsonResult> {
     const form = new FormData();
-    form.set("package", new Blob([await readFile(packagePath)], { type: "application/octet-stream" }), basename(packagePath));
-    return this.request("/api/me/apps/install", { method: "POST", body: form, timeoutMs: 30_000, headers: {} });
+    form.set("package", new Blob([await readFile(packagePath, { signal })], { type: "application/octet-stream" }), basename(packagePath));
+    return this.request("/api/me/apps/install", { method: "POST", body: form, timeoutMs: 30_000, headers: {}, signal });
   }
 
   async startApplicationSync(name: string, input: { peerName: string; withData: boolean; confirmation?: string }): Promise<JsonResult> {
@@ -65,10 +67,23 @@ export class LocalAppClient {
     return this.getJson(`/api/sync-jobs/${encodeURIComponent(id)}`);
   }
 
-  private async request(path: string, options: { method: "GET" | "POST"; body?: BodyInit; timeoutMs: number; headers: Record<string, string> }): Promise<JsonResult> {
+  private async request(path: string, options: {
+    method: "GET" | "POST";
+    body?: BodyInit;
+    timeoutMs: number;
+    headers: Record<string, string>;
+    signal?: AbortSignal;
+  }): Promise<JsonResult> {
     if (!path.startsWith("/") || path.startsWith("//")) return { ok: false, error: "Request path must be relative to the LocalApp Server" };
     const controller = new AbortController();
-    const timeout = this.setTimeout(() => controller.abort(), options.timeoutMs);
+    let timedOut = false;
+    const timeout = this.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, options.timeoutMs);
+    const onExternalAbort = () => controller.abort();
+    options.signal?.addEventListener("abort", onExternalAbort, { once: true });
+    if (options.signal?.aborted) onExternalAbort();
     try {
       const version = await loadPackageVersion();
       const response = await fetch(`${this.serverUrl}${path}`, {
@@ -90,9 +105,13 @@ export class LocalAppClient {
       if (!response.ok) return { ok: false, status: response.status, error: this.publicError(body) };
       return { ok: true, status: response.status, body };
     } catch {
-      return { ok: false, error: controller.signal.aborted ? "Request timed out" : "Request failed" };
+      return {
+        ok: false,
+        error: options.signal?.aborted ? "Request aborted" : timedOut ? "Request timed out" : "Request failed",
+      };
     } finally {
       this.clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onExternalAbort);
     }
   }
 
