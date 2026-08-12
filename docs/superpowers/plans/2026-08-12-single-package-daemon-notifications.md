@@ -50,7 +50,7 @@
 - Produces: `buildLocalAppPackage({ outputDirectory }): Promise<{ outputDirectory: string; tarballInput: string; manifestPath: string }>`.
 - Consumes: no Rust binary and no Server process in this task.
 
-- [ ] **Step 1: Write the failing package and parser tests**
+- [x] **Step 1: Write the failing package and parser tests**
 
 ```ts
 test("packed product exposes one localapp binary without workspace references", async () => {
@@ -68,13 +68,13 @@ it("parses server as the start alias and keeps foreground run distinct", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run: `pnpm -C packages/localapp test && node --test packages/localapp/scripts/build-package.node-test.mjs`
 
 Expected: FAIL because the workspace package, dispatcher, and package builder do not exist.
 
-- [ ] **Step 3: Implement the minimum package and dispatcher**
+- [x] **Step 3: Implement the minimum package and dispatcher**
 
 Use this public command contract:
 
@@ -103,13 +103,13 @@ Rename the root private importer to `localapp-workspace`, add
 Node-24 package with `bin/localapp.mjs`, bundled CLI code, and
 `.localapp-artifact.json`. Unknown options return structured stderr and exit 1.
 
-- [ ] **Step 4: Run package tests and workspace install**
+- [x] **Step 4: Run package tests and workspace install**
 
 Run: `pnpm install --lockfile-only && pnpm -C packages/localapp test && node --test packages/localapp/scripts/build-package.node-test.mjs`
 
 Expected: PASS; the generated manifest has one public binary and no workspace references.
 
-- [ ] **Step 5: Commit the package skeleton**
+- [x] **Step 5: Commit the package skeleton**
 
 ```bash
 git add package.json pnpm-workspace.yaml pnpm-lock.yaml packages/localapp
