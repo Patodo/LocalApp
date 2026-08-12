@@ -279,7 +279,7 @@ git commit -m "feat(cli): port builtin template lifecycle"
 - Produces: `buildApplicationPackage(options): Promise<{ path: string; appId: string; version: string; sha256: string; size: number }>`.
 - Consumes: `writeAppPackage`, `inspectAppPackage`, `validateMigrationFilenames`, and `validateBackendContract`.
 
-- [ ] **Step 1: Write failing package-contract tests**
+- [x] **Step 1: Write failing package-contract tests**
 
 ```ts
 it("builds byte-identical canonical packages", async () => {
@@ -305,13 +305,13 @@ it("stops check after a failing test phase and never packages stale dist", async
 });
 ```
 
-- [ ] **Step 2: Run project tests and verify RED**
+- [x] **Step 2: Run project tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/check.test.ts tests/package.test.ts`
 
 Expected: FAIL because TypeScript project checks and package collection do not exist.
 
-- [ ] **Step 3: Implement checks and canonical collection**
+- [x] **Step 3: Implement checks and canonical collection**
 
 Export the existing Server package writer/inspector through an internal build
 entry consumed by esbuild. Validate the manifest, platform range, migration
@@ -320,13 +320,13 @@ package-safe paths. Run project `test` then `build` scripts with the detected
 package manager. Normalize `distDir` to `dist` and backend root to `backend`
 inside the archive. Sort every file and use fixed archive timestamps.
 
-- [ ] **Step 4: Run package compatibility and real-app builds**
+- [x] **Step 4: Run package compatibility and real-app builds**
 
 Run: `pnpm -C packages/localapp test && pnpm -C packages/server exec vitest run tests/integration/app-package-install.test.ts && pnpm run build:real-apps`
 
 Expected: PASS; TypeScript output is accepted by the unchanged canonical installer.
 
-- [ ] **Step 5: Commit TypeScript checks and packaging**
+- [x] **Step 5: Commit TypeScript checks and packaging**
 
 ```bash
 git add packages/localapp packages/server/src/index.ts
