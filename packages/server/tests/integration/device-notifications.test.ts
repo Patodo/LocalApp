@@ -131,6 +131,20 @@ describe("device notification source authority", () => {
     expect(mutation.json().code).toBe("DEVICE_NOTIFICATION_CAPABILITY_UNAVAILABLE");
   });
 
+  it("accepts idempotent native capability reports only from the loopback daemon", async () => {
+    const { app } = await startServer();
+    const payload = { permission: "denied", daemonVersion: "0.1.0", adapterVersion: "0.1.0" };
+    const rejected = await app.inject({ method: "POST", url: "/api/internal/device-notifications/native-status", headers: { "x-localapp-notification-control": "wrong" }, payload });
+    expect(rejected.statusCode).toBe(401);
+    const first = await app.inject({ method: "POST", url: "/api/internal/device-notifications/native-status", headers: { "x-localapp-notification-control": CONTROL_TOKEN }, payload });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.generation).toBe(1);
+    const repeated = await app.inject({ method: "POST", url: "/api/internal/device-notifications/native-status", headers: { "x-localapp-notification-control": CONTROL_TOKEN }, payload });
+    expect(repeated.json().data.generation).toBe(1);
+    const state = await app.inject({ method: "GET", url: "/api/device-notifications/settings", headers: { "x-api-key": getTestApiKey() } });
+    expect(state.json().data.native).toMatchObject({ permission: "denied", daemonVersion: "0.1.0", adapterVersion: "0.1.0" });
+  });
+
   it("reports a stable headless capability and keeps mutation routes present", async () => {
     const { app, baseUrl } = await startServer(null);
     const state = await app.inject({ method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() } });

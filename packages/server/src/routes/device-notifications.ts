@@ -180,6 +180,15 @@ export async function deviceNotificationsRoutes(app: FastifyInstance, store: Dev
     return { success: true, data: { command: store.claimTestCommand() } };
   });
 
+  app.post("/api/internal/device-notifications/native-status", { bodyLimit: 4 * 1024 }, async (req, reply) => {
+    noStore(reply);
+    if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
+    if (!hasControlToken(req, controlToken)) return sendError(reply, 401, "DEVICE_NOTIFICATION_CONTROL_TOKEN_INVALID", "Notification control token is invalid");
+    const input = parseNativeStatusBody(req.body, reply);
+    if (!input) return;
+    return { success: true, data: store.reportNativeStatus(input) };
+  });
+
   app.post<{ Params: { id: string } }>("/api/internal/device-notifications/test/:id/complete", { bodyLimit: 4 * 1024 }, async (req, reply) => {
     noStore(reply);
     if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
@@ -246,6 +255,13 @@ function parseTestCompletionBody(body: unknown, reply: FastifyReply): { result: 
   if (!results.includes(body.result as never) || !permissions.includes(body.permission as never)
     || !boundedVersion(body.daemonVersion) || !boundedVersion(body.adapterVersion)) return invalidRequest(reply);
   return body as { result: typeof results[number]; permission: typeof permissions[number]; daemonVersion: string; adapterVersion: string };
+}
+
+function parseNativeStatusBody(body: unknown, reply: FastifyReply): { permission: "not-determined" | "granted" | "denied" | "unsupported" | "unknown"; daemonVersion: string; adapterVersion: string } | null {
+  if (!isExactRecord(body, ["permission", "daemonVersion", "adapterVersion"])) return invalidRequest(reply);
+  const permissions = ["not-determined", "granted", "denied", "unsupported", "unknown"] as const;
+  if (!permissions.includes(body.permission as never) || !boundedVersion(body.daemonVersion) || !boundedVersion(body.adapterVersion)) return invalidRequest(reply);
+  return body as { permission: typeof permissions[number]; daemonVersion: string; adapterVersion: string };
 }
 
 function invalidRequest(reply: FastifyReply): null {

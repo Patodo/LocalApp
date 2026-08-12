@@ -322,6 +322,19 @@ export class DeviceNotificationSourceStore {
     return { generation: this.generation() };
   }
 
+  reportNativeStatus(input: { permission: DeviceNotificationPermissionState; daemonVersion: string; adapterVersion: string; now?: Date }) {
+    const state = requiredNotificationState();
+    if (state.native_permission === input.permission && state.daemon_version === input.daemonVersion && state.adapter_version === input.adapterVersion) {
+      return { generation: this.generation() };
+    }
+    const now = (input.now ?? new Date()).toISOString();
+    mutateMetaDbAtomically((database) => {
+      incrementGeneration(database);
+      database.run("UPDATE device_notification_state SET native_permission = ?, daemon_version = ?, adapter_version = ?, native_updated_at = ? WHERE singleton = 1", [input.permission, input.daemonVersion, input.adapterVersion, now]);
+    });
+    return { generation: this.generation() };
+  }
+
   async waitForGeneration(current: number, timeoutMs: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted || this.generation() !== current || timeoutMs === 0) return;
     await new Promise<void>((resolve) => {

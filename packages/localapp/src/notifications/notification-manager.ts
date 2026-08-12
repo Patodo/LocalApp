@@ -12,6 +12,7 @@ export interface NotificationConnectionManagerOptions {
   createSocket?: (url: string, credential: string) => SourceSocket;
   snapshotTimeoutMs?: number;
   applyDisplayPolicy?: (settings: DeviceNotificationDisplaySettings) => void;
+  readNativeStatus?: () => Promise<Omit<DeviceNotificationTestResult, "result">>;
   runTestNotification?: (command: { id: string; userId: string }) => Promise<DeviceNotificationTestResult>;
 }
 
@@ -127,7 +128,7 @@ export class NotificationConnectionManager {
   }
 
   private async refreshControl(): Promise<void> {
-    if (this.options.applyDisplayPolicy === undefined && this.options.runTestNotification === undefined) return;
+    if (this.options.applyDisplayPolicy === undefined && this.options.readNativeStatus === undefined && this.options.runTestNotification === undefined) return;
     const fetch = this.options.fetch ?? globalThis.fetch;
     const headers = { "x-localapp-notification-control": this.options.controlToken };
     const requestSignal = () => AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]);
@@ -135,6 +136,17 @@ export class NotificationConnectionManager {
     if (!control.ok || control.redirected) throw new Error("notification control snapshot failed");
     const settings = parseControl(await control.json());
     this.options.applyDisplayPolicy?.(settings);
+    if (this.options.readNativeStatus !== undefined) {
+      const native = await this.options.readNativeStatus();
+      const reported = await fetch(`${this.options.localServerOrigin}/api/internal/device-notifications/native-status`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(native),
+        redirect: "error",
+        signal: requestSignal(),
+      });
+      if (!reported.ok || reported.redirected) throw new Error("notification native status report failed");
+    }
     if (this.options.runTestNotification === undefined) return;
     const claimed = await fetch(`${this.options.localServerOrigin}/api/internal/device-notifications/test/claim`, { method: "POST", headers, redirect: "error", signal: requestSignal() });
     if (!claimed.ok || claimed.redirected) throw new Error("notification test claim failed");
