@@ -560,7 +560,7 @@ git commit -m "feat(daemon): add per-user Server supervision"
 - Produces: `parseActivationUrl(value): DeviceActionActivation | NotificationActivation`.
 - Consumes: Task 7 private IPC and existing Server `/api/device-control/activations`.
 
-- [ ] **Step 1: Write failing strict activation and adapter-selection tests**
+- [x] **Step 1: Write failing strict activation and adapter-selection tests**
 
 ```ts
 it("accepts only canonical Device Action and opaque notification activations", () => {
@@ -575,13 +575,13 @@ it("fails closed for an unshipped platform target", () => {
 });
 ```
 
-- [ ] **Step 2: Run activation tests and verify RED**
+- [x] **Step 2: Run activation tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/adapter-selection.test.ts tests/activation-url.test.ts tests/activation-broker.test.ts && node --test packages/localapp/scripts/native-adapter.node-test.mjs`
 
 Expected: FAIL because the strict broker and non-Tauri adapters do not exist.
 
-- [ ] **Step 3: Implement Scheme registration and broker forwarding**
+- [x] **Step 3: Implement Scheme registration and broker forwarding**
 
 The macOS app is windowless, registers `CFBundleURLTypes`, forwards
 `application:openURLs:` to private IPC, and uses UserNotifications. The Windows
@@ -595,13 +595,13 @@ accepts only parsed tickets, calls the authenticated loopback activation route,
 and opens only the exact loopback confirmation path returned by the ready
 Server.
 
-- [ ] **Step 4: Build and activate the current-platform adapter**
+- [x] **Step 4: Build and activate the current-platform adapter**
 
 Run: `pnpm -C packages/localapp run build:native && pnpm -C packages/localapp test:native`
 
 Expected: PASS; a real `localapp://` fixture reaches the test daemon and malformed variants produce no browser or process launch.
 
-- [ ] **Step 5: Commit the minimal native boundary**
+- [x] **Step 5: Commit the minimal native boundary**
 
 ```bash
 git add packages/localapp
