@@ -167,6 +167,26 @@ const copyPinnedCandidate = async (source, destinationHandle) => {
   await destinationHandle.truncate(position);
   await destinationHandle.sync();
 };
+const sha256PinnedFile = async (handle, expected) => {
+  const before = await handle.stat({ bigint: true });
+  if (!before.isFile() || !sameIdentity(before, expected) || before.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("unsafe publication package");
+  }
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  const after = await handle.stat({ bigint: true });
+  if (!after.isFile() || !sameIdentity(after, expected) || after.size !== before.size || BigInt(position) !== after.size) {
+    throw new Error("unsafe publication package");
+  }
+  return hash.digest("hex");
+};
 
 let candidate;
 let candidateIdentity;
@@ -215,10 +235,16 @@ let candidateIdentity;
   const pinned = await candidate.stat({ bigint: true });
   if (!pinned.isFile() || !sameIdentity(pinned, candidateIdentity)) throw new Error("unsafe temporary package");
   const publicationName = "." + config.target + "." + crypto.randomUUID() + ".publish";
-  const publication = await fsp.open(publicationName, "wx", 0o600);
+  const publication = await fsp.open(publicationName, "wx+", 0o600);
   const publicationIdentity = identity(await publication.stat({ bigint: true }));
   try {
     await copyPinnedCandidate(candidate, publication);
+    const publicationDigest = await sha256PinnedFile(publication, publicationIdentity);
+    if (publicationDigest !== command.digest) {
+      const error = new Error("publication package digest mismatch");
+      error.code = "application_package_invalid";
+      throw error;
+    }
     const publicationPath = await fsp.lstat(publicationName, { bigint: true });
     if (!publicationPath.isFile() || publicationPath.isSymbolicLink() || !sameIdentity(publicationPath, publicationIdentity)) {
       throw new Error("unsafe publication package");
@@ -245,7 +271,12 @@ let candidateIdentity;
 })().catch(async (error) => {
   if (candidateIdentity) await cleanupOwned(config.temporary, candidateIdentity).catch(() => undefined);
   await candidate?.close().catch(() => undefined);
-  await send({ type: "error", code: error && error.code === "EEXIST" ? "package_output_exists" : "package_output_failed" });
+  const code = error && error.code === "EEXIST"
+    ? "package_output_exists"
+    : error && error.code === "application_package_invalid"
+      ? "application_package_invalid"
+      : "package_output_failed";
+  await send({ type: "error", code });
 });
 `;
 
@@ -342,6 +373,9 @@ function packageHelperError(code: string | undefined): Error {
   }
   if (code === "package_output_exists") {
     return lifecycleError("package_output_exists", "Application package output already exists; choose another path or explicitly enable overwrite");
+  }
+  if (code === "application_package_invalid") {
+    return lifecycleError("application_package_invalid", "Application package changed while preparing publication");
   }
   return lifecycleError("package_output_failed", "Could not publish application package safely");
 }

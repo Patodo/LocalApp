@@ -289,6 +289,78 @@ describe("application package creation", () => {
     expect(built.sha256).toBe(crypto.createHash("sha256").update(inspectedBytes!).digest("hex"));
   });
 
+  it.each([
+    { overwrite: false, label: "no-overwrite" },
+    { overwrite: true, label: "overwrite" },
+  ])("never publishes an exact pinned candidate inode mutated after $label inspection", async ({ overwrite }) => {
+    // Break caught: hashing only before rematerialization can publish post-inspection mutations with the inspector's original digest.
+    const projectDir = await createProject();
+    const outputPath = path.join(projectDir, "inode-mutation.localapp");
+    let previousBuild: Awaited<ReturnType<typeof buildApplicationPackage>> | undefined;
+    let previousBytes: Buffer | undefined;
+    if (overwrite) {
+      previousBuild = await buildApplicationPackage({ projectDir, outputPath, run: successfulRunner([]) });
+      previousBytes = await fs.readFile(outputPath);
+      await fs.writeFile(path.join(projectDir, "dist/index.html"), "<main>new inspected candidate</main>\n");
+    }
+    const attackerBytes = Buffer.from("attacker-mutated pinned inode bytes\n");
+    let candidatePathSeen: string | undefined;
+    let mutatedExactInode = false;
+    let built: Awaited<ReturnType<typeof buildApplicationPackage>> | undefined;
+    let failure: unknown;
+
+    try {
+      built = await buildApplicationPackage({
+        projectDir,
+        outputPath,
+        overwrite,
+        run: successfulRunner([]),
+        packageOperations: {
+          inspectPackage: async (candidatePath) => {
+            candidatePathSeen = candidatePath;
+            const pinned = await fs.open(candidatePath, "r+");
+            try {
+              const before = await pinned.stat({ bigint: true });
+              const inspected = await inspectAppPackage(candidatePath);
+              await pinned.truncate(0);
+              await pinned.writeFile(attackerBytes);
+              await pinned.sync();
+              const after = await pinned.stat({ bigint: true });
+              mutatedExactInode = before.dev === after.dev && before.ino === after.ino;
+              return inspected;
+            } finally {
+              await pinned.close();
+            }
+          },
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    const published = await fs.readFile(outputPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    expect(candidatePathSeen).toBeDefined();
+    expect(candidatePathSeen).not.toBe(outputPath);
+    expect(mutatedExactInode).toBe(true);
+    expect(published).not.toEqual(attackerBytes);
+    if (built !== undefined) {
+      expect(failure).toBeUndefined();
+      expect(published).toBeDefined();
+      expect(crypto.createHash("sha256").update(published!).digest("hex")).toBe(built.sha256);
+    } else {
+      expect(failure).toBeDefined();
+      if (overwrite) {
+        expect(published).toEqual(previousBytes);
+        expect(crypto.createHash("sha256").update(published!).digest("hex")).toBe(previousBuild!.sha256);
+      } else {
+        expect(published).toBeUndefined();
+      }
+    }
+  });
+
   it("requires a safe .localapp output and overwrites only when explicitly requested", async () => {
     // Break caught: implicit replacement or symlink-following can destroy an unrelated output file.
     const projectDir = await createProject();

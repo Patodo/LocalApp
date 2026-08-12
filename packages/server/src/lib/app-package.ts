@@ -182,6 +182,7 @@ export async function writeAppPackage(input: {
   files: readonly PortablePackageFile[];
 }, operations: {
   afterOpen?(output: fs.WriteStream): void;
+  afterCleanupOwnershipCheck?(): void;
 } = {}): Promise<{ digest: string }> {
   const prepared = prepareAppPackage(input.metadata, input.files);
   fs.mkdirSync(path.dirname(input.outputPath), { recursive: true });
@@ -200,7 +201,11 @@ export async function writeAppPackage(input: {
   } catch (error) {
     output.destroy();
     if (!output.closed) await once(output, "close").catch(() => undefined);
-    removeOwnedPackageOutput(input.outputPath, owned);
+    try {
+      retainFailedPackageOutput(input.outputPath, owned, operations.afterCleanupOwnershipCheck);
+    } catch {
+      // Cleanup observation must never replace the original writer error.
+    }
     throw error;
   }
 }
@@ -277,12 +282,18 @@ async function writePreparedAppPackageToStream(
   }
 }
 
-function removeOwnedPackageOutput(outputPath: string, owned: { dev: bigint; ino: bigint } | undefined): void {
+function retainFailedPackageOutput(
+  outputPath: string,
+  owned: { dev: bigint; ino: bigint } | undefined,
+  afterOwnershipCheck: (() => void) | undefined,
+): void {
   if (owned === undefined) return;
   const current = fs.lstatSync(outputPath, { bigint: true, throwIfNoEntry: false });
   if (current?.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) {
-    fs.unlinkSync(outputPath);
+    afterOwnershipCheck?.();
   }
+  // Node has no descriptor-relative unlink. Retain the failed artifact rather
+  // than let a check-then-path-unlink race delete another actor's replacement.
 }
 
 async function readAndValidateArchive(packagePath: string): Promise<Map<string, ActualEntry>> {
