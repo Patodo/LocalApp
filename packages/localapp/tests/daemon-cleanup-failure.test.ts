@@ -61,6 +61,28 @@ describe("daemon cleanup failures", () => {
     await expect(fs.lstat(layout.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.skipIf(process.platform === "win32")("seals a restart in teardown so concurrent stop cannot spawn another Server", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "r-"));
+    directories.push(root);
+    const artifact = path.join(root, "packed");
+    await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    let releaseTerminate!: () => void;
+    const terminate = vi.fn(() => new Promise<void>((resolve) => { releaseTerminate = resolve; }));
+    const spawn = vi.fn(() => readyOwnedProcess(terminate, () => undefined));
+    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: spawn });
+    await daemon.start();
+    const restarting = daemon.restart();
+    while (terminate.mock.calls.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    const stopping = daemon.stop();
+    releaseTerminate();
+    await expect(restarting).rejects.toMatchObject({ code: "daemon_stopping" });
+    await expect(stopping).resolves.toBeUndefined();
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it.skipIf(process.platform === "win32")("keeps transient ownership and shares one terminal stop failure when Server cleanup rejects", async () => {
     const fixture = await startDaemonWithFailingServer();
     const unhandled: unknown[] = [];
