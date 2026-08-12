@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CliIo } from "../cli/output.js";
+import { LocalAppLifecycleError, lifecycleError } from "../errors.js";
 import { isValidProjectName, writeProjectManifest } from "../project/manifest.js";
+import { isManagedSkillName, verifyInitParent } from "../project/safety.js";
 import { copyDirectory, isDirectory } from "../template/copy.js";
 
 export interface InitializeProjectOptions {
@@ -22,18 +24,20 @@ export interface InitResult {
 
 export async function initializeProject(options: InitializeProjectOptions): Promise<InitResult> {
   if (!options.skipDeploy) {
-    throw new Error("Project deployment is not available yet; use --skip-deploy until package/check/install support is available");
+    throw lifecycleError("deployment_unavailable", "Project deployment is not available yet. Re-run with --skip-deploy.");
   }
   if (!isValidProjectName(options.name)) {
-    throw new Error("Invalid name. Must be 3-63 lowercase letters, digits, or hyphens; it must start with a letter and may not end with or repeat hyphens.");
+    throw lifecycleError("invalid_project_name", "Invalid name. Use 3-63 lowercase letters, digits, or hyphens; start with a letter and do not end with or repeat hyphens.");
   }
-  const cwd = path.resolve(options.cwd);
+  const cwd = await verifyInitParent(options.cwd);
   const useCurrentDirectory = path.basename(cwd) === options.name && await isEmptyDirectory(cwd);
   const projectDir = useCurrentDirectory ? cwd : path.join(cwd, options.name);
-  if (!useCurrentDirectory && await pathExists(projectDir)) throw new Error(`Directory '${options.name}' already exists`);
+  if (!useCurrentDirectory && await pathExists(projectDir)) {
+    throw lifecycleError("project_directory_exists", `Project directory already exists: ${options.name}. Choose another name or remove the directory.`);
+  }
   const templateDirectory = await resolveTemplateDirectory();
 
-  await fs.mkdir(projectDir, { recursive: true });
+  if (!useCurrentDirectory) await fs.mkdir(projectDir);
   try {
     await copyUserZone(templateDirectory, projectDir);
     await copyManagedZone(templateDirectory, projectDir);
@@ -47,7 +51,8 @@ export async function initializeProject(options: InitializeProjectOptions): Prom
     return { projectDir, manifest };
   } catch (error) {
     if (!useCurrentDirectory) await fs.rm(projectDir, { recursive: true, force: true });
-    throw error;
+    if (error instanceof LocalAppLifecycleError) throw error;
+    throw lifecycleError("project_initialization_failed", "Project initialization failed. Check the builtin template and destination permissions, then retry.");
   }
 }
 
@@ -60,7 +65,7 @@ export async function resolveTemplateDirectory(): Promise<string> {
     if (await isDirectory(packagedTemplate)) return packagedTemplate;
     packageDirectory = path.dirname(packageDirectory);
   }
-  throw new Error("Builtin template is unavailable. Reinstall localapp or build the package before running init.");
+  throw lifecycleError("builtin_template_unavailable", "Builtin template is unavailable. Reinstall localapp or rebuild the package before running init.");
 }
 
 export async function copyUserZone(templateDirectory: string, projectDirectory: string): Promise<void> {
@@ -76,13 +81,14 @@ export async function copyManagedZone(templateDirectory: string, projectDirector
   if (!await isDirectory(skillsDirectory)) return;
   const names = await fs.readdir(skillsDirectory, { withFileTypes: true });
   for (const entry of names.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isDirectory() || !isManagedSkill(entry.name)) continue;
+    if (!isManagedSkill(entry.name)) continue;
+    if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`Builtin template contains an unsafe managed skill: ${entry.name}`);
     await copyDirectory(path.join(skillsDirectory, entry.name), path.join(projectDirectory, ".claude/skills", entry.name));
   }
 }
 
 export function isManagedSkill(name: string): boolean {
-  return name === "agent-tool-patterns" || name.startsWith("localapp");
+  return isManagedSkillName(name);
 }
 
 async function installDependencies(projectDirectory: string, io: CliIo): Promise<void> {
@@ -94,6 +100,8 @@ async function installDependencies(projectDirectory: string, io: CliIo): Promise
     child.stderr.on("data", (chunk) => io.stderr(chunk));
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`npm install failed with exit code ${code ?? "unknown"}`)));
+  }).catch(() => {
+    throw lifecycleError("dependency_install_failed", "Dependency installation failed. Run npm install in the project directory after resolving the npm error.");
   });
 }
 

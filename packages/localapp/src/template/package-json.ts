@@ -25,9 +25,7 @@ export async function postprocessTemplatePackageJson(templateDirectory: string):
   }
 }
 
-export async function rewritePackageJsonForEject(projectDirectory: string): Promise<void> {
-  const packagePath = path.join(projectDirectory, "package.json");
-  const packageJson = JSON.parse(await fs.readFile(packagePath, "utf8")) as PackageJson;
+export function rewritePackageJsonForEjectValue(packageJson: PackageJson): PackageJson {
   for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = asRecord(packageJson[section]);
     if (dependencies === undefined) continue;
@@ -41,7 +39,7 @@ export async function rewritePackageJsonForEject(projectDirectory: string): Prom
   if (scripts !== undefined) {
     delete scripts.postinstall;
   }
-  await fs.writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  return packageJson;
 }
 
 function rewriteWorkspaceDependencies(packageJson: PackageJson, packagePath: string, runtimeDirectory: string): void {
@@ -64,7 +62,7 @@ function ensureAutomaticSync(packageJson: PackageJson): void {
   if (packageJson.scripts === null || typeof packageJson.scripts !== "object" || Array.isArray(packageJson.scripts)) {
     packageJson.scripts = {};
   }
-  (packageJson.scripts as Record<string, unknown>).postinstall = "localapp sync-template --quiet";
+  (packageJson.scripts as Record<string, unknown>).postinstall = "node .localapp/runtime/sync-template.cjs";
 }
 
 function fileDependency(fromDirectory: string, target: string): string {

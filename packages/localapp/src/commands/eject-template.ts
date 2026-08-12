@@ -1,62 +1,195 @@
+import crypto from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isManagedSkill } from "./init.js";
-import { isEjected } from "./sync-template.js";
-import { copyDirectory, isDirectory } from "../template/copy.js";
-import { rewritePackageJsonForEject } from "../template/package-json.js";
+import { lifecycleError, LocalAppLifecycleError } from "../errors.js";
+import {
+  assertTreeHasNoSymlinks,
+  atomicWriteFile,
+  isInside,
+  isManagedSkillName,
+  lstatOptional,
+  managedSkillNames,
+  readProjectConfig,
+  verifyManagedProject,
+  verifyProjectBase,
+  writeProjectConfig,
+  type VerifiedProject,
+} from "../project/safety.js";
+import { rewritePackageJsonForEjectValue } from "../template/package-json.js";
+import type { LifecycleMoveOperations } from "./sync-template.js";
 
 export interface EjectResult {
   ejected: true;
 }
 
-export async function ejectManagedTemplate(projectDir: string): Promise<EjectResult> {
-  if (await isEjected(projectDir)) throw new Error("Project has already been ejected and cannot be synchronized again.");
-  const runtimeSource = path.join(projectDir, ".localapp/runtime");
-  if (!await isDirectory(runtimeSource)) throw new Error("Not a localapp project. Run localapp init first.");
-  const runtimeDestination = path.join(projectDir, "src/_localapp_runtime");
-  if (await pathExists(runtimeDestination)) throw new Error(`Refusing to overwrite existing user directory: ${runtimeDestination}`);
+interface EjectMove {
+  source: string;
+  destination: string;
+  device: string;
+  inode: string;
+}
 
-  const renames = await managedSkillRenames(projectDir);
-  for (const { destination } of renames) {
-    if (await pathExists(destination)) throw new Error(`Refusing to overwrite existing user skill: ${destination}`);
+interface EjectTransaction {
+  version: 1;
+  moves: EjectMove[];
+  originalPackageHash: string;
+  ejectedPackageHash: string;
+  ejectedPackageContents: string;
+}
+
+const defaultMoveOperations: LifecycleMoveOperations = { rename: (source, destination) => fs.rename(source, destination) };
+
+export async function ejectManagedTemplate(
+  projectDir: string,
+  operations: LifecycleMoveOperations = defaultMoveOperations,
+): Promise<EjectResult> {
+  const project = await verifyProjectBase(projectDir);
+  let config = await readProjectConfig(project);
+  if (config.ejected === true || config.templateState === "ejected") {
+    throw lifecycleError("template_ejected", "This project has already been ejected. Managed template sync is permanently disabled.");
   }
-  await copyDirectory(runtimeSource, runtimeDestination);
-  for (const { source, destination } of renames) await copyDirectory(source, destination);
-  await rewritePackageJsonForEject(projectDir);
-  await fs.rm(runtimeSource, { recursive: true, force: true });
-  for (const { source } of renames) await fs.rm(source, { recursive: true, force: true });
-  await writeEjectedMarker(projectDir);
-  return { ejected: true };
-}
 
-async function managedSkillRenames(projectDir: string): Promise<Array<{ source: string; destination: string }>> {
-  const skillsDirectory = path.join(projectDir, ".claude/skills");
-  const entries = await fs.readdir(skillsDirectory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? [] : Promise.reject(error));
-  return entries
-    .filter((entry) => entry.isDirectory() && isManagedSkill(entry.name))
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map((entry) => ({
-      source: path.join(skillsDirectory, entry.name),
-      destination: path.join(skillsDirectory, `custom-${entry.name}`),
-    }));
-}
+  let transaction: EjectTransaction;
+  if (config.templateState === "ejecting") {
+    transaction = parseTransaction(config.ejectTransaction, project);
+  } else {
+    await verifyManagedProject(project);
+    transaction = await prepareTransaction(project);
+    config = { ...config, templateState: "ejecting", ejectTransaction: transaction };
+    await writeProjectConfig(project, config);
+  }
 
-async function writeEjectedMarker(projectDir: string): Promise<void> {
-  const configDirectory = path.join(projectDir, ".localapp");
-  const configPath = path.join(configDirectory, "project-config.json");
-  let config: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("project config must be an object");
-    config = parsed as Record<string, unknown>;
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    for (const move of transaction.moves) await resumeMove(project, move, operations);
+    await installEjectedPackage(project, transaction);
+    const finalConfig: Record<string, unknown> = { ...config, ejected: true, templateState: "ejected" };
+    delete finalConfig.ejectTransaction;
+    await writeProjectConfig(project, finalConfig);
+    return { ejected: true };
+  } catch (error) {
+    if (error instanceof LocalAppLifecycleError) throw error;
+    throw lifecycleError("template_eject_failed", "Template eject was interrupted. No user destination was overwritten; run localapp eject-template again to resume.");
   }
-  config.ejected = true;
-  await fs.mkdir(configDirectory, { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-async function pathExists(target: string): Promise<boolean> {
-  return fs.access(target).then(() => true, () => false);
+async function prepareTransaction(project: VerifiedProject): Promise<EjectTransaction> {
+  const packageContents = await fs.readFile(project.packagePath, "utf8");
+  let packageJson: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(packageContents);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid package");
+    packageJson = parsed as Record<string, unknown>;
+  } catch {
+    throw lifecycleError("invalid_project_package", "The project package.json is invalid. Repair it before ejecting the managed template.");
+  }
+  const ejectedPackageContents = `${JSON.stringify(rewritePackageJsonForEjectValue(packageJson), null, 2)}\n`;
+  const moves: EjectMove[] = [];
+  moves.push(await prepareMove(project, ".localapp/runtime", "src/_localapp_runtime"));
+  for (const name of await managedSkillNames(project.skillsDirectory)) {
+    moves.push(await prepareMove(project, `.claude/skills/${name}`, `.claude/skills/custom-${name}`));
+  }
+  return {
+    version: 1,
+    moves,
+    originalPackageHash: sha256(packageContents),
+    ejectedPackageHash: sha256(ejectedPackageContents),
+    ejectedPackageContents,
+  };
+}
+
+async function prepareMove(project: VerifiedProject, source: string, destination: string): Promise<EjectMove> {
+  const sourcePath = projectPath(project, source);
+  const destinationPath = projectPath(project, destination);
+  const sourceStat = await fs.lstat(sourcePath, { bigint: true });
+  if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) throw unsafeTransaction();
+  await assertTreeHasNoSymlinks(sourcePath);
+  if (await lstatOptional(destinationPath) !== undefined) throw collision(destination);
+  const destinationParent = await fs.lstat(path.dirname(destinationPath), { bigint: true });
+  if (destinationParent.isSymbolicLink() || !destinationParent.isDirectory() || destinationParent.dev !== sourceStat.dev) {
+    throw lifecycleError("template_eject_filesystem", "Eject requires managed sources and destinations to be directories on the same filesystem.");
+  }
+  return { source, destination, device: sourceStat.dev.toString(), inode: sourceStat.ino.toString() };
+}
+
+async function resumeMove(project: VerifiedProject, move: EjectMove, operations: LifecycleMoveOperations): Promise<void> {
+  const sourcePath = projectPath(project, move.source);
+  const destinationPath = projectPath(project, move.destination);
+  const source = await fs.lstat(sourcePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+  const destination = await fs.lstat(destinationPath, { bigint: true }).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+  if (source !== undefined) {
+    if (!matchesIdentity(source, move) || source.isSymbolicLink() || !source.isDirectory()) throw unsafeTransaction();
+    await assertTreeHasNoSymlinks(sourcePath);
+    if (destination !== undefined) throw collision(move.destination);
+    const destinationParent = await fs.lstat(path.dirname(destinationPath), { bigint: true });
+    if (destinationParent.dev !== source.dev) {
+      throw lifecycleError("template_eject_filesystem", "Eject requires managed sources and destinations to be directories on the same filesystem.");
+    }
+    await operations.rename(sourcePath, destinationPath);
+    return;
+  }
+  if (destination === undefined || !matchesIdentity(destination, move) || destination.isSymbolicLink() || !destination.isDirectory()) {
+    throw collision(move.destination);
+  }
+  await assertTreeHasNoSymlinks(destinationPath);
+}
+
+async function installEjectedPackage(project: VerifiedProject, transaction: EjectTransaction): Promise<void> {
+  const current = await fs.readFile(project.packagePath, "utf8");
+  const currentHash = sha256(current);
+  if (currentHash === transaction.ejectedPackageHash) return;
+  if (currentHash !== transaction.originalPackageHash) {
+    throw lifecycleError("template_eject_collision", "package.json changed during eject. Restore the original file or finish the interrupted eject manually.");
+  }
+  await atomicWriteFile(project.packagePath, transaction.ejectedPackageContents);
+}
+
+function parseTransaction(value: unknown, project: VerifiedProject): EjectTransaction {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw unsafeTransaction();
+  const candidate = value as Partial<EjectTransaction>;
+  if (candidate.version !== 1 || !Array.isArray(candidate.moves) || typeof candidate.originalPackageHash !== "string"
+    || typeof candidate.ejectedPackageHash !== "string" || typeof candidate.ejectedPackageContents !== "string"
+    || sha256(candidate.ejectedPackageContents) !== candidate.ejectedPackageHash) throw unsafeTransaction();
+  const moves = candidate.moves.map((move) => parseMove(move, project));
+  if (moves.filter((move) => move.source === ".localapp/runtime" && move.destination === "src/_localapp_runtime").length !== 1) {
+    throw unsafeTransaction();
+  }
+  if (new Set(moves.flatMap((move) => [move.source, move.destination])).size !== moves.length * 2) throw unsafeTransaction();
+  return { ...candidate, version: 1, moves } as EjectTransaction;
+}
+
+function parseMove(value: unknown, project: VerifiedProject): EjectMove {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw unsafeTransaction();
+  const move = value as Partial<EjectMove>;
+  if (typeof move.source !== "string" || typeof move.destination !== "string" || typeof move.device !== "string" || typeof move.inode !== "string"
+    || !/^\d+$/.test(move.device) || !/^\d+$/.test(move.inode)) throw unsafeTransaction();
+  const runtimeMove = move.source === ".localapp/runtime" && move.destination === "src/_localapp_runtime";
+  const skillMatch = /^\.claude\/skills\/([^/]+)$/.exec(move.source);
+  const skillMove = skillMatch !== null && isManagedSkillName(skillMatch[1]!) && move.destination === `.claude/skills/custom-${skillMatch[1]}`;
+  if (!runtimeMove && !skillMove) throw unsafeTransaction();
+  projectPath(project, move.source);
+  projectPath(project, move.destination);
+  return move as EjectMove;
+}
+
+function projectPath(project: VerifiedProject, relative: string): string {
+  const target = path.resolve(project.root, relative);
+  if (!isInside(project.root, target)) throw unsafeTransaction();
+  return target;
+}
+
+function matchesIdentity(stat: BigIntStats, move: EjectMove): boolean {
+  return stat.dev.toString() === move.device && stat.ino.toString() === move.inode;
+}
+
+function sha256(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function collision(relativePath: string): ReturnType<typeof lifecycleError> {
+  return lifecycleError("template_eject_collision", `Eject destination already exists: ${relativePath}. Move or remove it before retrying.`);
+}
+
+function unsafeTransaction(): ReturnType<typeof lifecycleError> {
+  return lifecycleError("unsafe_project_path", "The persisted eject transaction or one of its managed paths is unsafe. Restore the project from version control before retrying.");
 }

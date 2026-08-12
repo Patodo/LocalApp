@@ -7,6 +7,7 @@ import { initializeProject } from "./commands/init.js";
 import { syncManagedTemplate } from "./commands/sync-template.js";
 import { ejectManagedTemplate } from "./commands/eject-template.js";
 import { loadPackageVersion } from "./version.js";
+import { LocalAppLifecycleError } from "./errors.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,11 +36,11 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
     }
     return 0;
   } catch (error) {
-    if (error instanceof LocalAppArgumentError) {
+    if (error instanceof LocalAppArgumentError || error instanceof LocalAppLifecycleError) {
       writeStructuredError(io, {
         code: error.code,
         message: error.message,
-        ...(error.option === undefined ? {} : { option: error.option }),
+        ...(error instanceof LocalAppArgumentError && error.option !== undefined ? { option: error.option } : {}),
       });
       return 1;
     }

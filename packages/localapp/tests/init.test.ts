@@ -49,6 +49,8 @@ describe("builtin project initialization", () => {
     const packageJson = JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8"));
     expect(packageJson.dependencies["@localapp/server-core"]).toBe("file:./.localapp/runtime/server-core");
     expect(packageJson.dependencies["@localapp/sdk"]).toBe("file:./.localapp/runtime/sdk/core");
+    expect(packageJson.scripts.postinstall).toBe("node .localapp/runtime/sync-template.cjs");
+    expect(await exists(path.join(project, ".localapp/runtime/sync-template.cjs"))).toBe(true);
     expect(JSON.stringify(packageJson)).not.toContain("workspace:");
   });
 

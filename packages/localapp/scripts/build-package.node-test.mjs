@@ -72,6 +72,30 @@ test("packed tarball keeps the builtin runtime available to init", async (t) => 
   assert.equal(await fs.stat(path.join(projectDirectory, "tarball-app/.localapp/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
 });
 
+test("packed postinstall wrapper treats only a missing localapp executable as a warning", async (t) => {
+  const outputDirectory = path.join(testRoot, "wrapper package");
+  const emptyPath = path.join(testRoot, "empty executable path");
+  const failingPath = path.join(testRoot, "failing executable path");
+  t.after(() => fs.rm(outputDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rm(emptyPath, { recursive: true, force: true }));
+  t.after(() => fs.rm(failingPath, { recursive: true, force: true }));
+  await fs.mkdir(emptyPath, { recursive: true });
+  await fs.mkdir(failingPath, { recursive: true });
+  const result = await buildLocalAppPackage({ outputDirectory });
+  const wrapper = path.join(result.outputDirectory, "template/runtime/sync-template.cjs");
+
+  const execution = await runNode(wrapper, { PATH: emptyPath });
+
+  assert.equal(execution.code, 0, execution.stderr);
+  assert.match(execution.stderr, /localapp executable was not found; managed template sync was skipped/i);
+
+  const failingExecutable = path.join(failingPath, process.platform === "win32" ? "localapp.cmd" : "localapp");
+  await fs.writeFile(failingExecutable, process.platform === "win32" ? "@exit /b 23\r\n" : "#!/bin/sh\nexit 23\n");
+  if (process.platform !== "win32") await fs.chmod(failingExecutable, 0o755);
+  const failure = await runNode(wrapper, { PATH: failingPath });
+  assert.equal(failure.code, 23, failure.stderr);
+});
+
 function run(directory, args, cwd = directory) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(directory, "bin/localapp.mjs"), ...args], {
