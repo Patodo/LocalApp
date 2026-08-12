@@ -4,6 +4,7 @@ export type LocalAppCommand =
   | { kind: "server-start" }
   | { kind: "server-run"; dataDir?: string; host?: string; port?: number }
   | { kind: "server-control"; action: "stop" | "restart" | "status" | "logs" | "uninstall" }
+  | { kind: "daemon" }
   | { kind: "init"; name?: string; skipInstall: boolean; skipDeploy: boolean }
   | { kind: "check"; json: boolean; profile?: string }
   | { kind: "build-package"; output?: string }
@@ -49,6 +50,7 @@ export function parseLocalAppArgs(argv: string[]): LocalAppCommand {
     case "dev": requireNoArguments(args); return { kind: "dev" };
     case "sync-template": return parseSyncTemplate(args);
     case "eject-template": requireNoArguments(args); return { kind: "eject-template" };
+    case "_daemon": requireNoArguments(args); return { kind: "daemon" };
     default: throw new LocalAppArgumentError(`Unknown command: ${command}`, command);
   }
 }

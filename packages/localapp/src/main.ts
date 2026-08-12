@@ -15,6 +15,9 @@ import { resolveProjectTarget } from "./project/target.js";
 import { loadPackageVersion } from "./version.js";
 import { LocalAppLifecycleError } from "./errors.js";
 import { runDev } from "./commands/dev.js";
+import { runServerCommand, runServerForeground } from "./commands/server.js";
+import { LocalAppDaemon } from "./daemon/daemon.js";
+import { createRuntimeLayout } from "./daemon/runtime-layout.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,6 +65,24 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       }, profile.apiKey);
     } else if (command.kind === "dev") {
       return await runDev({ projectDir: process.cwd(), signal: new AbortController().signal, io });
+    } else if (command.kind === "server-start") {
+      io.stdout(`${JSON.stringify(await runServerCommand({ action: "start" }))}\n`);
+    } else if (command.kind === "server-control") {
+      io.stdout(`${JSON.stringify(await runServerCommand({ action: command.action }))}\n`);
+    } else if (command.kind === "server-run") {
+      return await runServerForeground(command);
+    } else if (command.kind === "daemon") {
+      const layout = createRuntimeLayout({
+        supportDir: process.env.LOCALAPP_SUPPORT_DIR,
+        runtimeDir: process.env.LOCALAPP_RUNTIME_DIR,
+        dataDir: process.env.LOCALAPP_DATA_DIR,
+      });
+      const daemon = new LocalAppDaemon({ layout });
+      const stop = () => { void daemon.stop().catch(() => undefined); };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      await daemon.start();
+      await daemon.stopped;
     }
     return 0;
   } catch (error) {

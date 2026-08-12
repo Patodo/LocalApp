@@ -20,6 +20,7 @@ describe("parseLocalAppArgs", () => {
     ["server status", ["server", "status"], { kind: "server-control", action: "status" }],
     ["server logs", ["server", "logs"], { kind: "server-control", action: "logs" }],
     ["server uninstall", ["server", "uninstall"], { kind: "server-control", action: "uninstall" }],
+    ["internal daemon command is strict but not a public server action", ["_daemon"], { kind: "daemon" }],
     ["init defaults", ["init"], { kind: "init", skipInstall: false, skipDeploy: false }],
     ["init flags and name", ["init", "my-app", "--skip-install", "--skip-deploy"], { kind: "init", name: "my-app", skipInstall: true, skipDeploy: true }],
     ["check defaults", ["check"], { kind: "check", json: false }],
@@ -43,6 +44,7 @@ describe("parseLocalAppArgs", () => {
   it.each([
     ["unknown command", ["unknown"], "Unknown command: unknown"],
     ["unknown server action", ["server", "unknown"], "Unknown server command: unknown"],
+    ["internal daemon arguments", ["_daemon", "extra"], "Unexpected argument: extra"],
     ["unknown run option", ["server", "run", "--unknown"], "Unknown option: --unknown"],
     ["non-numeric port", ["server", "run", "--port", "-1"], "Port must be an integer: -1"],
     ["out-of-range port", ["server", "run", "--port=65536"], "Port must be between 0 and 65535: 65536"],
