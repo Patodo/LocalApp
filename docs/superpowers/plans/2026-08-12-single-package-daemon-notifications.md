@@ -349,7 +349,7 @@ git commit -m "feat(cli): port checks and application packaging"
 - Produces: `syncApplication({ projectDir, target, peer, withData, confirmation }): Promise<SyncJob>`.
 - Consumes: Task 2 profiles and Task 4 package builder.
 
-- [ ] **Step 1: Write failing real-Server command tests**
+- [x] **Step 1: Write failing real-Server command tests**
 
 ```ts
 it("builds and installs the current project into the selected Server", async () => {
@@ -365,13 +365,13 @@ it("requires an exact app-name confirmation before data sync", async () => {
 });
 ```
 
-- [ ] **Step 2: Run command tests and verify RED**
+- [x] **Step 2: Run command tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/app-install.test.ts tests/app-sync.test.ts`
 
 Expected: FAIL because the TypeScript install and sync commands do not exist.
 
-- [ ] **Step 3: Implement install and synchronization polling**
+- [x] **Step 3: Implement install and synchronization polling**
 
 Use Node `FormData`/`Blob` to upload the inspected package to
 `/api/me/apps/install`. Resolve target precedence as explicit profile, project
@@ -380,13 +380,13 @@ Use Node `FormData`/`Blob` to upload the inspected package to
 on `completed`, and preserve `rolled-back`, `failed`, and `recovery-required`
 as structured failures.
 
-- [ ] **Step 4: Run install, two-peer, and data-sync suites**
+- [x] **Step 4: Run install, two-peer, and data-sync suites**
 
 Run: `pnpm -C packages/localapp test && pnpm -C packages/server exec vitest run tests/integration/two-peer-sync.test.ts tests/integration/two-peer-data-sync.test.ts`
 
 Expected: PASS; target ownership, idempotency, data preservation, replacement, and rollback remain unchanged.
 
-- [ ] **Step 5: Commit TypeScript publishing**
+- [x] **Step 5: Commit TypeScript publishing**
 
 ```bash
 git add packages/localapp
