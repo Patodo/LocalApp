@@ -35,6 +35,38 @@ export async function deviceNotificationsRoutes(app: FastifyInstance, store: Dev
     return stateResponse(store, userId, Boolean(controlToken));
   });
 
+  app.get("/api/device-notifications/settings", async (req, reply) => {
+    const userId = requireRequestUser(req, reply);
+    if (!userId) return;
+    noStore(reply);
+    return { success: true, data: { deviceIntegration: { available: Boolean(controlToken) }, ...store.controlState(userId) } };
+  });
+
+  app.put("/api/device-notifications/settings", { bodyLimit: 8 * 1024 }, async (req, reply) => {
+    const userId = requireRequestUser(req, reply);
+    if (!userId || !requireSameOriginMutation(req, reply)) return;
+    if (!controlToken) return capabilityUnavailable(reply);
+    const input = parseSettingsBody(req.body, reply);
+    if (!input) return;
+    try {
+      const data = store.updateDisplaySettings({ ownerUserId: userId, expectedGeneration: input.generation, settings: input.settings });
+      noStore(reply);
+      return { success: true, data };
+    } catch (error) { return storeError(reply, error); }
+  });
+
+  app.post("/api/device-notifications/test", { bodyLimit: 4 * 1024 }, async (req, reply) => {
+    const userId = requireRequestUser(req, reply);
+    if (!userId || !requireSameOriginMutation(req, reply)) return;
+    if (!controlToken) return capabilityUnavailable(reply);
+    const input = parseGenerationBody(req.body, reply);
+    if (!input) return;
+    try {
+      noStore(reply);
+      return reply.status(202).send({ success: true, data: store.createTestCommand({ ownerUserId: userId, expectedGeneration: input.generation }) });
+    } catch (error) { return storeError(reply, error); }
+  });
+
   app.get<{ Params: { id: string } }>("/api/device-notifications/:id", async (req, reply) => {
     const userId = requireRequestUser(req, reply);
     if (!userId) return;
@@ -119,6 +151,14 @@ export async function deviceNotificationsRoutes(app: FastifyInstance, store: Dev
     return { success: true, data: store.snapshot() };
   });
 
+  app.get("/api/internal/device-notifications/control", async (req, reply) => {
+    noStore(reply);
+    if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
+    if (!hasControlToken(req, controlToken)) return sendError(reply, 401, "DEVICE_NOTIFICATION_CONTROL_TOKEN_INVALID", "Notification control token is invalid");
+    const state = store.controlState("");
+    return { success: true, data: { generation: state.generation, settings: state.settings } };
+  });
+
   app.post<{ Params: { id: string } }>("/api/internal/device-notifications/sources/:id/status", { bodyLimit: 8 * 1024 }, async (req, reply) => {
     noStore(reply);
     if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
@@ -131,6 +171,24 @@ export async function deviceNotificationsRoutes(app: FastifyInstance, store: Dev
     } catch (error) {
       return storeError(reply, error);
     }
+  });
+
+  app.post("/api/internal/device-notifications/test/claim", async (req, reply) => {
+    noStore(reply);
+    if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
+    if (!hasControlToken(req, controlToken)) return sendError(reply, 401, "DEVICE_NOTIFICATION_CONTROL_TOKEN_INVALID", "Notification control token is invalid");
+    return { success: true, data: { command: store.claimTestCommand() } };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/internal/device-notifications/test/:id/complete", { bodyLimit: 4 * 1024 }, async (req, reply) => {
+    noStore(reply);
+    if (!isLoopback(req)) return sendError(reply, 403, "DEVICE_NOTIFICATION_LOOPBACK_REQUIRED", "Loopback connection required");
+    if (!hasControlToken(req, controlToken)) return sendError(reply, 401, "DEVICE_NOTIFICATION_CONTROL_TOKEN_INVALID", "Notification control token is invalid");
+    if (!validSourceId(req.params.id)) return sendError(reply, 404, "DEVICE_NOTIFICATION_TEST_NOT_FOUND", "Notification test command not found");
+    const input = parseTestCompletionBody(req.body, reply);
+    if (!input) return;
+    try { return { success: true, data: store.completeTestCommand({ id: req.params.id, ...input }) }; }
+    catch (error) { return storeError(reply, error); }
   });
 }
 
@@ -163,6 +221,36 @@ function parseGenerationBody(body: unknown, reply: FastifyReply): { generation: 
     return null;
   }
   return { generation };
+}
+
+function parseSettingsBody(body: unknown, reply: FastifyReply): { generation: number; settings: { quietHours: { start: string; end: string; timeZone: string } | null; preview: "full" | "hidden" } } | null {
+  if (!isExactRecord(body, ["generation", "settings"]) || !isExactRecord(body.settings, ["quietHours", "preview"])) return invalidRequest(reply);
+  const generation = parseSafeInteger(body.generation, 0);
+  const preview = body.settings.preview === "full" || body.settings.preview === "hidden" ? body.settings.preview : null;
+  let quietHours: { start: string; end: string; timeZone: string } | null = null;
+  if (body.settings.quietHours !== null) {
+    if (!isExactRecord(body.settings.quietHours, ["start", "end", "timeZone"])) return invalidRequest(reply);
+    const { start, end, timeZone } = body.settings.quietHours;
+    if (typeof start !== "string" || typeof end !== "string" || !validClock(start) || !validClock(end) || start === end
+      || typeof timeZone !== "string" || !validTimeZone(timeZone)) return invalidRequest(reply);
+    quietHours = { start, end, timeZone };
+  }
+  if (generation === undefined || preview === null) return invalidRequest(reply);
+  return { generation, settings: { quietHours, preview } };
+}
+
+function parseTestCompletionBody(body: unknown, reply: FastifyReply): { result: "shown" | "denied" | "unsupported" | "failed"; permission: "not-determined" | "granted" | "denied" | "unsupported" | "unknown"; daemonVersion: string; adapterVersion: string } | null {
+  if (!isExactRecord(body, ["result", "permission", "daemonVersion", "adapterVersion"])) return invalidRequest(reply);
+  const results = ["shown", "denied", "unsupported", "failed"] as const;
+  const permissions = ["not-determined", "granted", "denied", "unsupported", "unknown"] as const;
+  if (!results.includes(body.result as never) || !permissions.includes(body.permission as never)
+    || !boundedVersion(body.daemonVersion) || !boundedVersion(body.adapterVersion)) return invalidRequest(reply);
+  return body as { result: typeof results[number]; permission: typeof permissions[number]; daemonVersion: string; adapterVersion: string };
+}
+
+function invalidRequest(reply: FastifyReply): null {
+  sendError(reply, 400, "DEVICE_NOTIFICATION_INVALID_REQUEST", "Invalid device notification request");
+  return null;
 }
 
 function parseStatusBody(body: unknown, reply: FastifyReply): {
@@ -239,6 +327,7 @@ function storeError(reply: FastifyReply, error: unknown) {
     DEVICE_NOTIFICATION_PEER_NOT_VERIFIED: [409, "Verified peer required"],
     DEVICE_NOTIFICATION_SOURCE_NOT_FOUND: [404, "Notification source not found"],
     DEVICE_NOTIFICATION_ACCOUNT_NOT_FOUND: [404, "Notification account not found"],
+    DEVICE_NOTIFICATION_TEST_NOT_FOUND: [404, "Notification test command not found"],
   };
   const [status, message] = responses[code] ?? [500, "Notification source mutation failed"];
   return sendError(reply, status, code, message);
@@ -270,6 +359,13 @@ function boundedIsoDate(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 32 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return null;
   return Number.isNaN(Date.parse(value)) ? null : value;
 }
+
+function validClock(value: string): boolean { return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value); }
+function validTimeZone(value: string): boolean {
+  if (value.length < 1 || value.length > 64 || /[\u0000-\u001f<>]/.test(value)) return false;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: value }).format(); return true; } catch { return false; }
+}
+function boundedVersion(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(value); }
 
 function parseSafeInteger(value: unknown, minimum: number, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
   const parsed = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;

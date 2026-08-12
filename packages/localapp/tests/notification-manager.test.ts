@@ -52,6 +52,38 @@ describe("NotificationConnectionManager", () => {
     await expect(manager.start()).rejects.toThrow(/snapshot.*invalid/i);
     await manager.stop();
   });
+
+  it("applies display policy and runs permission only for a claimed explicit test command", async () => {
+    const root = await fs.mkdtemp(path.join(repositoryRoot, "tmp/task-11-manager-command-")); roots.push(root);
+    const store = new DeliveryStore({ statePath: path.join(root, "state.json") });
+    const dispatcher = new NotificationDispatcher({ store, adapter: { permissionState: async () => "unsupported", showNotification: async () => undefined }, iconPath: path.join(root, "icon.png") });
+    const applyDisplayPolicy = vi.fn();
+    const runTestNotification = vi.fn(async () => ({ result: "shown" as const, permission: "granted" as const, daemonVersion: "0.1.0", adapterVersion: "0.1.0" }));
+    let sourcePolls = 0;
+    let claims = 0;
+    const calls: string[] = [];
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input); calls.push(url);
+      if (url.endsWith("/control")) return Response.json({ success: true, data: { generation: 1, settings: { quietHours: null, preview: "hidden" } } });
+      if (url.endsWith("/test/claim")) return Response.json({ success: true, data: { command: claims++ === 0 ? { id: "11111111-1111-4111-8111-111111111111", type: "test-notification", userId: "u" } : null } });
+      if (url.includes("/test/") && url.endsWith("/complete")) return Response.json({ success: true, data: { generation: 2 } });
+      if (url.includes("/sources")) {
+        if (sourcePolls++ === 0) return Response.json({ success: true, data: { generation: 1, sources: [] } });
+        return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true }));
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }) as unknown as typeof globalThis.fetch;
+    const manager = new NotificationConnectionManager({
+      localServerOrigin: "http://127.0.0.1:43127", controlToken: "notification_control_123456789", store, dispatcher, fetch,
+      applyDisplayPolicy, runTestNotification,
+    });
+    expect(runTestNotification).not.toHaveBeenCalled();
+    await manager.start();
+    expect(applyDisplayPolicy).toHaveBeenCalledWith({ quietHours: null, preview: "hidden" });
+    expect(runTestNotification).toHaveBeenCalledTimes(1);
+    expect(calls.some((url) => url.endsWith("/test/11111111-1111-4111-8111-111111111111/complete"))).toBe(true);
+    await manager.stop();
+  });
 });
 
 class FakeSocket extends EventEmitter implements SourceSocket {

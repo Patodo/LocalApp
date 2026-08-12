@@ -68,7 +68,7 @@ const RECORD_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,255})$/;
 const TOKEN = /^[A-Za-z0-9_-]{43,128}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
-const MAX_RETRY = 100;
+const MAX_RETRY = 3;
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT = 4_096;
 const execFileAsync = promisify(execFile);
@@ -167,11 +167,15 @@ export class DeliveryStore {
     });
   }
 
-  async retryPending(sourceId: string): Promise<PendingDelivery | null> {
+  async retryPending(sourceId: string): Promise<PendingDelivery | "exhausted" | null> {
     return this.mutate((state) => {
       const source = requiredSource(state, sourceId);
       if (source.pending === null) return null;
-      if (source.pending.retryCount >= MAX_RETRY) throw new Error("Notification retry limit exceeded");
+      if (source.pending.retryCount >= MAX_RETRY) {
+        commitPending(source);
+        this.pruneState(state);
+        return "exhausted" as const;
+      }
       source.pending.retryCount += 1;
       return clonePending(source.pending);
     });

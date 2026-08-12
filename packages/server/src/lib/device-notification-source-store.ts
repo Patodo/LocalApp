@@ -12,6 +12,12 @@ import { SecretBox } from "./secret-box.js";
 
 export type DeviceNotificationSourceKind = "local" | "peer";
 export type DeviceNotificationConnectionState = "disabled" | "pending" | "connecting" | "connected" | "error";
+export type DeviceNotificationPermissionState = "not-determined" | "granted" | "denied" | "unsupported" | "unknown";
+export type DeviceNotificationTestResult = "shown" | "denied" | "unsupported" | "failed";
+export interface DeviceNotificationDisplaySettings {
+  quietHours: { start: string; end: string; timeZone: string } | null;
+  preview: "full" | "hidden";
+}
 
 export interface DeviceNotificationPublicSource {
   id: string;
@@ -237,6 +243,77 @@ export class DeviceNotificationSourceStore {
     return this.publicSource(this.requiredRow(sourceId));
   }
 
+  controlState(ownerUserId: string) {
+    const state = requiredNotificationState();
+    const last = getDb().exec(`
+      SELECT id, state, result FROM device_notification_test_commands
+      WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+    `, [ownerUserId])[0]?.values[0];
+    return {
+      generation: Number(state.generation),
+      settings: displaySettings(state),
+      native: {
+        permission: String(state.native_permission) as DeviceNotificationPermissionState,
+        daemonVersion: state.daemon_version == null ? null : String(state.daemon_version),
+        adapterVersion: state.adapter_version == null ? null : String(state.adapter_version),
+        updatedAt: state.native_updated_at == null ? null : String(state.native_updated_at),
+      },
+      lastTest: last ? { id: String(last[0]), state: String(last[1]), result: last[2] == null ? null : String(last[2]) } : null,
+    };
+  }
+
+  updateDisplaySettings(input: { ownerUserId: string; expectedGeneration: number; settings: DeviceNotificationDisplaySettings }) {
+    this.assertGeneration(input.expectedGeneration);
+    mutateMetaDbAtomically((database) => {
+      incrementGeneration(database);
+      database.run(`UPDATE device_notification_state SET quiet_hours_start = ?, quiet_hours_end = ?, quiet_hours_timezone = ?, preview = ? WHERE singleton = 1`, [
+        input.settings.quietHours?.start ?? null,
+        input.settings.quietHours?.end ?? null,
+        input.settings.quietHours?.timeZone ?? null,
+        input.settings.preview,
+      ]);
+    });
+    return this.controlState(input.ownerUserId);
+  }
+
+  createTestCommand(input: { ownerUserId: string; expectedGeneration: number; now?: Date }) {
+    if (!findUserById(input.ownerUserId)) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_ACCOUNT_NOT_FOUND");
+    this.assertGeneration(input.expectedGeneration);
+    const id = randomUUID();
+    const now = input.now ?? new Date();
+    const createdAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
+    mutateMetaDbAtomically((database) => {
+      incrementGeneration(database);
+      database.run(`INSERT INTO device_notification_test_commands (id, user_id, state, result, created_at, expires_at, completed_at) VALUES (?, ?, 'pending', NULL, ?, ?, NULL)`, [id, input.ownerUserId, createdAt, expiresAt]);
+    });
+    return { generation: this.generation(), test: { id, state: "pending" as const, result: null } };
+  }
+
+  claimTestCommand(now = new Date()): { id: string; type: "test-notification"; userId: string } | null {
+    let command: { id: string; type: "test-notification"; userId: string } | null = null;
+    mutateMetaDbAtomically((database) => {
+      database.run("DELETE FROM device_notification_test_commands WHERE state != 'completed' AND expires_at <= ?", [now.toISOString()]);
+      const row = database.exec(`SELECT id, user_id FROM device_notification_test_commands WHERE state = 'pending' ORDER BY created_at, id LIMIT 1`)[0]?.values[0];
+      if (!row) return;
+      database.run("UPDATE device_notification_test_commands SET state = 'claimed' WHERE id = ? AND state = 'pending'", [row[0]]);
+      if (database.getRowsModified() !== 1) return;
+      command = { id: String(row[0]), type: "test-notification", userId: String(row[1]) };
+    });
+    return command;
+  }
+
+  completeTestCommand(input: { id: string; result: DeviceNotificationTestResult; permission: DeviceNotificationPermissionState; daemonVersion: string; adapterVersion: string; now?: Date }) {
+    const now = (input.now ?? new Date()).toISOString();
+    mutateMetaDbAtomically((database) => {
+      database.run("UPDATE device_notification_test_commands SET state = 'completed', result = ?, completed_at = ? WHERE id = ? AND state = 'claimed'", [input.result, now, input.id]);
+      if (database.getRowsModified() !== 1) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_TEST_NOT_FOUND");
+      incrementGeneration(database);
+      database.run("UPDATE device_notification_state SET native_permission = ?, daemon_version = ?, adapter_version = ?, native_updated_at = ? WHERE singleton = 1", [input.permission, input.daemonVersion, input.adapterVersion, now]);
+    });
+    return { generation: this.generation() };
+  }
+
   async waitForGeneration(current: number, timeoutMs: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted || this.generation() !== current || timeoutMs === 0) return;
     await new Promise<void>((resolve) => {
@@ -374,6 +451,24 @@ function localCredentialAad(id: string): string {
 
 function bounded(value: string, maximum: number): string {
   return value.length <= maximum ? value : value.slice(0, maximum);
+}
+
+function requiredNotificationState(): Record<string, unknown> {
+  const statement = getDb().prepare("SELECT * FROM device_notification_state WHERE singleton = 1");
+  try {
+    if (!statement.step()) throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+    return statement.getAsObject();
+  } finally { statement.free(); }
+}
+
+function displaySettings(row: Record<string, unknown>): DeviceNotificationDisplaySettings {
+  const start = row.quiet_hours_start == null ? null : String(row.quiet_hours_start);
+  const end = row.quiet_hours_end == null ? null : String(row.quiet_hours_end);
+  const timeZone = row.quiet_hours_timezone == null ? null : String(row.quiet_hours_timezone);
+  return {
+    quietHours: start !== null && end !== null && timeZone !== null ? { start, end, timeZone } : null,
+    preview: row.preview === "hidden" ? "hidden" : "full",
+  };
 }
 
 function sourceRow(row: Record<string, unknown>): SourceRow {

@@ -8,13 +8,13 @@ const repositoryRoot = path.resolve(process.cwd(), "../..");
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))));
 
-async function fixture(permission: "granted" | "denied" | "unsupported" | "not-determined" | "unknown" = "granted") {
+async function fixture(permission: "granted" | "denied" | "unsupported" | "not-determined" | "unknown" = "granted", now?: () => Date) {
   const root = await fs.mkdtemp(path.join(repositoryRoot, "tmp/task-10b2-dispatcher-"));
   roots.push(root);
   const store = new DeliveryStore({ statePath: path.join(root, "notifications.json"), randomBytes: (size) => Buffer.alloc(size, 17) });
   await store.baseline("local", 0);
   const adapter = { permissionState: vi.fn(async () => permission), showNotification: vi.fn(async () => undefined), requestPermission: vi.fn() };
-  const dispatcher = new NotificationDispatcher({ store, adapter, iconPath: path.join(root, "localapp.png") });
+  const dispatcher = new NotificationDispatcher({ store, adapter, iconPath: path.join(root, "localapp.png"), now });
   return { root, store, adapter, dispatcher };
 }
 
@@ -64,6 +64,16 @@ describe("NotificationDispatcher", () => {
     expect(pending?.retryCount).toBe(0);
   });
 
+  it("bounds transient native retries and then advances as inbox-only", async () => {
+    const { store, adapter, dispatcher } = await fixture();
+    adapter.showNotification.mockRejectedValue(new Error("desktop session unavailable"));
+    const input = { sourceId: "local", sourceLabel: "Local", policy: "native" as const, delivery: notification() };
+    for (let attempt = 0; attempt < 4; attempt += 1) await expect(dispatcher.dispatch(input)).rejects.toThrow(/desktop session unavailable/);
+    await expect(dispatcher.dispatch(input)).resolves.toEqual({ outcome: "inbox-only", sequence: 1 });
+    expect(adapter.showNotification).toHaveBeenCalledTimes(4);
+    expect(await store.readSource("local")).toMatchObject({ cursor: 1, pending: null });
+  });
+
   it("rejects an altered retry and an oversized envelope without mutating pending state", async () => {
     const { store, adapter, dispatcher } = await fixture();
     adapter.showNotification.mockRejectedValueOnce(new Error("native unavailable"));
@@ -108,5 +118,35 @@ describe("NotificationDispatcher", () => {
   it("rejects malformed constructor dependencies", async () => {
     const { store, root } = await fixture();
     expect(() => new NotificationDispatcher({ store, adapter: {} as never, iconPath: path.join(root, "icon.png") })).toThrow(/options/i);
+  });
+
+  it("suppresses native display during cross-midnight quiet hours and advances the cursor", async () => {
+    const { store, adapter, dispatcher } = await fixture("granted", () => new Date("2026-08-12T14:00:00.000Z"));
+    dispatcher.configure({ quietHours: { start: "22:30", end: "07:15", timeZone: "Asia/Tokyo" }, preview: "full" });
+    await expect(dispatcher.dispatch({ sourceId: "local", sourceLabel: "Local", policy: "native", delivery: notification() })).resolves.toEqual({ outcome: "inbox-only", sequence: 1 });
+    expect(adapter.permissionState).not.toHaveBeenCalled();
+    expect(adapter.showNotification).not.toHaveBeenCalled();
+    expect((await store.readSource("local"))?.cursor).toBe(1);
+  });
+
+  it("hides publisher preview content without changing the click ticket", async () => {
+    const { adapter, dispatcher } = await fixture();
+    dispatcher.configure({ quietHours: null, preview: "hidden" });
+    await dispatcher.dispatch({ sourceId: "local", sourceLabel: "Private Peer", policy: "native", delivery: notification() });
+    const envelope = adapter.showNotification.mock.calls[0]?.[0];
+    expect(envelope).toMatchObject({ title: "New LocalApp notification", body: "Open Private Peer to view it" });
+    expect(JSON.stringify(envelope)).not.toContain("Ready");
+    expect(JSON.stringify(envelope)).not.toContain("Open result");
+    expect(envelope.ticket).toMatch(/^[A-Za-z0-9_-]{16,256}$/);
+  });
+
+  it("requests permission only for an explicit test and does not re-prompt a denied state", async () => {
+    const { adapter, dispatcher } = await fixture("not-determined");
+    adapter.requestPermission.mockResolvedValueOnce("denied");
+    await expect(dispatcher.sendTestNotification("11111111-1111-4111-8111-111111111111")).resolves.toEqual({ result: "denied", permission: "denied" });
+    adapter.permissionState.mockResolvedValueOnce("denied");
+    await expect(dispatcher.sendTestNotification("22222222-2222-4222-8222-222222222222")).resolves.toEqual({ result: "denied", permission: "denied" });
+    expect(adapter.requestPermission).toHaveBeenCalledTimes(1);
+    expect(adapter.showNotification).not.toHaveBeenCalled();
   });
 });

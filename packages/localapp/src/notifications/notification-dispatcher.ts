@@ -3,6 +3,7 @@ import { DeliveryStore, validateDeliveryNotification, type DeliveryNotification,
 
 export interface NotificationDisplayAdapter {
   permissionState(): Promise<NativePermissionState>;
+  requestPermission?(): Promise<NativePermissionState>;
   showNotification(envelope: NativeNotificationEnvelope): Promise<void>;
 }
 
@@ -10,6 +11,12 @@ export interface NotificationDispatcherOptions {
   store: DeliveryStore;
   adapter: NotificationDisplayAdapter;
   iconPath: string;
+  now?: () => Date;
+}
+
+export interface NotificationDisplayPolicy {
+  quietHours: { start: string; end: string; timeZone: string } | null;
+  preview: "full" | "hidden";
 }
 
 export interface DispatchInput {
@@ -39,6 +46,8 @@ export class NotificationDispatcher {
   private readonly store: DeliveryStore;
   private readonly adapter: NotificationDisplayAdapter;
   private readonly iconPath: string;
+  private readonly now: () => Date;
+  private policy: NotificationDisplayPolicy = { quietHours: null, preview: "full" };
 
   constructor(options: NotificationDispatcherOptions) {
     if (options === null || typeof options !== "object" || !(options.store instanceof DeliveryStore)
@@ -49,6 +58,11 @@ export class NotificationDispatcher {
     this.store = options.store;
     this.adapter = options.adapter;
     this.iconPath = validateNativeNotificationEnvelope({ identifier: "localapp_dispatcher_validation", ticket: "localapp_dispatcher_validation", title: "LocalApp", body: "", sourceLabel: "LocalApp", priority: "normal", iconPath: options.iconPath }).iconPath;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  configure(policy: NotificationDisplayPolicy): void {
+    this.policy = validateDisplayPolicy(policy);
   }
 
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
@@ -61,9 +75,10 @@ export class NotificationDispatcher {
 
     const pending = await this.prepare(sourceId, sourceLabel, delivery);
     if (pending === null) return { outcome: "duplicate", sequence: delivery.sequence };
+    if (pending === "inbox-only") return { outcome: "inbox-only", sequence: delivery.sequence };
     if (input.signal?.aborted) return { outcome: "aborted", sequence: delivery.sequence };
 
-    if (input.policy === "inbox-only") {
+    if (input.policy === "inbox-only" || isQuietTime(this.policy.quietHours, this.now())) {
       await this.store.commitInboxOnly(sourceId, delivery.sequence);
       return { outcome: "inbox-only", sequence: delivery.sequence };
     }
@@ -77,8 +92,8 @@ export class NotificationDispatcher {
     const envelope = validateNativeNotificationEnvelope({
       identifier: pending.nativeId,
       ticket: pending.ticket,
-      title: pending.delivery.title,
-      body: pending.delivery.body ?? "",
+      title: this.policy.preview === "hidden" ? "New LocalApp notification" : pending.delivery.title,
+      body: this.policy.preview === "hidden" ? `Open ${pending.sourceLabel} to view it` : pending.delivery.body ?? "",
       sourceLabel: pending.sourceLabel,
       priority: pending.delivery.priority,
       iconPath: pending.iconPath,
@@ -95,6 +110,7 @@ export class NotificationDispatcher {
       throw new Error("Notification summary count is invalid");
     }
     if (input.signal?.aborted) return { outcome: "aborted" };
+    if (isQuietTime(this.policy.quietHours, this.now())) return { outcome: "inbox-only" };
     if (await this.adapter.permissionState() !== "granted") return { outcome: "inbox-only" };
     if (input.signal?.aborted) return { outcome: "aborted" };
     const summary = await this.store.issueSummary(sourceId);
@@ -117,13 +133,33 @@ export class NotificationDispatcher {
     return { outcome: "shown" };
   }
 
-  private async prepare(sourceId: string, sourceLabel: string, delivery: DeliveryNotification): Promise<PendingDelivery | null> {
+  async sendTestNotification(commandId: string): Promise<{ result: "shown" | "denied" | "unsupported" | "failed"; permission: NativePermissionState }> {
+    if (typeof commandId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(commandId)) throw new Error("Notification test command is invalid");
+    let permission = await this.adapter.permissionState();
+    if (permission === "not-determined") permission = this.adapter.requestPermission ? await this.adapter.requestPermission() : "unsupported";
+    if (permission === "denied") return { result: "denied", permission };
+    if (permission === "unsupported") return { result: "unsupported", permission };
+    if (permission !== "granted") return { result: "failed", permission };
+    await this.adapter.showNotification(validateNativeNotificationEnvelope({
+      identifier: commandId,
+      ticket: commandId,
+      title: "LocalApp notifications are ready",
+      body: "This computer can display LocalApp notifications.",
+      sourceLabel: "This device",
+      priority: "normal",
+      iconPath: this.iconPath,
+    }));
+    return { result: "shown", permission };
+  }
+
+  private async prepare(sourceId: string, sourceLabel: string, delivery: DeliveryNotification): Promise<PendingDelivery | "inbox-only" | null> {
     const existing = await this.store.readPending(sourceId);
     if (existing !== null) {
       if (JSON.stringify(existing.delivery) !== JSON.stringify(delivery) || existing.sourceLabel !== sourceLabel || existing.iconPath !== this.iconPath) {
         throw new Error("Notification source already has a different pending delivery");
       }
-      return this.store.retryPending(sourceId);
+      const retried = await this.store.retryPending(sourceId);
+      return retried === "exhausted" ? "inbox-only" : retried;
     }
     return this.store.preparePending(sourceId, delivery, undefined, sourceLabel, this.iconPath);
   }
@@ -152,3 +188,26 @@ function validateSourceLabel(value: string): string {
   }
   return value;
 }
+
+function validateDisplayPolicy(value: NotificationDisplayPolicy): NotificationDisplayPolicy {
+  if (value === null || typeof value !== "object" || (value.preview !== "full" && value.preview !== "hidden")) throw new Error("Notification display policy is invalid");
+  if (value.quietHours === null) return { quietHours: null, preview: value.preview };
+  const quiet = value.quietHours;
+  if (typeof quiet !== "object" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(quiet.start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(quiet.end)
+    || quiet.start === quiet.end || typeof quiet.timeZone !== "string" || quiet.timeZone.length > 64) throw new Error("Notification display policy is invalid");
+  try { new Intl.DateTimeFormat("en-US", { timeZone: quiet.timeZone }).format(); } catch { throw new Error("Notification display policy is invalid"); }
+  return { quietHours: { ...quiet }, preview: value.preview };
+}
+
+function isQuietTime(quiet: NotificationDisplayPolicy["quietHours"], now: Date): boolean {
+  if (quiet === null) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: quiet.timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  const current = hour * 60 + minute;
+  const start = clockMinutes(quiet.start);
+  const end = clockMinutes(quiet.end);
+  return start < end ? current >= start && current < end : current >= start || current < end;
+}
+
+function clockMinutes(value: string): number { const [hour, minute] = value.split(":").map(Number); return hour! * 60 + minute!; }

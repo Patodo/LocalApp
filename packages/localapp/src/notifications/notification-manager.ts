@@ -11,6 +11,20 @@ export interface NotificationConnectionManagerOptions {
   fetch?: typeof globalThis.fetch;
   createSocket?: (url: string, credential: string) => SourceSocket;
   snapshotTimeoutMs?: number;
+  applyDisplayPolicy?: (settings: DeviceNotificationDisplaySettings) => void;
+  runTestNotification?: (command: { id: string; userId: string }) => Promise<DeviceNotificationTestResult>;
+}
+
+export interface DeviceNotificationDisplaySettings {
+  quietHours: { start: string; end: string; timeZone: string } | null;
+  preview: "full" | "hidden";
+}
+
+export interface DeviceNotificationTestResult {
+  result: "shown" | "denied" | "unsupported" | "failed";
+  permission: "not-determined" | "granted" | "denied" | "unsupported" | "unknown";
+  daemonVersion: string;
+  adapterVersion: string;
 }
 
 export class NotificationConnectionManager {
@@ -30,6 +44,7 @@ export class NotificationConnectionManager {
     const snapshot = await this.fetchSnapshot("");
     await this.reconfigure(snapshot.sources);
     this.generation = snapshot.generation;
+    await this.refreshControl();
     this.pollPromise = this.poll().finally(() => { this.pollPromise = undefined; });
     void this.pollPromise.catch(() => undefined);
   }
@@ -54,6 +69,7 @@ export class NotificationConnectionManager {
         const snapshot = await this.fetchSnapshot(query);
         if (snapshot.generation !== this.generation) await this.reconfigure(snapshot.sources);
         this.generation = snapshot.generation;
+        await this.refreshControl();
       } catch {
         if (this.controller.signal.aborted) return;
         await delay(500, this.controller.signal).catch(() => undefined);
@@ -108,6 +124,33 @@ export class NotificationConnectionManager {
       signal,
     });
     if (!response.ok || response.redirected) throw new Error("notification source status failed");
+  }
+
+  private async refreshControl(): Promise<void> {
+    if (this.options.applyDisplayPolicy === undefined && this.options.runTestNotification === undefined) return;
+    const fetch = this.options.fetch ?? globalThis.fetch;
+    const headers = { "x-localapp-notification-control": this.options.controlToken };
+    const requestSignal = () => AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]);
+    const control = await fetch(`${this.options.localServerOrigin}/api/internal/device-notifications/control`, { headers, redirect: "error", signal: requestSignal() });
+    if (!control.ok || control.redirected) throw new Error("notification control snapshot failed");
+    const settings = parseControl(await control.json());
+    this.options.applyDisplayPolicy?.(settings);
+    if (this.options.runTestNotification === undefined) return;
+    const claimed = await fetch(`${this.options.localServerOrigin}/api/internal/device-notifications/test/claim`, { method: "POST", headers, redirect: "error", signal: requestSignal() });
+    if (!claimed.ok || claimed.redirected) throw new Error("notification test claim failed");
+    const command = parseClaim(await claimed.json());
+    if (command === null) return;
+    let result: DeviceNotificationTestResult;
+    try { result = await this.options.runTestNotification(command); }
+    catch { result = { result: "failed", permission: "unknown", daemonVersion: "unknown", adapterVersion: "unknown" }; }
+    const completed = await fetch(`${this.options.localServerOrigin}/api/internal/device-notifications/test/${encodeURIComponent(command.id)}/complete`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(result),
+      redirect: "error",
+      signal: requestSignal(),
+    });
+    if (!completed.ok || completed.redirected) throw new Error("notification test completion failed");
   }
 }
 
@@ -192,6 +235,31 @@ function parseSource(value: unknown): NotificationSourceConfig {
     || (value.capability.reason !== null && typeof value.capability.reason !== "string")
     || (value.enabled && typeof value.credential !== "string") || (!value.enabled && value.credential !== undefined)) throw new Error("Notification source snapshot is invalid");
   return { id: value.id, generation: value.generation, sourceOrigin: value.sourceOrigin, targetUserId: value.targetUserId, sourceLabel: value.sourceLabel, enabled: value.enabled, capabilityReason: value.capability.reason, ...(typeof value.credential === "string" ? { credential: value.credential } : {}) };
+}
+function parseControl(value: unknown): DeviceNotificationDisplaySettings {
+  if (!record(value) || !exactKeys(value, ["success", "data"]) || value.success !== true || !record(value.data)
+    || !exactKeys(value.data, ["generation", "settings"]) || !Number.isSafeInteger(value.data.generation) || value.data.generation < 0
+    || !record(value.data.settings) || !exactKeys(value.data.settings, ["quietHours", "preview"])
+    || (value.data.settings.preview !== "full" && value.data.settings.preview !== "hidden")) throw new Error("Notification control snapshot is invalid");
+  let quietHours: DeviceNotificationDisplaySettings["quietHours"] = null;
+  if (value.data.settings.quietHours !== null) {
+    const candidate = value.data.settings.quietHours;
+    if (!record(candidate) || !exactKeys(candidate, ["start", "end", "timeZone"])
+      || typeof candidate.start !== "string" || typeof candidate.end !== "string" || typeof candidate.timeZone !== "string"
+      || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(candidate.start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(candidate.end)
+      || candidate.start === candidate.end || candidate.timeZone.length < 1 || candidate.timeZone.length > 64) throw new Error("Notification control snapshot is invalid");
+    try { new Intl.DateTimeFormat("en-US", { timeZone: candidate.timeZone }).format(); } catch { throw new Error("Notification control snapshot is invalid"); }
+    quietHours = { start: candidate.start, end: candidate.end, timeZone: candidate.timeZone };
+  }
+  return { quietHours, preview: value.data.settings.preview };
+}
+function parseClaim(value: unknown): { id: string; userId: string } | null {
+  if (!record(value) || !exactKeys(value, ["success", "data"]) || value.success !== true || !record(value.data) || !exactKeys(value.data, ["command"])) throw new Error("Notification test command is invalid");
+  if (value.data.command === null) return null;
+  const command = value.data.command;
+  if (!record(command) || !exactKeys(command, ["id", "type", "userId"]) || command.type !== "test-notification"
+    || typeof command.id !== "string" || !/^[0-9a-f-]{36}$/.test(command.id) || typeof command.userId !== "string" || command.userId.length < 1 || command.userId.length > 128) throw new Error("Notification test command is invalid");
+  return { id: command.id, userId: command.userId };
 }
 function record(value: unknown): value is Record<string, any> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean { return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key)); }

@@ -418,10 +418,32 @@ export async function initMetaDb(
   db.run(`
     CREATE TABLE IF NOT EXISTS device_notification_state (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      generation INTEGER NOT NULL CHECK (generation >= 0 AND generation <= ${Number.MAX_SAFE_INTEGER})
+      generation INTEGER NOT NULL CHECK (generation >= 0 AND generation <= ${Number.MAX_SAFE_INTEGER}),
+      quiet_hours_start TEXT,
+      quiet_hours_end TEXT,
+      quiet_hours_timezone TEXT,
+      preview TEXT NOT NULL DEFAULT 'full' CHECK (preview IN ('full', 'hidden')),
+      native_permission TEXT NOT NULL DEFAULT 'unknown' CHECK (native_permission IN ('not-determined', 'granted', 'denied', 'unsupported', 'unknown')),
+      daemon_version TEXT,
+      adapter_version TEXT,
+      native_updated_at TEXT
     )
   `);
   db.run("INSERT OR IGNORE INTO device_notification_state (singleton, generation) VALUES (1, 0)");
+  {
+    const columns = db.prepare("PRAGMA table_info(device_notification_state)");
+    const names: string[] = [];
+    while (columns.step()) names.push(String((columns.getAsObject() as { name: string }).name));
+    columns.free();
+    if (!names.includes("quiet_hours_start")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_start TEXT");
+    if (!names.includes("quiet_hours_end")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_end TEXT");
+    if (!names.includes("quiet_hours_timezone")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_timezone TEXT");
+    if (!names.includes("preview")) db.run("ALTER TABLE device_notification_state ADD COLUMN preview TEXT NOT NULL DEFAULT 'full'");
+    if (!names.includes("native_permission")) db.run("ALTER TABLE device_notification_state ADD COLUMN native_permission TEXT NOT NULL DEFAULT 'unknown'");
+    if (!names.includes("daemon_version")) db.run("ALTER TABLE device_notification_state ADD COLUMN daemon_version TEXT");
+    if (!names.includes("adapter_version")) db.run("ALTER TABLE device_notification_state ADD COLUMN adapter_version TEXT");
+    if (!names.includes("native_updated_at")) db.run("ALTER TABLE device_notification_state ADD COLUMN native_updated_at TEXT");
+  }
   db.run(`
     CREATE TABLE IF NOT EXISTS device_notification_sources (
       id TEXT PRIMARY KEY,
@@ -474,6 +496,18 @@ export async function initMetaDb(
     ON device_notification_sources(owner_user_id, kind, target_user_id)
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_device_notification_sources_owner ON device_notification_sources(owner_user_id, created_at, id)");
+  db.run(`
+    CREATE TABLE IF NOT EXISTS device_notification_test_commands (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('pending', 'claimed', 'completed')),
+      result TEXT CHECK (result IS NULL OR result IN ('shown', 'denied', 'unsupported', 'failed')),
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      completed_at TEXT
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_device_notification_test_pending ON device_notification_test_commands(state, created_at, id)");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS request_logs (

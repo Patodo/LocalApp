@@ -43,6 +43,87 @@ async function internalSnapshot(
 }
 
 describe("device notification source authority", () => {
+  it("exposes versioned machine-local display settings and rejects stale updates", async () => {
+    const { app, baseUrl } = await startServer();
+    const initial = await app.inject({ method: "GET", url: "/api/device-notifications/settings", headers: { "x-api-key": getTestApiKey() } });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({
+      success: true,
+      data: {
+        deviceIntegration: { available: true },
+        generation: 0,
+        settings: { quietHours: null, preview: "full" },
+        native: { permission: "unknown", daemonVersion: null, adapterVersion: null, updatedAt: null },
+        lastTest: null,
+      },
+    });
+
+    const updated = await app.inject({
+      method: "PUT", url: "/api/device-notifications/settings", headers: originHeaders(baseUrl),
+      payload: { generation: 0, settings: { quietHours: { start: "22:30", end: "07:15", timeZone: "Asia/Tokyo" }, preview: "hidden" } },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().data).toMatchObject({
+      generation: 1,
+      settings: { quietHours: { start: "22:30", end: "07:15", timeZone: "Asia/Tokyo" }, preview: "hidden" },
+    });
+
+    const stale = await app.inject({
+      method: "PUT", url: "/api/device-notifications/settings", headers: originHeaders(baseUrl),
+      payload: { generation: 0, settings: { quietHours: null, preview: "full" } },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("DEVICE_NOTIFICATION_GENERATION_CONFLICT");
+  });
+
+  it("creates, atomically claims, and completes one fixed user-bound test command", async () => {
+    const { app, baseUrl } = await startServer();
+    const created = await app.inject({
+      method: "POST", url: "/api/device-notifications/test", headers: originHeaders(baseUrl), payload: { generation: 0 },
+    });
+    expect(created.statusCode).toBe(202);
+    expect(created.body).not.toContain(getTestApiKey());
+    expect(created.json().data).toMatchObject({ generation: 1, test: { id: expect.any(String), state: "pending", result: null } });
+    const commandId = created.json().data.test.id as string;
+
+    const claim = await app.inject({
+      method: "POST", url: "/api/internal/device-notifications/test/claim",
+      headers: { "x-localapp-notification-control": CONTROL_TOKEN },
+    });
+    expect(claim.statusCode).toBe(200);
+    expect(claim.json()).toEqual({ success: true, data: { command: { id: commandId, type: "test-notification", userId: "localadmin" } } });
+    const duplicate = await app.inject({
+      method: "POST", url: "/api/internal/device-notifications/test/claim",
+      headers: { "x-localapp-notification-control": CONTROL_TOKEN },
+    });
+    expect(duplicate.json()).toEqual({ success: true, data: { command: null } });
+
+    const completed = await app.inject({
+      method: "POST", url: `/api/internal/device-notifications/test/${commandId}/complete`,
+      headers: { "x-localapp-notification-control": CONTROL_TOKEN, "content-type": "application/json" },
+      payload: { result: "shown", permission: "granted", daemonVersion: "0.1.0", adapterVersion: "0.1.0" },
+    });
+    expect(completed.statusCode).toBe(200);
+    const state = await app.inject({ method: "GET", url: "/api/device-notifications/settings", headers: { "x-api-key": getTestApiKey() } });
+    expect(state.json().data).toMatchObject({
+      native: { permission: "granted", daemonVersion: "0.1.0", adapterVersion: "0.1.0", updatedAt: expect.any(String) },
+      lastTest: { id: commandId, state: "completed", result: "shown" },
+    });
+  });
+
+  it("keeps settings visible but immutable when local device integration is unavailable", async () => {
+    const { app, baseUrl } = await startServer(null);
+    const state = await app.inject({ method: "GET", url: "/api/device-notifications/settings", headers: { "x-api-key": getTestApiKey() } });
+    expect(state.statusCode).toBe(200);
+    expect(state.json().data.deviceIntegration).toEqual({ available: false });
+    const mutation = await app.inject({
+      method: "PUT", url: "/api/device-notifications/settings", headers: originHeaders(baseUrl),
+      payload: { generation: 0, settings: { quietHours: null, preview: "hidden" } },
+    });
+    expect(mutation.statusCode).toBe(409);
+    expect(mutation.json().code).toBe("DEVICE_NOTIFICATION_CAPABILITY_UNAVAILABLE");
+  });
+
   it("reports a stable headless capability and keeps mutation routes present", async () => {
     const { app, baseUrl } = await startServer(null);
     const state = await app.inject({ method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() } });

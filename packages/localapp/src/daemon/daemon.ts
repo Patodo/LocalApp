@@ -102,7 +102,7 @@ export interface LocalAppDaemonOptions {
   /** Narrow, post-validation browser operation; never receives unparsed Scheme input. */
   openExternal?: BrowserOpener;
   fetch?: typeof globalThis.fetch;
-  createNotificationRuntime?: (options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }) => Promise<DaemonNotificationRuntime>;
+  createNotificationRuntime?: (options: { listenUrl: string; controlToken: string; releasePath: string; releaseVersion: string; open: BrowserOpener }) => Promise<DaemonNotificationRuntime>;
   notificationStopTimeoutMs?: number;
 }
 
@@ -232,6 +232,7 @@ export class LocalAppDaemon {
         listenUrl: ready.listenUrl,
         controlToken: this.notificationControlToken,
         releasePath: current.releasePath,
+        releaseVersion: current.version,
         open,
       });
       this.notificationResolver = this.notificationRuntime.resolver;
@@ -280,7 +281,7 @@ export class LocalAppDaemon {
     if (failure !== undefined) throw failure;
   }
 
-  private async createDefaultNotificationRuntime(options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }): Promise<DaemonNotificationRuntime> {
+  private async createDefaultNotificationRuntime(options: { listenUrl: string; controlToken: string; releasePath: string; releaseVersion: string; open: BrowserOpener }): Promise<DaemonNotificationRuntime> {
     const store = new DeliveryStore({ statePath: path.join(this.options.layout.supportDir, "notifications", "delivery-state.json") });
     const native = await createNativeAdapter(path.join(options.releasePath, "runtime", "native"), { supportDir: this.options.layout.supportDir });
     const dispatcher = new NotificationDispatcher({
@@ -294,6 +295,12 @@ export class LocalAppDaemon {
       store,
       dispatcher,
       fetch: this.options.fetch,
+      applyDisplayPolicy: (settings) => dispatcher.configure(settings),
+      runTestNotification: async (command) => ({
+        ...await dispatcher.sendTestNotification(command.id),
+        daemonVersion: options.releaseVersion,
+        adapterVersion: options.releaseVersion,
+      }),
     });
     return { manager, resolver: new NotificationActivationResolver({ store, manager, open: options.open, fetch: this.options.fetch }) };
   }
