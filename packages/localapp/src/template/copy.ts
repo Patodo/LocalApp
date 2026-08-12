@@ -10,25 +10,44 @@ export const TEMPLATE_EXCLUDED_NAMES = new Set([
   "package-lock.json",
 ]);
 
-export async function copyDirectory(source: string, destination: string, excludedNames = new Set<string>()): Promise<void> {
+export interface CopyDestinationMutations {
+  ensureDirectory(destination: string): Promise<void>;
+  copyFile(source: string, destination: string): Promise<void>;
+}
+
+export async function copyDirectory(
+  source: string,
+  destination: string,
+  excludedNames = new Set<string>(),
+  destinationMutations?: CopyDestinationMutations,
+): Promise<void> {
   const sourceStat = await fs.lstat(source);
   if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
     throw new Error(`Refusing to copy an unsafe template directory: ${source}`);
   }
-  const destinationStat = await fs.lstat(destination).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
-  if (destinationStat !== undefined && (destinationStat.isSymbolicLink() || !destinationStat.isDirectory())) {
-    throw new Error(`Refusing to copy through an unsafe destination: ${destination}`);
+  if (destinationMutations === undefined) {
+    const destinationStat = await fs.lstat(destination).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+    if (destinationStat !== undefined && (destinationStat.isSymbolicLink() || !destinationStat.isDirectory())) {
+      throw new Error(`Refusing to copy through an unsafe destination: ${destination}`);
+    }
+    if (destinationStat === undefined) await createDirectoryWithoutSymlinks(destination);
+  } else {
+    await destinationMutations.ensureDirectory(destination);
   }
-  if (destinationStat === undefined) await createDirectoryWithoutSymlinks(destination);
   const entries = await fs.readdir(source, { withFileTypes: true });
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     if (excludedNames.has(entry.name) || entry.name.endsWith(".tsbuildinfo")) continue;
     const sourcePath = path.join(source, entry.name);
     const destinationPath = path.join(destination, entry.name);
     if (entry.isDirectory()) {
-      await copyDirectory(sourcePath, destinationPath, excludedNames);
+      await copyDirectory(sourcePath, destinationPath, excludedNames, destinationMutations);
     } else if (entry.isFile()) {
-      await fs.copyFile(sourcePath, destinationPath);
+      const currentSourceStat = await fs.lstat(sourcePath);
+      if (currentSourceStat.isSymbolicLink() || !currentSourceStat.isFile()) {
+        throw new Error(`Builtin template may only contain regular files: ${sourcePath}`);
+      }
+      if (destinationMutations === undefined) await fs.copyFile(sourcePath, destinationPath);
+      else await destinationMutations.copyFile(sourcePath, destinationPath);
     } else if (entry.isSymbolicLink()) {
       throw new Error(`Builtin template may not contain symbolic links: ${sourcePath}`);
     }

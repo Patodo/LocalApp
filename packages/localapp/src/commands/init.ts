@@ -6,7 +6,7 @@ import type { CliIo } from "../cli/output.js";
 import { LocalAppLifecycleError, lifecycleError } from "../errors.js";
 import { isValidProjectName, writeProjectManifest } from "../project/manifest.js";
 import { isManagedSkillName, verifyInitParent } from "../project/safety.js";
-import { copyDirectory, isDirectory } from "../template/copy.js";
+import { copyDirectory, isDirectory, type CopyDestinationMutations } from "../template/copy.js";
 
 export interface InitializeProjectOptions {
   cwd: string;
@@ -75,15 +75,24 @@ export async function copyUserZone(templateDirectory: string, projectDirectory: 
   if (await pathExists(stagedGitignore)) await fs.copyFile(stagedGitignore, path.join(projectDirectory, ".gitignore"));
 }
 
-export async function copyManagedZone(templateDirectory: string, projectDirectory: string): Promise<void> {
-  await copyDirectory(path.join(templateDirectory, "runtime"), path.join(projectDirectory, ".localapp/runtime"));
+export async function copyManagedZone(
+  templateDirectory: string,
+  projectDirectory: string,
+  destinationMutations?: CopyDestinationMutations,
+): Promise<void> {
+  await copyDirectory(path.join(templateDirectory, "runtime"), path.join(projectDirectory, ".localapp/runtime"), undefined, destinationMutations);
   const skillsDirectory = path.join(templateDirectory, ".claude/skills");
   if (!await isDirectory(skillsDirectory)) return;
   const names = await fs.readdir(skillsDirectory, { withFileTypes: true });
   for (const entry of names.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!isManagedSkill(entry.name)) continue;
     if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`Builtin template contains an unsafe managed skill: ${entry.name}`);
-    await copyDirectory(path.join(skillsDirectory, entry.name), path.join(projectDirectory, ".claude/skills", entry.name));
+    await copyDirectory(
+      path.join(skillsDirectory, entry.name),
+      path.join(projectDirectory, ".claude/skills", entry.name),
+      undefined,
+      destinationMutations,
+    );
   }
 }
 

@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
+import type { CopyDestinationMutations } from "../template/copy.js";
 
 const NOT_PROJECT_MESSAGE = "This directory is not a LocalApp project. Run the command from a project created by localapp init.";
 const UNSAFE_PATH_MESSAGE = "The LocalApp project contains a replaced, symlinked, or unsafe managed path. Restore real project directories before retrying.";
@@ -21,6 +23,7 @@ export interface DirectoryGuard {
 }
 
 export interface LifecycleMutationHooks {
+  beforeCreate?(target: string, kind: "temporary-directory" | "directory" | "file"): Promise<void>;
   beforeRename?(source: string, destination: string): Promise<void>;
   beforeRemove?(target: string): Promise<void>;
   beforeAtomicCommit?(temporary: string, target: string): Promise<void>;
@@ -162,6 +165,75 @@ export async function guardedRename(options: {
   await fs.rename(options.source, options.destination);
 }
 
+export async function guardedCreateTemporaryDirectory(options: {
+  parent: DirectoryGuard;
+  prefix: string;
+  hooks?: LifecycleMutationHooks;
+}): Promise<DirectoryGuard> {
+  const prefixPath = path.resolve(options.parent.directory, options.prefix);
+  if (path.dirname(prefixPath) !== options.parent.directory || path.basename(prefixPath) !== options.prefix) throw unsafePath();
+  await options.hooks?.beforeCreate?.(prefixPath, "temporary-directory");
+  await verifyDirectoryGuard(options.parent);
+  const directory = await fs.mkdtemp(prefixPath);
+  return captureDirectoryGuard(directory, options.parent);
+}
+
+export async function guardedCreateDirectory(options: {
+  target: string;
+  parent: DirectoryGuard;
+  hooks?: LifecycleMutationHooks;
+}): Promise<DirectoryGuard> {
+  const target = path.resolve(options.target);
+  if (path.dirname(target) !== options.parent.directory) throw unsafePath();
+  await options.hooks?.beforeCreate?.(target, "directory");
+  await verifyDirectoryGuard(options.parent);
+  await fs.mkdir(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "EEXIST") throw unsafePath();
+    throw error;
+  });
+  return captureDirectoryGuard(target, options.parent);
+}
+
+export function createGuardedCopyDestination(
+  root: DirectoryGuard,
+  hooks?: LifecycleMutationHooks,
+): CopyDestinationMutations {
+  const guards = new Map<string, DirectoryGuard>([[root.directory, root]]);
+
+  const ensureDirectory = async (destination: string): Promise<void> => {
+    const resolved = path.resolve(destination);
+    if (!isInside(root.directory, resolved)) throw unsafePath();
+    const existing = guards.get(resolved);
+    if (existing !== undefined) {
+      await verifyDirectoryGuard(existing);
+      return;
+    }
+    const parentPath = path.dirname(resolved);
+    await ensureDirectory(parentPath);
+    const parent = guards.get(parentPath);
+    if (parent === undefined) throw unsafePath();
+    guards.set(resolved, await guardedCreateDirectory({ target: resolved, parent, hooks }));
+  };
+
+  return {
+    ensureDirectory,
+    copyFile: async (source, destination) => {
+      const target = path.resolve(destination);
+      if (!isInside(root.directory, target) || target === root.directory) throw unsafePath();
+      const parent = guards.get(path.dirname(target));
+      if (parent === undefined) throw unsafePath();
+      await hooks?.beforeCreate?.(target, "file");
+      const sourceIdentity = await capturePathIdentity(source, "file");
+      await verifyPathIdentity(source, sourceIdentity, "file");
+      await verifyDirectoryGuard(parent);
+      await fs.copyFile(source, target, constants.COPYFILE_EXCL).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "EEXIST") throw unsafePath();
+        throw error;
+      });
+    },
+  };
+}
+
 export async function guardedRemoveTree(options: {
   target: string;
   targetIdentity: PathIdentity;
@@ -212,6 +284,7 @@ export async function atomicWriteFile(
   if (existingStat !== undefined && (!existingStat.isFile() || existingStat.isSymbolicLink())) throw unsafePath();
   const existingIdentity = existingStat === undefined ? undefined : identityOf(existingStat);
   const temporary = path.join(parent.directory, `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  await hooks?.beforeCreate?.(temporary, "file");
   await verifyDirectoryGuard(parent);
   await fs.writeFile(temporary, contents, { flag: "wx" });
   const temporaryIdentity = await capturePathIdentity(temporary, "file");

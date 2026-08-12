@@ -192,6 +192,55 @@ describe("managed template zones", () => {
     await fs.rename(heldClaude, path.join(project, ".claude"));
   });
 
+  it.runIf(process.platform !== "win32").each([".sync-stage-", ".sync-backup-"])(
+    "refuses replacement of .localapp immediately before creating a %s recovery root",
+    async (prefix) => {
+      // Break caught: checking .localapp before mkdtemp still lets a raced symlink redirect recovery-root creation outside the project.
+      const race = await localAppReplacementRace(`recovery-${prefix}`);
+
+      await expect(syncManagedTemplate(project, { quiet: true }, {
+        beforeCreate: async (target, kind) => {
+          if (race.replaced() || kind !== "temporary-directory" || !path.basename(target).startsWith(prefix)) return;
+          await race.replace();
+        },
+      })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+      await race.expectExternalUntouched();
+      await race.restore();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("refuses replacement of .localapp immediately before the first staged mutation", async () => {
+    // Break caught: safe recovery-root creation is insufficient if later staged mkdir/copy operations do not revalidate its ancestor chain.
+    const race = await localAppReplacementRace("staged-mutation");
+
+    await expect(syncManagedTemplate(project, { quiet: true }, {
+      beforeCreate: async (target, kind) => {
+        if (race.replaced() || kind === "temporary-directory" || !target.includes(`${path.sep}.sync-stage-`)) return;
+        await race.replace();
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    await race.expectExternalUntouched();
+    await race.restore();
+  });
+
+  it.runIf(process.platform !== "win32")("refuses replacement of .localapp immediately before creating backup skills", async () => {
+    // Break caught: a raw mkdir for the backup subdirectory can be redirected through a replaced recovery-root ancestor.
+    const race = await localAppReplacementRace("backup-skills");
+
+    await expect(syncManagedTemplate(project, { quiet: true }, {
+      beforeCreate: async (target, kind) => {
+        if (race.replaced() || kind !== "directory" || path.basename(target) !== "skills"
+          || !path.dirname(target).includes(`${path.sep}.sync-backup-`)) return;
+        await race.replace();
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    await race.expectExternalUntouched();
+    await race.restore();
+  });
+
   it("preserves stage and backup recovery data when sync rollback fails", async () => {
     // Break caught: cleanup after failed rollback deletes the only copy of the old managed runtime.
     await fs.writeFile(path.join(project, ".localapp/runtime/version.json"), '{"cliVersion":"old-runtime"}\n');
@@ -302,4 +351,34 @@ describe("managed template zones", () => {
 
 async function exists(filePath: string): Promise<boolean> {
   return fs.access(filePath).then(() => true, () => false);
+}
+
+async function localAppReplacementRace(label: string): Promise<{
+  replaced(): boolean;
+  replace(): Promise<void>;
+  expectExternalUntouched(): Promise<void>;
+  restore(): Promise<void>;
+}> {
+  const heldLocalApp = path.join(directory, `held-localapp-${label}`);
+  const externalLocalApp = path.join(directory, `external-localapp-${label}`);
+  await fs.mkdir(externalLocalApp);
+  await fs.writeFile(path.join(externalLocalApp, "sentinel.txt"), "external sentinel\n");
+  let didReplace = false;
+  return {
+    replaced: () => didReplace,
+    replace: async () => {
+      didReplace = true;
+      await fs.rename(path.join(project, ".localapp"), heldLocalApp);
+      await fs.symlink(externalLocalApp, path.join(project, ".localapp"), "dir");
+    },
+    expectExternalUntouched: async () => {
+      expect(await fs.readFile(path.join(externalLocalApp, "sentinel.txt"), "utf8")).toBe("external sentinel\n");
+      expect((await fs.readdir(externalLocalApp)).sort()).toEqual(["sentinel.txt"]);
+    },
+    restore: async () => {
+      if (!didReplace) return;
+      await fs.rm(path.join(project, ".localapp"));
+      await fs.rename(heldLocalApp, path.join(project, ".localapp"));
+    },
+  };
 }

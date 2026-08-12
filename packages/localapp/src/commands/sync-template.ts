@@ -4,6 +4,9 @@ import { lifecycleError, LocalAppLifecycleError } from "../errors.js";
 import {
   captureDirectoryGuard,
   capturePathIdentity,
+  createGuardedCopyDestination,
+  guardedCreateDirectory,
+  guardedCreateTemporaryDirectory,
   guardedRemoveTree,
   guardedRename,
   managedSkillNames,
@@ -56,14 +59,14 @@ export async function syncManagedTemplate(
   assertSyncAllowed(config);
   await verifyManagedProject(project);
   const templateDirectory = await resolveTemplateDirectory();
-  const stageRoot = await createRecoveryRoot(project.localAppDirectory, ".sync-stage-", project.localAppGuard);
+  const stageRoot = await createRecoveryRoot(".sync-stage-", project.localAppGuard, hooks);
   let backupRoot: RecoveryRoot | undefined;
   let swaps: SwapEntry[] = [];
   let version = "";
 
   try {
-    backupRoot = await createRecoveryRoot(project.localAppDirectory, ".sync-backup-", project.localAppGuard);
-    await copyManagedZone(templateDirectory, stageRoot.path);
+    backupRoot = await createRecoveryRoot(".sync-backup-", project.localAppGuard, hooks);
+    await copyManagedZone(templateDirectory, stageRoot.path, createGuardedCopyDestination(stageRoot.guard, hooks));
     const stagedLocalApp = await captureDirectoryGuard(path.join(stageRoot.path, ".localapp"), stageRoot.guard);
     const stagedRuntimePath = path.join(stagedLocalApp.directory, "runtime");
     const stagedRuntime = await pathReference(stagedRuntimePath, stagedLocalApp);
@@ -72,9 +75,11 @@ export async function syncManagedTemplate(
     version = await readStagedVersion(stagedRuntimePath);
     const oldSkills = await managedSkillNames(project.skillsDirectory, project.skillsGuard);
     const newSkills = await managedSkillNames(stagedSkills.directory, stagedSkills);
-    await verifyDirectoryGuard(backupRoot.guard);
-    await fs.mkdir(path.join(backupRoot.path, "skills"));
-    const backupSkills = await captureDirectoryGuard(path.join(backupRoot.path, "skills"), backupRoot.guard);
+    const backupSkills = await guardedCreateDirectory({
+      target: path.join(backupRoot.path, "skills"),
+      parent: backupRoot.guard,
+      hooks,
+    });
     swaps = [
       {
         currentPath: project.runtimeDirectory,
@@ -126,11 +131,13 @@ export function assertSyncAllowed(config: Record<string, unknown>): void {
   }
 }
 
-async function createRecoveryRoot(parentPath: string, prefix: string, parent: DirectoryGuard): Promise<RecoveryRoot> {
-  await verifyDirectoryGuard(parent);
-  const recoveryPath = await fs.mkdtemp(path.join(parentPath, prefix));
-  const guard = await captureDirectoryGuard(recoveryPath, parent);
-  return { path: recoveryPath, parent, guard, identity: await capturePathIdentity(recoveryPath) };
+async function createRecoveryRoot(
+  prefix: string,
+  parent: DirectoryGuard,
+  hooks: LifecycleMutationHooks,
+): Promise<RecoveryRoot> {
+  const guard = await guardedCreateTemporaryDirectory({ parent, prefix, hooks });
+  return { path: guard.directory, parent, guard, identity: await capturePathIdentity(guard.directory) };
 }
 
 async function pathReference(target: string, parent: DirectoryGuard): Promise<PathReference> {
