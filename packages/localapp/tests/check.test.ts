@@ -84,6 +84,37 @@ describe("project checks", () => {
   });
 
   it.each([
+    { filename: "manifest.json", failedPhase: "project" },
+    { filename: "package.json", failedPhase: "tests" },
+  ])("rejects $filename when it is replaced by a symlink after validation", async ({ filename, failedPhase }) => {
+    // Break caught: validating one inode and then reading a symlink target by pathname can import JSON from outside the project.
+    const projectDir = await createProject();
+    const outsideDir = await fs.mkdtemp(path.join(testRoot, "outside-"));
+    directories.push(outsideDir);
+    const target = path.join(projectDir, filename);
+    const outside = path.join(outsideDir, filename);
+    await fs.copyFile(target, outside);
+    let replaced = false;
+
+    const report = await checkProject({
+      projectDir,
+      run: successfulRunner([]),
+      fileHooks: {
+        beforeOpen: async (filePath: string) => {
+          if (filePath !== target || replaced) return;
+          replaced = true;
+          await fs.rename(target, `${target}.original`);
+          await fs.symlink(outside, target);
+        },
+      },
+    });
+
+    expect(replaced).toBe(true);
+    expect(report.success).toBe(false);
+    expect(report.failedPhase).toBe(failedPhase);
+  });
+
+  it.each([
     {
       name: "an invalid application name",
       mutate: (manifest: Record<string, unknown>) => { manifest.name = "API"; },

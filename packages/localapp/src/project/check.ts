@@ -7,7 +7,7 @@ import {
 } from "@localapp/server/app-package-api";
 import { lifecycleError } from "../errors.js";
 import { validateAndCollectBackend, type ProjectBackendConfig } from "./backend.js";
-import { collectProjectTree, readProjectJson } from "./files.js";
+import { collectProjectTree, readProjectJson, type ProjectFileReadHooks } from "./files.js";
 import { isValidProjectName } from "./manifest.js";
 
 export const CHECK_PHASES = ["project", "capabilities", "migrations", "backend", "tests", "build", "dist"] as const;
@@ -56,6 +56,7 @@ export type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 export interface CheckProjectOptions {
   projectDir: string;
   run?: ProjectCommandRunner;
+  fileHooks?: ProjectFileReadHooks;
 }
 
 export interface ValidatedProjectManifest {
@@ -79,7 +80,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   const report = createReport();
   let manifest: ValidatedProjectManifest;
   try {
-    manifest = await loadAndValidateProjectManifest(projectDir);
+    manifest = await loadAndValidateProjectManifest(projectDir, options.fileHooks);
     report.project.name = manifest.name;
     pass(report, "project");
   } catch (error) {
@@ -102,6 +103,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
       configuredPath: "migrations",
       label: "migrations",
       required: false,
+      hooks: options.fileHooks,
     });
     const validation = validateMigrationFilenames(migrations
       .filter((file) => file.relativePath.endsWith(".sql"))
@@ -114,7 +116,12 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   }
 
   try {
-    await validateAndCollectBackend({ projectDir, config: manifest.backend, platformVersion: manifest.platformVersion });
+    await validateAndCollectBackend({
+      projectDir,
+      config: manifest.backend,
+      platformVersion: manifest.platformVersion,
+      fileHooks: options.fileHooks,
+    });
     pass(report, "backend");
   } catch (error) {
     fail(report, "backend", errorDiagnostic("BACKEND_CONTRACT_INVALID", "backend", safeMessage(error)));
@@ -123,7 +130,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
 
   let packageJson: Record<string, unknown>;
   try {
-    packageJson = await readProjectJson(projectDir, "package.json");
+    packageJson = await readProjectJson(projectDir, "package.json", options.fileHooks);
     report.project.packageManager = await detectPackageManager(projectDir, packageJson);
   } catch (error) {
     fail(report, "tests", errorDiagnostic("PACKAGE_JSON_INVALID", "tests", safeMessage(error), "package.json"));
@@ -171,6 +178,7 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
       configuredPath: manifest.distDir,
       label: "distDir",
       required: true,
+      hooks: options.fileHooks,
     });
     if (!dist.some((file) => file.relativePath === "index.html")) {
       throw new Error(`${manifest.distDir}/index.html is required`);
@@ -182,8 +190,11 @@ export async function checkProject(options: CheckProjectOptions): Promise<CheckR
   return report;
 }
 
-export async function loadAndValidateProjectManifest(projectDir: string): Promise<ValidatedProjectManifest> {
-  const raw = await readProjectJson(projectDir, "manifest.json");
+export async function loadAndValidateProjectManifest(
+  projectDir: string,
+  fileHooks?: ProjectFileReadHooks,
+): Promise<ValidatedProjectManifest> {
+  const raw = await readProjectJson(projectDir, "manifest.json", fileHooks);
   if (typeof raw.name !== "string" || !isValidProjectName(raw.name) || RESERVED_NAMES.has(raw.name)) {
     throw lifecycleError("PROJECT_NAME_INVALID", "manifest name is invalid");
   }

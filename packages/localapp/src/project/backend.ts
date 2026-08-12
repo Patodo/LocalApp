@@ -4,7 +4,14 @@ import {
   validateBackendContract,
   type BackendManifestConfig,
 } from "@localapp/server/app-package-api";
-import { collectProjectTree, normalizeArchiveRelativePath, readVerifiedFile, resolveProjectDirectory, type CollectedProjectFile } from "./files.js";
+import {
+  collectProjectTree,
+  normalizeArchiveRelativePath,
+  readVerifiedFile,
+  resolveProjectDirectory,
+  type CollectedProjectFile,
+  type ProjectFileReadHooks,
+} from "./files.js";
 
 export interface ProjectBackendConfig extends BackendManifestConfig {
   root?: string;
@@ -15,6 +22,7 @@ export async function validateAndCollectBackend(options: {
   projectDir: string;
   config?: ProjectBackendConfig;
   platformVersion: string;
+  fileHooks?: ProjectFileReadHooks;
 }): Promise<CollectedProjectFile[]> {
   if (options.config === undefined) return [];
   validateBackendConfig(options.config);
@@ -26,6 +34,7 @@ export async function validateAndCollectBackend(options: {
       configuredPath: rootName,
       label: "backend root",
       required: true,
+      hooks: options.fileHooks,
     });
   } else {
     await resolveProjectDirectory({
@@ -49,7 +58,7 @@ export async function validateAndCollectBackend(options: {
     files.push({
       absolutePath: file.absolutePath,
       relativePath,
-      content: await readVerifiedFile(options.projectDir, file.absolutePath, `backend file ${projectRelative}`),
+      content: await readVerifiedFile(options.projectDir, file.absolutePath, `backend file ${projectRelative}`, options.fileHooks),
     });
   }
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));

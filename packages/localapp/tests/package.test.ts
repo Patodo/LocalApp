@@ -98,6 +98,99 @@ describe("application package creation", () => {
     await expect(fs.access(outputPath)).rejects.toThrow();
   });
 
+  it("rejects a dist file replaced by a symlink after its lstat", async () => {
+    // Break caught: collectTree reading by pathname after lstat can package bytes from outside the project.
+    const projectDir = await createProject();
+    const outsideDir = await fs.mkdtemp(path.join(testRoot, "outside-"));
+    directories.push(outsideDir);
+    const target = path.join(projectDir, "dist/index.html");
+    const outside = path.join(outsideDir, "outside.html");
+    const outputPath = path.join(projectDir, "raced.localapp");
+    await fs.writeFile(outside, "<main>outside secret</main>\n");
+    let replaced = false;
+
+    await expect(buildApplicationPackage({
+      projectDir,
+      outputPath,
+      run: successfulRunner([]),
+      fileHooks: {
+        beforeOpen: async (filePath: string) => {
+          if (filePath !== target || replaced) return;
+          replaced = true;
+          await fs.rename(target, `${target}.original`);
+          await fs.symlink(outside, target);
+        },
+      },
+    })).rejects.toBeTruthy();
+
+    expect(replaced).toBe(true);
+    await expect(fs.access(outputPath)).rejects.toThrow();
+  });
+
+  it("revalidates an output parent after project scripts replace it with a symlink", async () => {
+    // Break caught: validating the output parent before build scripts lets package creation escape through a replacement symlink.
+    const projectDir = await createProject();
+    const outsideDir = await fs.mkdtemp(path.join(testRoot, "outside-"));
+    directories.push(outsideDir);
+    const outputParent = path.join(projectDir, "package-output");
+    const outputPath = path.join(outputParent, "items.localapp");
+    await fs.mkdir(outputParent);
+    let replaced = false;
+    const run: ProjectCommandRunner = async (invocation) => {
+      if (invocation.phase === "build" && !replaced) {
+        replaced = true;
+        await fs.rm(outputParent, { recursive: true });
+        await fs.symlink(outsideDir, outputParent);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    await expect(buildApplicationPackage({ projectDir, outputPath, run })).rejects.toMatchObject({ code: "unsafe_project_path" });
+    expect(replaced).toBe(true);
+    expect(await fs.readdir(outsideDir)).toEqual([]);
+  });
+
+  it("preserves an output created concurrently by a project build script", async () => {
+    // Break caught: a failed wx write must not delete a file that appeared after initial output validation.
+    const projectDir = await createProject();
+    const outputPath = path.join(projectDir, "concurrent.localapp");
+    const sentinel = Buffer.from("concurrent owner data\n");
+    let created = false;
+    const run: ProjectCommandRunner = async (invocation) => {
+      if (invocation.phase === "build" && !created) {
+        created = true;
+        await fs.writeFile(outputPath, sentinel);
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    await expect(buildApplicationPackage({ projectDir, outputPath, run })).rejects.toMatchObject({ code: "package_output_exists" });
+    expect(created).toBe(true);
+    expect(await fs.readFile(outputPath)).toEqual(sentinel);
+  });
+
+  it("keeps the previous package when inspection of an overwrite candidate fails", async () => {
+    // Break caught: deleting the old artifact before candidate inspection turns a transient failure into data loss.
+    const projectDir = await createProject();
+    const outputPath = path.join(projectDir, "existing.localapp");
+    await buildApplicationPackage({ projectDir, outputPath, run: successfulRunner([]) });
+    const previous = await fs.readFile(outputPath);
+    await fs.writeFile(path.join(projectDir, "dist/index.html"), "<main>new candidate</main>\n");
+
+    await expect(buildApplicationPackage({
+      projectDir,
+      outputPath,
+      overwrite: true,
+      run: successfulRunner([]),
+      packageOperations: {
+        inspectPackage: async () => { throw new Error("injected inspection failure"); },
+      },
+    })).rejects.toThrow("injected inspection failure");
+
+    expect(await fs.readFile(outputPath)).toEqual(previous);
+    expect((await fs.readdir(projectDir)).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
   it("requires a safe .localapp output and overwrites only when explicitly requested", async () => {
     // Break caught: implicit replacement or symlink-following can destroy an unrelated output file.
     const projectDir = await createProject();

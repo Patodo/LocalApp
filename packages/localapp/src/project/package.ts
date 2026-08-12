@@ -9,13 +9,29 @@ import {
 import { lifecycleError } from "../errors.js";
 import { validateAndCollectBackend } from "./backend.js";
 import { checkProject, loadAndValidateProjectManifest, type ProjectCommandRunner } from "./check.js";
-import { collectProjectTree, readProjectJson, resolveSafePackageOutput } from "./files.js";
+import {
+  capturePreparedTemporary,
+  cleanupPreparedTemporary,
+  collectProjectTree,
+  preparePackageOutput,
+  publishPreparedPackage,
+  readProjectJson,
+  resolveSafePackageOutput,
+  type ProjectFileReadHooks,
+} from "./files.js";
 
 export interface BuildApplicationPackageOptions {
   projectDir: string;
   outputPath?: string;
   overwrite?: boolean;
   run?: ProjectCommandRunner;
+  fileHooks?: ProjectFileReadHooks;
+  packageOperations?: Partial<PackageOperations>;
+}
+
+export interface PackageOperations {
+  writePackage: typeof writeAppPackage;
+  inspectPackage: typeof inspectAppPackage;
 }
 
 export interface BuildApplicationPackageResult {
@@ -28,7 +44,7 @@ export interface BuildApplicationPackageResult {
 
 export async function buildApplicationPackage(options: BuildApplicationPackageOptions): Promise<BuildApplicationPackageResult> {
   const projectDir = path.resolve(options.projectDir);
-  const manifest = await loadAndValidateProjectManifest(projectDir);
+  const manifest = await loadAndValidateProjectManifest(projectDir, options.fileHooks);
   const backendRoot = manifest.backend?.root ?? "backend";
   const output = await resolveSafePackageOutput({
     projectDir,
@@ -37,21 +53,26 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
     protectedDirectories: [manifest.distDir, "migrations", backendRoot],
     overwrite: options.overwrite === true,
   });
-  const report = await checkProject({ projectDir, run: options.run });
+  const report = await checkProject({ projectDir, run: options.run, fileHooks: options.fileHooks });
   if (!report.success) {
     const diagnostic = report.diagnostics.find((item) => item.severity === "error");
     throw lifecycleError("project_check_failed", diagnostic?.message ?? "Project check failed");
   }
 
-  const packageJson = await readProjectJson(projectDir, "package.json");
+  const packageJson = await readProjectJson(projectDir, "package.json", options.fileHooks);
   const version = typeof packageJson.version === "string" && packageJson.version.trim()
     ? packageJson.version.trim()
     : "0.0.0";
-  const files = await collectCanonicalFiles(projectDir, manifest);
-  if (output.exists) await fs.rm(output.path);
+  const files = await collectCanonicalFiles(projectDir, manifest, options.fileHooks);
+  const prepared = await preparePackageOutput(output.path, options.overwrite === true);
+  const operations: PackageOperations = {
+    writePackage: options.packageOperations?.writePackage ?? writeAppPackage,
+    inspectPackage: options.packageOperations?.inspectPackage ?? inspectAppPackage,
+  };
+  let temporaryIdentity: { dev: bigint; ino: bigint } | undefined;
   try {
-    await writeAppPackage({
-      outputPath: output.path,
+    await operations.writePackage({
+      outputPath: prepared.temporaryPath,
       metadata: {
         schemaVersion: APP_PACKAGE_SCHEMA_VERSION,
         appId: manifest.name,
@@ -60,8 +81,10 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
       },
       files,
     });
-    const inspected = await inspectAppPackage(output.path);
-    const stat = await fs.stat(output.path);
+    temporaryIdentity = await capturePreparedTemporary(prepared);
+    const inspected = await operations.inspectPackage(prepared.temporaryPath);
+    const stat = await fs.stat(prepared.temporaryPath);
+    await publishPreparedPackage(prepared, temporaryIdentity);
     return {
       path: output.path,
       appId: inspected.metadata.appId,
@@ -70,7 +93,7 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
       size: stat.size,
     };
   } catch (error) {
-    await fs.rm(output.path, { force: true });
+    await cleanupPreparedTemporary(prepared, temporaryIdentity);
     if (error instanceof Error && "code" in error && error.code === "APP_PACKAGE_INVALID") {
       throw lifecycleError("application_package_invalid", error.message);
     }
@@ -81,6 +104,7 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
 async function collectCanonicalFiles(
   projectDir: string,
   manifest: Awaited<ReturnType<typeof loadAndValidateProjectManifest>>,
+  fileHooks?: ProjectFileReadHooks,
 ): Promise<PortablePackageFile[]> {
   const canonicalManifest = structuredClone(manifest.raw);
   canonicalManifest.distDir = "dist";
@@ -99,6 +123,7 @@ async function collectCanonicalFiles(
     configuredPath: manifest.distDir,
     label: "distDir",
     required: true,
+    hooks: fileHooks,
   });
   files.push(...dist.map((file) => ({ path: `dist/${file.relativePath}`, content: file.content })));
   const migrations = await collectProjectTree({
@@ -106,6 +131,7 @@ async function collectCanonicalFiles(
     configuredPath: "migrations",
     label: "migrations",
     required: false,
+    hooks: fileHooks,
   });
   files.push(...migrations
     .filter((file) => file.relativePath.endsWith(".sql"))
@@ -114,6 +140,7 @@ async function collectCanonicalFiles(
     projectDir,
     config: manifest.backend,
     platformVersion: manifest.platformVersion,
+    fileHooks,
   });
   files.push(...backend.map((file) => ({ path: `backend/${file.relativePath}`, content: file.content })));
   return files.sort((left, right) => left.path.localeCompare(right.path));
