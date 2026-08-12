@@ -489,7 +489,7 @@ git commit -m "feat(cli): port canonical local development"
 - Produces: `RuntimeLayout` with data, runtime, socket/pipe, log, lock, and release paths.
 - Consumes: canonical Server worker and an in-memory device-control token.
 
-- [ ] **Step 1: Write failing lifecycle, lock, and IPC tests**
+- [x] **Step 1: Write failing lifecycle, lock, and IPC tests**
 
 ```ts
 it("server start installs once and returns only after daemon readiness", async () => {
@@ -505,13 +505,13 @@ it("rejects oversized and unknown private control messages", async () => {
 });
 ```
 
-- [ ] **Step 2: Run daemon tests and verify RED**
+- [x] **Step 2: Run daemon tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/control-protocol.test.ts tests/daemon-lifecycle.test.ts tests/service-manager.test.ts`
 
 Expected: FAIL because no per-user release store, service manager, or daemon control endpoint exists.
 
-- [ ] **Step 3: Implement idempotent user-service supervision**
+- [x] **Step 3: Implement idempotent user-service supervision**
 
 Copy the packed runtime atomically to
 `<support>/releases/<version>-<artifactDigest>`, publish `current.json`, and
@@ -521,13 +521,13 @@ current-user-only Unix socket or named pipe. Verify status through IPC plus
 Server `/health`, not PID alone. Rotate the Server device-control token every
 daemon boot and keep it in memory.
 
-- [ ] **Step 4: Run lifecycle integration on the current platform**
+- [x] **Step 4: Run lifecycle integration on the current platform**
 
 Run: `pnpm -C packages/localapp test && node --test packages/localapp/scripts/build-package.node-test.mjs`
 
 Expected: PASS; start/status/restart/stop/uninstall are idempotent and no process survives uninstall in the test runtime root.
 
-- [ ] **Step 5: Commit the daemon lifecycle**
+- [x] **Step 5: Commit the daemon lifecycle**
 
 ```bash
 git add packages/localapp
