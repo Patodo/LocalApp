@@ -179,11 +179,11 @@ export async function preparePackageOutput(outputPath: string, overwrite: boolea
 
 export async function capturePreparedTemporary(
   prepared: PreparedPackageOutput,
-): Promise<{ dev: bigint; ino: bigint }> {
+): Promise<{ dev: bigint; ino: bigint; size: number }> {
   await verifyPreparedParent(prepared);
   const stat = await fs.lstat(prepared.temporaryPath, { bigint: true });
   if (stat.isSymbolicLink() || !stat.isFile()) throw unsafePath("Application package temporary output is unsafe");
-  return { dev: stat.dev, ino: stat.ino };
+  return { dev: stat.dev, ino: stat.ino, size: Number(stat.size) };
 }
 
 export function normalizeArchiveRelativePath(value: string, label: string): string {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Transform, type Readable, type Writable } from "node:stream";
+import { once } from "node:events";
 import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { validateName } from "./validate-name.js";
@@ -179,18 +180,27 @@ export async function writeAppPackage(input: {
   outputPath: string;
   metadata: AppPackageMetadata;
   files: readonly PortablePackageFile[];
-}): Promise<{ digest: string }> {
+}, operations: {
+  afterOpen?(output: fs.WriteStream): void;
+} = {}): Promise<{ digest: string }> {
+  const prepared = prepareAppPackage(input.metadata, input.files);
   fs.mkdirSync(path.dirname(input.outputPath), { recursive: true });
   const output = fs.createWriteStream(input.outputPath, { flags: "wx", mode: 0o600 });
+  let owned: { dev: bigint; ino: bigint } | undefined;
+  output.once("open", (fd) => {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (stat.isFile()) owned = { dev: stat.dev, ino: stat.ino };
+  });
   try {
-    return await writeAppPackageToStream({
-      output,
-      metadata: input.metadata,
-      files: input.files,
+    return await writePreparedAppPackageToStream(output, prepared, () => {
+      if (operations.afterOpen === undefined) return;
+      if (owned !== undefined) operations.afterOpen(output);
+      else output.once("open", () => operations.afterOpen?.(output));
     });
   } catch (error) {
     output.destroy();
-    fs.rmSync(input.outputPath, { force: true });
+    if (!output.closed) await once(output, "close").catch(() => undefined);
+    removeOwnedPackageOutput(input.outputPath, owned);
     throw error;
   }
 }
@@ -200,8 +210,18 @@ export async function writeAppPackageToStream(input: {
   metadata: AppPackageMetadata;
   files: readonly PortablePackageFile[];
 }): Promise<{ digest: string }> {
-  validateMetadata(input.metadata as unknown as Record<string, unknown>);
-  const files = [...input.files].sort((left, right) => left.path.localeCompare(right.path));
+  return writePreparedAppPackageToStream(input.output, prepareAppPackage(input.metadata, input.files));
+}
+
+interface PreparedAppPackage {
+  files: readonly PortablePackageFile[];
+  metadataBytes: Buffer;
+  checksumBytes: Buffer;
+}
+
+function prepareAppPackage(metadata: AppPackageMetadata, inputFiles: readonly PortablePackageFile[]): PreparedAppPackage {
+  validateMetadata(metadata as unknown as Record<string, unknown>);
+  const files = [...inputFiles].sort((left, right) => left.path.localeCompare(right.path));
   const seen = new Set<string>();
   for (const file of files) {
     assertSafeArchivePath(file.path, false);
@@ -218,8 +238,16 @@ export async function writeAppPackageToStream(input: {
 
   const checksumFiles: Record<string, { sha256: string; size: number }> = {};
   for (const file of files) checksumFiles[file.path] = { sha256: sha256(file.content), size: file.content.length };
-  const metadataBytes = Buffer.from(`${JSON.stringify(input.metadata)}\n`);
+  const metadataBytes = Buffer.from(`${JSON.stringify(metadata)}\n`);
   const checksumBytes = Buffer.from(`${JSON.stringify({ schemaVersion: APP_PACKAGE_SCHEMA_VERSION, files: checksumFiles })}\n`);
+  return { files, metadataBytes, checksumBytes };
+}
+
+async function writePreparedAppPackageToStream(
+  output: Writable,
+  prepared: PreparedAppPackage,
+  outputReady?: () => void,
+): Promise<{ digest: string }> {
   const { ZipArchive } = await import("archiver");
   const hash = crypto.createHash("sha256");
   const hashing = new Transform({
@@ -231,19 +259,29 @@ export async function writeAppPackageToStream(input: {
   const archive = new ZipArchive({ zlib: { level: 9 } }) as ArchiveWriter;
   archive.on("error", (error: Error) => hashing.destroy(error));
   archive.pipe(hashing);
-  const completed = pipeline(hashing, input.output);
+  const completed = pipeline(hashing, output);
+  void completed.catch(() => undefined);
+  outputReady?.();
   try {
-    archive.append(metadataBytes, { name: "package.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
-    archive.append(checksumBytes, { name: "checksums.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
-    for (const file of files) archive.append(file.content, { name: file.path, date: FIXED_ARCHIVE_DATE, mode: 0o644 });
+    archive.append(prepared.metadataBytes, { name: "package.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
+    archive.append(prepared.checksumBytes, { name: "checksums.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
+    for (const file of prepared.files) archive.append(file.content, { name: file.path, date: FIXED_ARCHIVE_DATE, mode: 0o644 });
     await archive.finalize();
     await completed;
     return { digest: hash.digest("hex") };
   } catch (error) {
     archive.abort();
-    input.output.destroy(error instanceof Error ? error : undefined);
+    output.destroy(error instanceof Error ? error : undefined);
     await completed.catch(() => undefined);
     throw error;
+  }
+}
+
+function removeOwnedPackageOutput(outputPath: string, owned: { dev: bigint; ino: bigint } | undefined): void {
+  if (owned === undefined) return;
+  const current = fs.lstatSync(outputPath, { bigint: true, throwIfNoEntry: false });
+  if (current?.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) {
+    fs.unlinkSync(outputPath);
   }
 }
 

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { inspectAppPackage } from "../../server/src/lib/app-package.js";
@@ -249,6 +250,43 @@ describe("application package creation", () => {
 
     expect(await fs.readFile(outputPath)).toEqual(previous);
     expect((await fs.readdir(projectDir)).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it.each([
+    { overwrite: false, label: "no-overwrite" },
+    { overwrite: true, label: "overwrite" },
+  ])("publishes the inspected candidate after $label pathname substitution", async ({ overwrite }) => {
+    // Break caught: publishing whichever inode occupies the inspected temporary pathname can report one digest while installing different bytes.
+    const projectDir = await createProject();
+    const outputPath = path.join(projectDir, "substitution.localapp");
+    if (overwrite) {
+      await buildApplicationPackage({ projectDir, outputPath, run: successfulRunner([]) });
+      await fs.writeFile(path.join(projectDir, "dist/index.html"), "<main>new inspected candidate</main>\n");
+    }
+    const replacement = Buffer.from("attacker replacement bytes\n");
+    let inspectedBytes: Buffer | undefined;
+
+    const built = await buildApplicationPackage({
+      projectDir,
+      outputPath,
+      overwrite,
+      run: successfulRunner([]),
+      packageOperations: {
+        inspectPackage: async (candidatePath) => {
+          const inspected = await inspectAppPackage(candidatePath);
+          inspectedBytes = await fs.readFile(candidatePath);
+          await fs.rename(candidatePath, `${candidatePath}.inspected`);
+          await fs.writeFile(candidatePath, replacement);
+          return inspected;
+        },
+      },
+    });
+
+    expect(inspectedBytes).toBeDefined();
+    expect(await fs.readFile(outputPath)).toEqual(inspectedBytes);
+    expect(await fs.readFile(outputPath)).not.toEqual(replacement);
+    expect(built).toMatchObject({ appId: "items-app", version: "2.3.4" });
+    expect(built.sha256).toBe(crypto.createHash("sha256").update(inspectedBytes!).digest("hex"));
   });
 
   it("requires a safe .localapp output and overwrites only when explicitly requested", async () => {

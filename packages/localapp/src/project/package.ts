@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import type { Writable } from "node:stream";
@@ -92,20 +91,19 @@ export async function buildApplicationPackage(options: BuildApplicationPackageOp
     if (helperWrite.digest !== generated.digest) {
       throw lifecycleError("application_package_invalid", "Application package changed while writing the candidate");
     }
-    await capturePreparedTemporary(prepared);
+    const temporaryIdentity = await capturePreparedTemporary(prepared);
     const inspected = await operations.inspectPackage(prepared.temporaryPath);
     if (generated.digest !== inspected.digest) {
       throw lifecycleError("application_package_invalid", "Application package changed before publication");
     }
-    const stat = await fs.stat(prepared.temporaryPath);
-    await commandPackageHelper(candidate.child, "publish", "published");
+    await commandPackageHelper(candidate.child, { action: "publish", digest: inspected.digest }, "published");
     candidate = undefined;
     return {
       path: output.path,
       appId: inspected.metadata.appId,
       version: inspected.metadata.version,
       sha256: inspected.digest,
-      size: stat.size,
+      size: helperWrite.size ?? temporaryIdentity.size,
     };
   } catch (error) {
     if (candidate !== undefined) await cleanupAnchoredCandidate(candidate);
@@ -125,6 +123,7 @@ interface PackageHelperMessage {
   type: "ready" | "written" | "published" | "cleaned" | "error";
   code?: string;
   digest?: string;
+  size?: number;
 }
 
 // Node exposes no portable openat-style API. A child working directory is the
@@ -134,10 +133,9 @@ const PACKAGE_OUTPUT_HELPER = String.raw`
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = fs.promises;
-const { Transform } = require("node:stream");
-const { pipeline } = require("node:stream/promises");
 
 const config = JSON.parse(Buffer.from(process.argv[1], "base64url").toString("utf8"));
+process.channel?.ref?.();
 const send = (message) => new Promise((resolve) => {
   if (!process.send) return resolve();
   process.send(message, () => resolve());
@@ -146,58 +144,109 @@ const sameParent = async () => {
   const stat = await fsp.stat(".", { bigint: true });
   return stat.isDirectory() && stat.dev === BigInt(config.dev) && stat.ino === BigInt(config.ino);
 };
-const cleanup = async () => {
-  const stat = await fsp.lstat(config.temporary).catch((error) => error.code === "ENOENT" ? undefined : Promise.reject(error));
-  if (stat && !stat.isSymbolicLink() && stat.isFile()) await fsp.unlink(config.temporary);
+const identity = (stat) => ({ dev: stat.dev, ino: stat.ino });
+const sameIdentity = (stat, expected) => stat.dev === expected.dev && stat.ino === expected.ino;
+const lstatOptional = (name) => fsp.lstat(name, { bigint: true }).catch((error) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+const cleanupOwned = async (name, expected) => {
+  const stat = await lstatOptional(name);
+  if (stat && !stat.isSymbolicLink() && stat.isFile() && sameIdentity(stat, expected)) await fsp.unlink(name);
+};
+const copyPinnedCandidate = async (source, destinationHandle) => {
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  while (true) {
+    const { bytesRead } = await source.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    let written = 0;
+    while (written < bytesRead) {
+      const result = await destinationHandle.write(buffer, written, bytesRead - written, position + written);
+      written += result.bytesWritten;
+    }
+    position += bytesRead;
+  }
+  await destinationHandle.truncate(position);
+  await destinationHandle.sync();
 };
 
+let candidate;
+let candidateIdentity;
 (async () => {
   if (!await sameParent()) {
     await send({ type: "error", code: "unsafe_project_path" });
     return;
   }
-  const output = fs.createWriteStream(config.temporary, { flags: "wx", mode: 0o600 });
-  await new Promise((resolve, reject) => {
-    output.once("open", resolve);
-    output.once("error", reject);
-  });
+  candidate = await fsp.open(config.temporary, "wx+", 0o600);
+  const candidateStat = await candidate.stat({ bigint: true });
+  if (!candidateStat.isFile()) throw new Error("unsafe temporary package");
+  candidateIdentity = identity(candidateStat);
   await send({ type: "ready" });
   const hash = crypto.createHash("sha256");
-  const hashing = new Transform({
-    transform(chunk, _encoding, callback) {
-      hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  await pipeline(process.stdin, hashing, output);
+  let candidatePosition = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    hash.update(bytes);
+    let written = 0;
+    while (written < bytes.length) {
+      const result = await candidate.write(bytes, written, bytes.length - written, candidatePosition + written);
+      written += result.bytesWritten;
+    }
+    candidatePosition += bytes.length;
+  }
+  await candidate.truncate(candidatePosition);
+  await candidate.sync();
+  const writtenStat = await candidate.stat({ bigint: true });
+  if (!writtenStat.isFile() || !sameIdentity(writtenStat, candidateIdentity)) throw new Error("unsafe temporary package");
+  const writtenDigest = hash.digest("hex");
   const commandPromise = new Promise((resolve) => process.once("message", resolve));
-  await send({ type: "written", digest: hash.digest("hex") });
+  await send({ type: "written", digest: writtenDigest, size: Number(writtenStat.size) });
   const command = await commandPromise;
   if (command.action === "cleanup") {
-    await cleanup();
+    await cleanupOwned(config.temporary, candidateIdentity);
+    await candidate.close();
     await send({ type: "cleaned" });
     return;
   }
-  if (command.action !== "publish" || !await sameParent()) {
-    await cleanup();
+  if (command.action !== "publish" || command.digest !== writtenDigest || !await sameParent()) {
+    await cleanupOwned(config.temporary, candidateIdentity);
+    await candidate.close();
     await send({ type: "error", code: "unsafe_project_path" });
     return;
   }
-  const temporary = await fsp.lstat(config.temporary);
-  if (temporary.isSymbolicLink() || !temporary.isFile()) throw new Error("unsafe temporary package");
-  if (config.overwrite) {
-    const target = await fsp.lstat(config.target).catch((error) => error.code === "ENOENT" ? undefined : Promise.reject(error));
-    if (target && (target.isSymbolicLink() || !target.isFile())) throw new Error("unsafe package target");
-    await fsp.rename(config.temporary, config.target);
-  } else {
-    await fsp.link(config.temporary, config.target);
-    await fsp.unlink(config.temporary);
+  const pinned = await candidate.stat({ bigint: true });
+  if (!pinned.isFile() || !sameIdentity(pinned, candidateIdentity)) throw new Error("unsafe temporary package");
+  const publicationName = "." + config.target + "." + crypto.randomUUID() + ".publish";
+  const publication = await fsp.open(publicationName, "wx", 0o600);
+  const publicationIdentity = identity(await publication.stat({ bigint: true }));
+  try {
+    await copyPinnedCandidate(candidate, publication);
+    const publicationPath = await fsp.lstat(publicationName, { bigint: true });
+    if (!publicationPath.isFile() || publicationPath.isSymbolicLink() || !sameIdentity(publicationPath, publicationIdentity)) {
+      throw new Error("unsafe publication package");
+    }
+    if (config.overwrite) {
+      const target = await lstatOptional(config.target);
+      if (target && (target.isSymbolicLink() || !target.isFile())) throw new Error("unsafe package target");
+      await fsp.rename(publicationName, config.target);
+    } else {
+      await fsp.link(publicationName, config.target);
+      await fsp.unlink(publicationName);
+    }
+    const published = await fsp.lstat(config.target, { bigint: true });
+    if (!published.isFile() || published.isSymbolicLink() || !sameIdentity(published, publicationIdentity)) {
+      throw new Error("unsafe published package");
+    }
+  } finally {
+    await publication.close();
+    await cleanupOwned(publicationName, publicationIdentity);
   }
+  await cleanupOwned(config.temporary, candidateIdentity);
+  await candidate.close();
   await send({ type: "published" });
 })().catch(async (error) => {
-  await cleanup().catch(() => undefined);
+  if (candidateIdentity) await cleanupOwned(config.temporary, candidateIdentity).catch(() => undefined);
+  await candidate?.close().catch(() => undefined);
   await send({ type: "error", code: error && error.code === "EEXIST" ? "package_output_exists" : "package_output_failed" });
-}).finally(() => process.disconnect?.());
+});
 `;
 
 async function createAnchoredPackageCandidate(
@@ -238,6 +287,7 @@ function waitForHelperMessage(
       if (!isPackageHelperMessage(value)) return;
       if (value.type === "error") {
         cleanup();
+        if (child.connected) child.disconnect();
         reject(packageHelperError(value.code));
       } else if (value.type === expected) {
         cleanup();
@@ -260,20 +310,22 @@ function waitForHelperMessage(
 
 async function commandPackageHelper(
   child: ChildProcess,
-  action: "publish" | "cleanup",
+  command: { action: "publish"; digest: string } | { action: "cleanup" },
   expected: "published" | "cleaned",
 ): Promise<PackageHelperMessage> {
   const response = waitForHelperMessage(child, expected);
   await new Promise<void>((resolve, reject) => {
-    child.send({ action }, (error) => error ? reject(error) : resolve());
+    child.send(command, (error) => error ? reject(error) : resolve());
   });
-  return response;
+  const message = await response;
+  child.disconnect();
+  return message;
 }
 
 async function cleanupAnchoredCandidate(candidate: AnchoredPackageCandidate): Promise<void> {
   try {
     if (!candidate.output.destroyed) candidate.output.destroy();
-    if (candidate.child.connected) await commandPackageHelper(candidate.child, "cleanup", "cleaned");
+    if (candidate.child.connected) await commandPackageHelper(candidate.child, { action: "cleanup" }, "cleaned");
   } catch {
     candidate.child.kill();
   }
