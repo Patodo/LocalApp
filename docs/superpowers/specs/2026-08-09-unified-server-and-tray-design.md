@@ -1,8 +1,15 @@
-# Unified Server and Optional Tray Design
+# Unified Server and Legacy Native Bridge Design
 
-**Status:** Approved design, revised for generic Device Actions and canonical local development
+**Status:** Server/runtime/synchronization sections remain authoritative. The distribution, CLI, Desktop, Scheme bridge, and notification sections are superseded by [Single npm Package, User Daemon, Scheme, and Notifications](./2026-08-12-single-package-daemon-notifications-design.md).
 
-**Date:** 2026-08-09; revised 2026-08-11
+**Date:** 2026-08-09; revised 2026-08-11; partially superseded 2026-08-12
+
+> Historical boundary: references below to an optional Tauri tray, a separate
+> `@localapp/server` installation, or the Rust application-development CLI
+> describe the completed intermediate architecture. They must not be restored
+> after the 2026-08-12 single-package revision. The one-Server, equal-peer,
+> Device Action, synchronization, data-isolation, and application-runtime
+> contracts remain in force.
 
 ## Summary
 

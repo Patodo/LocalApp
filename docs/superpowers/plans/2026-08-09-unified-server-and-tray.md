@@ -1,5 +1,13 @@
 # Unified Server, Device Actions, and Native Bridge Implementation Plan
 
+> **Historical execution record:** Tasks 1–16 describe the completed
+> intermediate Server/Rust CLI/Tauri bridge architecture. The Tauri, tray,
+> separate Server package, and Rust CLI outcomes are superseded by
+> [Single npm Package, User Daemon, Scheme, and Notifications](../specs/2026-08-12-single-package-daemon-notifications-design.md)
+> and its focused implementation plan. Completed checkboxes remain as evidence
+> of the behavior that the replacement must preserve; they are not authority to
+> restore the retired distribution model.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the separate Local Runtime and full Desktop client with one distributable Node Server, one Server-hosted Web control plane, peer application synchronization, a generic current-computer Device Action substrate, and an optional two-item native bridge and tray; prove the result with two real local applications.
