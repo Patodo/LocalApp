@@ -57,7 +57,7 @@ export class NotificationDispatcher {
     }
     this.store = options.store;
     this.adapter = options.adapter;
-    this.iconPath = validateNativeNotificationEnvelope({ identifier: "localapp_dispatcher_validation", ticket: "localapp_dispatcher_validation", title: "LocalApp", body: "", sourceLabel: "LocalApp", priority: "normal", iconPath: options.iconPath }).iconPath;
+    this.iconPath = validateNativeNotificationEnvelope({ identifier: "localapp_dispatcher_validation", ticket: "localapp_dispatcher_validation", productLabel: "LocalApp", applicationLabel: "LocalApp", title: "LocalApp", body: "", sourceLabel: "LocalApp", priority: "normal", iconPath: options.iconPath }).iconPath;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -92,6 +92,8 @@ export class NotificationDispatcher {
     const envelope = validateNativeNotificationEnvelope({
       identifier: pending.nativeId,
       ticket: pending.ticket,
+      productLabel: "LocalApp",
+      applicationLabel: pending.delivery.app_name,
       title: this.policy.preview === "hidden" ? "New LocalApp notification" : pending.delivery.title,
       body: this.policy.preview === "hidden" ? `Open ${pending.sourceLabel} to view it` : pending.delivery.body ?? "",
       sourceLabel: pending.sourceLabel,
@@ -117,6 +119,8 @@ export class NotificationDispatcher {
     const envelope = validateNativeNotificationEnvelope({
       identifier: summary.ticket,
       ticket: summary.ticket,
+      productLabel: "LocalApp",
+      applicationLabel: "Inbox",
       title: `${input.omittedCount} new notifications`,
       body: `Open the ${sourceLabel} inbox`,
       sourceLabel,
@@ -143,6 +147,8 @@ export class NotificationDispatcher {
     await this.adapter.showNotification(validateNativeNotificationEnvelope({
       identifier: commandId,
       ticket: commandId,
+      productLabel: "LocalApp",
+      applicationLabel: "Notifications",
       title: "LocalApp notifications are ready",
       body: "This computer can display LocalApp notifications.",
       sourceLabel: "This device",
@@ -169,6 +175,8 @@ function prevalidateEnvelope(delivery: DeliveryNotification, sourceLabel: string
   validateNativeNotificationEnvelope({
     identifier: "localapp_pending_identifier_validation",
     ticket: "localapp_pending_ticket_validation",
+    productLabel: "LocalApp",
+    applicationLabel: delivery.app_name,
     title: delivery.title,
     body: delivery.body ?? "",
     sourceLabel,

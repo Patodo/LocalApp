@@ -28,7 +28,7 @@ describe("NotificationDispatcher", () => {
     adapter.showNotification.mockImplementation(async (envelope) => {
       expect(await store.readSource("local")).toMatchObject({ cursor: 0, pending: { delivery: { id: "n-1" } } });
       expect(envelope).toMatchObject({ title: "Ready", body: "Open result", sourceLabel: "Local server", priority: "high" });
-      expect(Object.keys(envelope).sort()).toEqual(["body", "iconPath", "identifier", "priority", "sourceLabel", "ticket", "title"]);
+      expect(Object.keys(envelope).sort()).toEqual(["applicationLabel", "body", "iconPath", "identifier", "priority", "productLabel", "sourceLabel", "ticket", "title"]);
     });
     await expect(dispatcher.dispatch({ sourceId: "local", sourceLabel: "Local server", policy: "native", delivery: notification() })).resolves.toEqual({ outcome: "shown", sequence: 1 });
     expect(await store.readSource("local")).toMatchObject({ cursor: 1, pending: null });

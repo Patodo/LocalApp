@@ -287,7 +287,7 @@ export class LocalAppDaemon {
     const dispatcher = new NotificationDispatcher({
       store,
       adapter: native,
-      iconPath: path.join(options.releasePath, ".localapp-artifact.json"),
+      iconPath: path.join(options.releasePath, "runtime", "server", "web", "home", "redline-launch-hero.png"),
     });
     const manager = new NotificationConnectionManager({
       localServerOrigin: options.listenUrl,
