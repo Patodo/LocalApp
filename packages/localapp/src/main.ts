@@ -3,7 +3,11 @@ import { defaultCliIo, type CliIo, writeStructuredError } from "./cli/output.js"
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
 import { whoami } from "./commands/whoami.js";
+import { initializeProject } from "./commands/init.js";
+import { syncManagedTemplate } from "./commands/sync-template.js";
+import { ejectManagedTemplate } from "./commands/eject-template.js";
 import { loadPackageVersion } from "./version.js";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): Promise<number> {
@@ -19,6 +23,15 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       return logout(command, io);
     } else if (command.kind === "whoami") {
       return whoami(command, io);
+    } else if (command.kind === "init") {
+      const name = command.name ?? path.basename(process.cwd());
+      await initializeProject({ cwd: process.cwd(), name, skipInstall: command.skipInstall, skipDeploy: command.skipDeploy, io });
+    } else if (command.kind === "sync-template") {
+      const result = await syncManagedTemplate(process.cwd(), command);
+      if (!command.quiet) io.stdout(`${JSON.stringify({ success: true, ...result })}\n`);
+    } else if (command.kind === "eject-template") {
+      const result = await ejectManagedTemplate(process.cwd());
+      io.stdout(`${JSON.stringify({ success: true, ...result })}\n`);
     }
     return 0;
   } catch (error) {

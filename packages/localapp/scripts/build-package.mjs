@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageDirectory = path.resolve(scriptDirectory, "..");
-const projectDirectory = path.resolve(packageDirectory, "../..");
+const projectDirectory = path.resolve(process.env.LOCALAPP_REPOSITORY_ROOT ?? path.resolve(packageDirectory, "../.."));
 const defaultOutputDirectory = path.join(projectDirectory, "tmp/localapp-package");
 
 /**
@@ -20,6 +20,7 @@ export async function buildLocalAppPackage(options = {}) {
 
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
+  await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
   await build({
     absWorkingDir: projectDirectory,
     bundle: true,
@@ -55,6 +56,27 @@ export async function buildLocalAppPackage(options = {}) {
   });
 
   return { outputDirectory, tarballInput: outputDirectory, manifestPath };
+}
+
+async function stageBuiltinTemplate({ outputDirectory, version }) {
+  const stagingEntrypoint = path.join(outputDirectory, ".stage-template.mjs");
+  await build({
+    absWorkingDir: projectDirectory,
+    bundle: true,
+    entryPoints: [path.join(packageDirectory, "src/template/stage.ts")],
+    format: "esm",
+    legalComments: "none",
+    outfile: stagingEntrypoint,
+    platform: "node",
+    sourcemap: false,
+    target: "node24",
+  });
+  try {
+    const { stageBuiltinTemplate: stage } = await import(pathToFileURL(stagingEntrypoint).href);
+    await stage({ repositoryRoot: projectDirectory, outputDirectory: path.join(outputDirectory, "template"), version });
+  } finally {
+    await fs.rm(stagingEntrypoint, { force: true });
+  }
 }
 
 async function writeJson(filePath, value) {

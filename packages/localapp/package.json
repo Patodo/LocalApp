@@ -9,6 +9,7 @@
   },
   "files": [
     "bin",
+    "template",
     ".localapp-artifact.json"
   ],
   "engines": {

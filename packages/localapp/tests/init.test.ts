@@ -1,0 +1,70 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { initializeProject } from "../src/commands/init.js";
+import { stageBuiltinTemplate } from "../src/template/stage.js";
+
+const repositoryRoot = path.resolve(process.cwd(), "../..");
+const testRoot = path.join(repositoryRoot, "tmp/task-3-init-tests");
+const version = "0.1.0-test";
+let directory = "";
+let templateDirectory = "";
+
+beforeEach(async () => {
+  await fs.mkdir(testRoot, { recursive: true });
+  directory = await fs.mkdtemp(path.join(testRoot, "case-"));
+  templateDirectory = path.join(directory, "packed-template");
+  await stageBuiltinTemplate({ repositoryRoot, outputDirectory: templateDirectory, version });
+  vi.stubEnv("LOCALAPP_TEMPLATE_DIR", templateDirectory);
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  if (directory) await fs.rm(directory, { recursive: true, force: true });
+});
+
+describe("builtin project initialization", () => {
+  it("initializes a complete builtin project from the staged package template", async () => {
+    // Break caught: resolving a template only from the monorepo leaves installed packages unable to create a project.
+    const io = { stdout: vi.fn(), stderr: vi.fn() };
+    const result = await initializeProject({
+      cwd: directory,
+      name: "fresh-app",
+      description: "Fresh application",
+      skipInstall: true,
+      skipDeploy: true,
+      io,
+    });
+    const project = path.join(directory, "fresh-app");
+
+    expect(result.projectDir).toBe(project);
+    expect(JSON.parse(await fs.readFile(path.join(project, "manifest.json"), "utf8"))).toMatchObject({
+      name: "fresh-app",
+      description: "Fresh application",
+      distDir: "dist",
+    });
+    expect(await exists(path.join(project, ".localapp/runtime/server-core/dist/index.js"))).toBe(true);
+    expect(await exists(path.join(project, ".claude/skills/localapp/SKILL.md"))).toBe(true);
+    expect(JSON.parse(await fs.readFile(path.join(project, ".localapp/runtime/version.json"), "utf8"))).toEqual({ cliVersion: version });
+    const packageJson = JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8"));
+    expect(packageJson.dependencies["@localapp/server-core"]).toBe("file:./.localapp/runtime/server-core");
+    expect(packageJson.dependencies["@localapp/sdk"]).toBe("file:./.localapp/runtime/sdk/core");
+    expect(JSON.stringify(packageJson)).not.toContain("workspace:");
+  });
+
+  it("fails explicitly before creating a project when deployment support is unavailable", async () => {
+    // Break caught: a non-skip-deploy init reporting success without Task 4 packaging/install support misleads users.
+    await expect(initializeProject({
+      cwd: directory,
+      name: "remote-app",
+      skipInstall: true,
+      skipDeploy: false,
+      io: { stdout: () => undefined, stderr: () => undefined },
+    })).rejects.toThrow("not available yet");
+    expect(await exists(path.join(directory, "remote-app"))).toBe(false);
+  });
+});
+
+async function exists(filePath: string): Promise<boolean> {
+  return fs.access(filePath).then(() => true, () => false);
+}

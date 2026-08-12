@@ -23,6 +23,12 @@ test("packed product exposes one localapp binary without workspace references", 
   assert.deepEqual(manifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
   assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.1.0");
+  assert.equal(await fs.stat(path.join(result.outputDirectory, "template/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
+
+  const projectRoot = path.join(testRoot, "project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await run(result.outputDirectory, ["init", "packed-app", "--skip-install", "--skip-deploy"], projectRoot);
+  assert.equal(await fs.stat(path.join(projectRoot, "packed-app/.localapp/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
 });
 
 test("direct builder execution works from a source path containing spaces", async (t) => {
@@ -39,6 +45,7 @@ test("direct builder execution works from a source path containing spaces", asyn
 
   const result = await runNode(path.join(sourceDirectory, "scripts/build-package.mjs"), {
     LOCALAPP_PACKAGE_DIR: outputDirectory,
+    LOCALAPP_REPOSITORY_ROOT: projectDirectory,
   });
 
   assert.equal(result.code, 0, result.stderr);
@@ -46,10 +53,29 @@ test("direct builder execution works from a source path containing spaces", asyn
   assert.equal(await run(outputDirectory, ["--version"]), "localapp 0.1.0");
 });
 
-function run(directory, args) {
+test("packed tarball keeps the builtin runtime available to init", async (t) => {
+  const packDirectory = path.join(testRoot, "packed tarball");
+  const unpackDirectory = path.join(testRoot, "unpacked tarball");
+  const projectDirectory = path.join(testRoot, "tarball project");
+  await fs.mkdir(packDirectory, { recursive: true });
+  await fs.mkdir(projectDirectory, { recursive: true });
+  t.after(() => fs.rm(packDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rm(unpackDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rm(projectDirectory, { recursive: true, force: true }));
+
+  await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
+  const tarball = path.join(packDirectory, "localapp-0.1.0.tgz");
+  await fs.mkdir(unpackDirectory, { recursive: true });
+  await runProcess("tar", ["-xzf", tarball, "-C", unpackDirectory]);
+  const packedPackage = path.join(unpackDirectory, "package");
+  await run(packedPackage, ["init", "tarball-app", "--skip-install", "--skip-deploy"], projectDirectory);
+  assert.equal(await fs.stat(path.join(projectDirectory, "tarball-app/.localapp/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
+});
+
+function run(directory, args, cwd = directory) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(directory, "bin/localapp.mjs"), ...args], {
-      cwd: directory,
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -80,5 +106,16 @@ function runNode(script, environment) {
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.once("error", reject);
     child.once("exit", (code) => resolve({ code, stdout: stdout.trim(), stderr }));
+  });
+}
+
+function runProcess(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`${command} exited ${code}: ${stderr}`)));
   });
 }
