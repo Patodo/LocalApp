@@ -677,7 +677,7 @@ async function tryAcquireLock(lockPath: string): Promise<OwnedLock | undefined> 
 async function reclaimDeadLock(lockPath: string): Promise<boolean> {
   const before = await optionalLstat(lockPath);
   if (before === undefined) return true;
-  try { assertPrivateRegular(before, "Notification delivery lock"); } catch { throw unsafe("Notification delivery lock path is unsafe"); }
+  const linkedTemporary = await validateVisibleLock(before, lockPath);
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     handle = await fs.open(lockPath, process.platform === "win32" ? "r" : constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -691,13 +691,39 @@ async function reclaimDeadLock(lockPath: string): Promise<boolean> {
       throw unsafe("Notification delivery lock is invalid");
     }
     if (processExists(value.pid as number)) return false;
-    return unlinkOwned(lockPath, { dev: BigInt(before.dev), ino: BigInt(before.ino) });
+    const identity = { dev: BigInt(before.dev), ino: BigInt(before.ino) };
+    const removed = await unlinkOwned(lockPath, identity);
+    if (linkedTemporary !== undefined) await unlinkOwned(linkedTemporary, identity).catch(() => undefined);
+    return removed;
   } catch (error) {
+    if (isCode(error, "ENOENT")) return true;
     if (error instanceof SyntaxError) throw unsafe("Notification delivery lock is invalid");
     throw error;
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+async function validateVisibleLock(stat: Awaited<ReturnType<typeof fs.lstat>>, lockPath: string): Promise<string | undefined> {
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.nlink !== 1n && stat.nlink !== 2n)) throw unsafe("Notification delivery lock path is unsafe");
+  if (process.platform !== "win32" && ((BigInt(stat.mode) & 0o777n) !== 0o600n || BigInt(stat.uid) !== BigInt(process.getuid?.() ?? Number(stat.uid)))) {
+    throw unsafe("Notification delivery lock path is unsafe");
+  }
+  if (stat.nlink === 1n) return undefined;
+  const prefix = `.${path.basename(lockPath)}.`;
+  const candidates = (await fs.readdir(path.dirname(lockPath))).filter((name) => name.startsWith(prefix) && name.endsWith(".next"));
+  const same: string[] = [];
+  for (const name of candidates) {
+    const candidate = path.join(path.dirname(lockPath), name);
+    const metadata = await optionalLstat(candidate);
+    if (metadata !== undefined && sameIdentity(stat, metadata)) same.push(candidate);
+  }
+  if (same.length !== 1) {
+    const current = await optionalLstat(lockPath);
+    if (current === undefined || (sameIdentity(stat, current) && current.nlink === 1n)) return undefined;
+    throw unsafe("Notification delivery lock hard-link identity is unsafe");
+  }
+  return same[0];
 }
 
 function processExists(pid: number): boolean {
