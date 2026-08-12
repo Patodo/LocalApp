@@ -829,6 +829,11 @@ git commit -m "feat(notify): add native notification settings"
 
 ### Task 12: Cut over release/build/test infrastructure and delete replaced Rust/Tauri products
 
+**Implementation record:** Complete on `main`. The repository now publishes one
+`localapp` npm tarball, consumes the same verified tarball in Docker, merges an
+exact signed native-adapter matrix, verifies protocol/native contracts before a
+daemon release can become current, and contains no Rust CLI or Tauri product.
+
 **Files:**
 - Delete: `packages/desktop/**`
 - Delete: `packages/cli/**`
@@ -855,7 +860,7 @@ git commit -m "feat(notify): add native notification settings"
 - Produces: release target metadata for native adapters, not Rust CLI/Desktop installers.
 - Consumes: all passing TypeScript CLI, daemon, Scheme, and notification suites.
 
-- [ ] **Step 1: Write failing destructive-boundary and npm-install tests**
+- [x] **Step 1: Write failing destructive-boundary and npm-install tests**
 
 ```js
 test("clean npm install provides every product entry without Rust or Tauri", async () => {
@@ -870,13 +875,13 @@ Add repository-boundary assertions that the four deleted package roots and all
 Tauri/Rust release commands are absent, while the native adapter manifest lists
 the supported platform/architecture targets.
 
-- [ ] **Step 2: Run cutover tests and verify RED**
+- [x] **Step 2: Run cutover tests and verify RED**
 
 Run: `pnpm test:release-workflow && pnpm test:public-source && pnpm -C packages/localapp test:package`
 
 Expected: FAIL because old Rust/Tauri products and release metadata still exist.
 
-- [ ] **Step 3: Delete obsolete products and switch every build to the npm artifact**
+- [x] **Step 3: Delete obsolete products and switch every build to the npm artifact**
 
 Remove the listed directories only after Tasks 1–11 are green. Mark
 `packages/server` private as an internal source package. Replace root scripts
@@ -885,13 +890,13 @@ Update CI to build Node/TypeScript everywhere and native adapters only on their
 matching runners. Docker installs/runs the packed `localapp` artifact with
 `localapp server run`; it does not embed a client binary or Desktop installer.
 
-- [ ] **Step 4: Run the post-deletion build and package matrix**
+- [x] **Step 4: Run the post-deletion build and package matrix**
 
 Run: `pnpm install --lockfile-only && pnpm -r build && pnpm -r test && pnpm test:localapp-package && pnpm test:public-source && pnpm test:release-workflow`
 
 Expected: PASS with no Cargo/Tauri command in the ordinary product build and no missing generated-project command.
 
-- [ ] **Step 5: Commit destructive cutover**
+- [x] **Step 5: Commit destructive cutover**
 
 ```bash
 git add -A packages scripts .github package.json pnpm-workspace.yaml pnpm-lock.yaml

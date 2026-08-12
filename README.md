@@ -260,6 +260,7 @@ openspec/specs/   # 平台行为规格
 容器不注册 Scheme、不弹系统通知，也不需要桌面 native adapter：
 
 ```bash
+npm run package:localapp
 docker build -t localapp:local .
 cp deploy/production/.env.example deploy/production/.env
 ```

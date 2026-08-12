@@ -80,6 +80,9 @@ jobs:
       - name: Verify builds leave tracked sources unchanged
         run: git diff --exit-code
 
+      - name: Pack the Docker product
+        run: pnpm package:localapp
+
       - name: Build public Docker image from the npm package
         run: docker build --tag localapp-ci:${{ github.sha }} .
 

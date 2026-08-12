@@ -23,6 +23,12 @@ export interface ReleaseArtifactManifest {
   bundleDigest?: string;
   serverBundleDigest?: string;
   serverEntrypoint?: string;
+  protocolVersions: { deviceAction: number; notificationDelivery: number; peerSync: number };
+  nativeAdapters: Array<{
+    target: string;
+    signing: { mode: "adhoc" | "release" };
+    assets: Array<{ path: string; sha256: string }>;
+  }>;
 }
 
 export interface CurrentRelease {
@@ -127,6 +133,7 @@ async function inspectReleaseArtifact(directory: string): Promise<InspectedArtif
       if (bytes.byteLength !== entry.size || sha256(bytes) !== entry.sha256) throw invalidArtifact();
       files.set(entry.path, bytes);
     }
+    validatePackedNativeManifest(manifest, files);
     return { manifest, files, manifestBytes };
   } catch (error) {
     if (isErrorCode(error, "release_artifact_invalid")) throw error;
@@ -139,7 +146,7 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
   const allowed = new Set([
     "schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint",
     "files", "artifactDigest", "bundleDigest", "serverBundleDigest",
-    "serverEntrypoint",
+    "serverEntrypoint", "protocolVersions", "nativeAdapters",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))
     || value.schemaVersion !== 2 || value.name !== "localapp"
@@ -151,16 +158,38 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
     || typeof value.artifactDigest !== "string" || !DIGEST.test(value.artifactDigest)
     || (value.bundleDigest !== undefined && (typeof value.bundleDigest !== "string" || !DIGEST.test(value.bundleDigest)))
     || (value.serverBundleDigest !== undefined && (typeof value.serverBundleDigest !== "string" || !DIGEST.test(value.serverBundleDigest)))
-    || (value.serverEntrypoint !== undefined && (typeof value.serverEntrypoint !== "string" || !isSafeRelativeFile(value.serverEntrypoint)))) {
+    || (value.serverEntrypoint !== undefined && (typeof value.serverEntrypoint !== "string" || !isSafeRelativeFile(value.serverEntrypoint)))
+    || value.protocolVersions === undefined || value.nativeAdapters === undefined) {
     throw invalidArtifact();
   }
+  const protocolVersions = parseProtocolVersions(value.protocolVersions);
+  const nativeAdapters = parseNativeAdapters(value.nativeAdapters);
   const files = value.files.map(parseArtifactFile);
+  if (nativeAdapters.some((adapter) => adapter.assets.some((asset) => {
+    const packed = files.find((file) => file.path === `runtime/native/${asset.path}`);
+    return packed === undefined || packed.sha256 !== asset.sha256;
+  }))) throw invalidArtifact();
   const canonical = [...files].sort(compareArtifactFiles);
   if (canonical.some((entry, index) => entry.path !== files[index]?.path)
     || new Set(files.map((entry) => entry.path)).size !== files.length
     || !files.some((entry) => entry.path === value.entrypoint)
     || !files.some((entry) => entry.path === value.bootstrapEntrypoint)
     || (typeof value.serverEntrypoint === "string" && !files.some((entry) => entry.path === value.serverEntrypoint))) throw invalidArtifact();
+  const digestDescriptor = {
+    schemaVersion: 2 as const,
+    name: "localapp" as const,
+    version: value.version,
+    nodeMajor: 24,
+    entrypoint: value.entrypoint,
+    bootstrapEntrypoint: value.bootstrapEntrypoint,
+    files,
+    ...(typeof value.bundleDigest === "string" ? { bundleDigest: value.bundleDigest } : {}),
+    ...(typeof value.serverBundleDigest === "string" ? { serverBundleDigest: value.serverBundleDigest } : {}),
+    ...(typeof value.serverEntrypoint === "string" ? { serverEntrypoint: value.serverEntrypoint } : {}),
+    protocolVersions: value.protocolVersions,
+    nativeAdapters: value.nativeAdapters,
+  };
+  if (sha256(Buffer.from(JSON.stringify(digestDescriptor))) !== value.artifactDigest) throw invalidArtifact();
   const descriptor = {
     schemaVersion: 2 as const,
     name: "localapp" as const,
@@ -172,9 +201,66 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
     ...(typeof value.bundleDigest === "string" ? { bundleDigest: value.bundleDigest } : {}),
     ...(typeof value.serverBundleDigest === "string" ? { serverBundleDigest: value.serverBundleDigest } : {}),
     ...(typeof value.serverEntrypoint === "string" ? { serverEntrypoint: value.serverEntrypoint } : {}),
+    protocolVersions,
+    nativeAdapters,
   };
-  if (sha256(Buffer.from(JSON.stringify(descriptor))) !== value.artifactDigest) throw invalidArtifact();
   return { ...descriptor, artifactDigest: value.artifactDigest };
+}
+
+function parseProtocolVersions(value: unknown): { deviceAction: number; notificationDelivery: number; peerSync: number } {
+  if (!isRecord(value) || !hasExactKeys(value, ["deviceAction", "notificationDelivery", "peerSync"])
+    || value.deviceAction !== 2 || value.notificationDelivery !== 2 || value.peerSync !== 1) throw invalidArtifact();
+  return { deviceAction: 2, notificationDelivery: 2, peerSync: 1 };
+}
+
+function parseNativeAdapters(value: unknown): ReleaseArtifactManifest["nativeAdapters"] {
+  if (!Array.isArray(value) || value.length === 0) throw invalidArtifact();
+  const adapters = value.map((entry) => {
+    if (!isRecord(entry) || !hasExactKeys(entry, ["target", "signing", "assets"])
+      || typeof entry.target !== "string" || !/^(?:darwin|linux|win32)-(?:arm64|x64)$/.test(entry.target)
+      || !isRecord(entry.signing) || !hasExactKeys(entry.signing, ["mode"])
+      || (entry.signing.mode !== "adhoc" && entry.signing.mode !== "release")
+      || !Array.isArray(entry.assets) || entry.assets.length === 0) throw invalidArtifact();
+    const assets = entry.assets.map((asset) => {
+      if (!isRecord(asset) || !hasExactKeys(asset, ["path", "sha256"])
+        || typeof asset.path !== "string" || !isSafeRelativeFile(asset.path) || !asset.path.startsWith(`${entry.target}/`)
+        || typeof asset.sha256 !== "string" || !DIGEST.test(asset.sha256)) throw invalidArtifact();
+      return { path: asset.path, sha256: asset.sha256 };
+    });
+    if (new Set(assets.map((asset) => asset.path)).size !== assets.length) throw invalidArtifact();
+    if (requiredNativeAssets(entry.target).some((required) => !assets.some((asset) => asset.path === required))) throw invalidArtifact();
+    return { target: entry.target, signing: { mode: entry.signing.mode }, assets } as const;
+  });
+  adapters.sort((left, right) => left.target.localeCompare(right.target));
+  if (new Set(adapters.map((adapter) => adapter.target)).size !== adapters.length) throw invalidArtifact();
+  return adapters;
+}
+
+function requiredNativeAssets(target: string): string[] {
+  if (target.startsWith("darwin-")) return [
+    `${target}/LocalAppBridge.app/Contents/Info.plist`,
+    `${target}/LocalAppBridge.app/Contents/MacOS/LocalAppBridge`,
+    `${target}/LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs`,
+  ];
+  if (target.startsWith("linux-")) return [`${target}/localapp-notifications`, `${target}/localapp-native-ipc-client.mjs`];
+  return [`${target}/localapp-native.exe`, `${target}/localapp-native-ipc-client.mjs`];
+}
+
+function validatePackedNativeManifest(manifest: ReleaseArtifactManifest, files: Map<string, Buffer>): void {
+  const bytes = files.get("runtime/native/adapter-manifest.json");
+  if (bytes === undefined) throw invalidArtifact();
+  let value: unknown;
+  try { value = JSON.parse(bytes.toString("utf8")); } catch { throw invalidArtifact(); }
+  let adapters: ReleaseArtifactManifest["nativeAdapters"];
+  if (isRecord(value) && hasExactKeys(value, ["schemaVersion", "target", "signing", "assets"]) && value.schemaVersion === 1) {
+    const { schemaVersion: _schemaVersion, ...entry } = value;
+    adapters = parseNativeAdapters([entry]);
+  } else if (isRecord(value) && hasExactKeys(value, ["schemaVersion", "adapters"]) && value.schemaVersion === 2) {
+    adapters = parseNativeAdapters(value.adapters);
+  } else {
+    throw invalidArtifact();
+  }
+  if (JSON.stringify(adapters) !== JSON.stringify(manifest.nativeAdapters)) throw invalidArtifact();
 }
 
 function parseArtifactFile(value: unknown): ReleaseArtifactFile {
@@ -232,7 +318,7 @@ async function publishImmutableDirectory(
 
 function isExecutableReleaseFile(relativePath: string, manifest: ReleaseArtifactManifest): boolean {
   if (relativePath === manifest.entrypoint) return true;
-  return /^runtime\/native\/[^/]+\/(?:LocalAppBridge\.app\/Contents\/(?:MacOS\/LocalAppBridge|Resources\/localapp-native-ipc-client\.mjs)|localapp-native\.exe|localapp-native-ipc-client\.mjs)$/.test(relativePath);
+  return /^runtime\/native\/[^/]+\/(?:LocalAppBridge\.app\/Contents\/(?:MacOS\/LocalAppBridge|Resources\/localapp-native-ipc-client\.mjs)|localapp-native\.exe|localapp-notifications|localapp-native-ipc-client\.mjs)$/.test(relativePath);
 }
 
 async function ensurePrivateDirectories(layout: RuntimeLayout): Promise<void> {

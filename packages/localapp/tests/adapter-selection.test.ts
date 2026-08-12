@@ -27,6 +27,23 @@ describe("native adapter selection", () => {
     await fs.appendFile(path.join(directory, "darwin-arm64", "LocalAppBridge.app", "Contents", "MacOS", "LocalAppBridge"), "tampered");
     await expect(selectNativeAdapter({ root: directory, platform: "darwin", arch: "arm64" })).rejects.toMatchObject({ code: "native_adapter_digest_invalid" });
   });
+
+  it("selects the exact target from an aggregate release matrix", async () => {
+    const arm = await fixture("darwin-arm64");
+    const armManifest = JSON.parse(await fs.readFile(path.join(arm, "adapter-manifest.json"), "utf8"));
+    const x64 = await fixture("darwin-x64");
+    const x64Manifest = JSON.parse(await fs.readFile(path.join(x64, "adapter-manifest.json"), "utf8"));
+    await fs.cp(path.join(x64, "darwin-x64"), path.join(arm, "darwin-x64"), { recursive: true });
+    await fs.writeFile(path.join(arm, "adapter-manifest.json"), `${JSON.stringify({
+      schemaVersion: 2,
+      adapters: [armManifest, x64Manifest].map(({ schemaVersion: _schemaVersion, ...entry }) => entry),
+    })}\n`);
+
+    await expect(selectNativeAdapter({ root: arm, platform: "darwin", arch: "x64" })).resolves.toMatchObject({
+      target: "darwin-x64",
+      executable: path.join(arm, "darwin-x64", "LocalAppBridge.app", "Contents", "MacOS", "LocalAppBridge"),
+    });
+  });
 });
 
 async function fixture(target: string): Promise<string> {

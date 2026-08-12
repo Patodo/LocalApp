@@ -21,8 +21,24 @@ export async function buildLocalAppPackage(options = {}) {
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
   await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
-  const { buildNativeAdapter } = await import(pathToFileURL(path.join(packageDirectory, "scripts/build-native-adapter.mjs")).href);
-  await buildNativeAdapter({ outputDirectory: path.join(outputDirectory, "runtime", "native") });
+  const nativeOutputDirectory = path.join(outputDirectory, "runtime", "native");
+  const prebuiltNativeAdaptersDirectory = options.prebuiltNativeAdaptersDirectory ?? process.env.LOCALAPP_PREBUILT_NATIVE_ADAPTERS_DIR;
+  let nativeManifest;
+  if (prebuiltNativeAdaptersDirectory) {
+    const releaseTargets = JSON.parse(await fs.readFile(path.join(projectDirectory, "packages/shared/release-targets.json"), "utf8"));
+    const requiredTargets = releaseTargets.nativeAdapters?.map((entry) => entry.target);
+    if (!Array.isArray(requiredTargets)) throw new Error("release native adapter matrix is unavailable");
+    const { mergePrebuiltNativeAdapters } = await import(pathToFileURL(path.join(packageDirectory, "scripts/merge-native-adapters.mjs")).href);
+    nativeManifest = await mergePrebuiltNativeAdapters({
+      sourceDirectory: prebuiltNativeAdaptersDirectory,
+      outputDirectory: nativeOutputDirectory,
+      requiredTargets,
+    });
+  } else {
+    const { buildNativeAdapter } = await import(pathToFileURL(path.join(packageDirectory, "scripts/build-native-adapter.mjs")).href);
+    await buildNativeAdapter({ outputDirectory: nativeOutputDirectory });
+    nativeManifest = JSON.parse(await fs.readFile(path.join(nativeOutputDirectory, "adapter-manifest.json"), "utf8"));
+  }
   const { buildServerPackage } = await import(pathToFileURL(path.join(projectDirectory, "packages/server/scripts/build-server-package.mjs")).href);
   const serverArtifact = await buildServerPackage({ outputDirectory: path.join(outputDirectory, "runtime/server") });
   await build({
@@ -73,6 +89,12 @@ export async function buildLocalAppPackage(options = {}) {
     bundleDigest: await sha256(path.join(binDirectory, "localapp.mjs")),
     serverBundleDigest: serverArtifact.bundleDigest,
     serverEntrypoint: "runtime/server/bin/server.mjs",
+    protocolVersions: { deviceAction: 2, notificationDelivery: 2, peerSync: 1 },
+    nativeAdapters: nativeManifest.schemaVersion === 2 ? nativeManifest.adapters : [{
+      target: nativeManifest.target,
+      signing: nativeManifest.signing,
+      assets: nativeManifest.assets,
+    }],
   };
   await writeJson(manifestPath, {
     ...artifactDescriptor,
@@ -213,7 +235,7 @@ try {
     || path.resolve(current.releasePath) !== path.resolve(expectedRelease)) throw new Error("unsafe current release");
   const manifestPath = path.join(expectedRelease, ".localapp-artifact.json");
   const manifest = JSON.parse(regularBytes(manifestPath).toString("utf8"));
-  const allowedManifestKeys = ["schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint", "files", "artifactDigest", "bundleDigest", "serverBundleDigest", "serverEntrypoint"];
+  const allowedManifestKeys = ["schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint", "files", "artifactDigest", "bundleDigest", "serverBundleDigest", "serverEntrypoint", "protocolVersions", "nativeAdapters"];
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
     || Object.keys(manifest).some((key) => !allowedManifestKeys.includes(key))
     || manifest.schemaVersion !== 2 || manifest.name !== "localapp" || manifest.nodeMajor !== 24
@@ -244,6 +266,8 @@ try {
     ...(typeof manifest.bundleDigest === "string" ? { bundleDigest: manifest.bundleDigest } : {}),
     ...(typeof manifest.serverBundleDigest === "string" ? { serverBundleDigest: manifest.serverBundleDigest } : {}),
     ...(typeof manifest.serverEntrypoint === "string" ? { serverEntrypoint: manifest.serverEntrypoint } : {}),
+    ...(manifest.protocolVersions ? { protocolVersions: manifest.protocolVersions } : {}),
+    ...(manifest.nativeAdapters ? { nativeAdapters: manifest.nativeAdapters } : {}),
   };
   const descriptorDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
   if (descriptorDigest !== manifest.artifactDigest) throw new Error("release descriptor changed");

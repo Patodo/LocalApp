@@ -211,6 +211,80 @@ describe("release store", () => {
       await expect(verifyReleaseArtifact(linked)).rejects.toMatchObject({ code: "release_artifact_invalid" });
     }
   });
+
+  it("rejects descriptor order substitution and a native runtime manifest that disagrees with the descriptor", async () => {
+    const root = await fixtureRoot();
+    const source = path.join(root, "real product");
+    await buildLocalAppPackage({ outputDirectory: source });
+
+    const reordered = path.join(root, "reordered descriptor");
+    await fs.cp(source, reordered, { recursive: true });
+    const reorderedManifestPath = path.join(reordered, ".localapp-artifact.json");
+    const reorderedManifest = JSON.parse(await fs.readFile(reorderedManifestPath, "utf8"));
+    reorderedManifest.protocolVersions = { peerSync: 1, deviceAction: 2, notificationDelivery: 2 };
+    await fs.writeFile(reorderedManifestPath, `${JSON.stringify(reorderedManifest, null, 2)}\n`);
+    await expect(verifyReleaseArtifact(reordered)).rejects.toMatchObject({ code: "release_artifact_invalid" });
+
+    const substituted = path.join(root, "substituted native manifest");
+    await fs.cp(source, substituted, { recursive: true });
+    const nativePath = path.join(substituted, "runtime/native/adapter-manifest.json");
+    const native = JSON.parse(await fs.readFile(nativePath, "utf8"));
+    native.signing.mode = native.signing.mode === "adhoc" ? "release" : "adhoc";
+    const nativeBytes = Buffer.from(`${JSON.stringify(native, null, 2)}\n`);
+    await fs.writeFile(nativePath, nativeBytes);
+    const manifestPath = path.join(substituted, ".localapp-artifact.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const entry = manifest.files.find((file: { path: string }) => file.path === "runtime/native/adapter-manifest.json");
+    entry.size = nativeBytes.byteLength;
+    entry.sha256 = crypto.createHash("sha256").update(nativeBytes).digest("hex");
+    const { artifactDigest: _artifactDigest, ...descriptor } = manifest;
+    manifest.artifactDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    await expect(verifyReleaseArtifact(substituted)).rejects.toMatchObject({ code: "release_artifact_invalid" });
+  }, 30_000);
+
+  it("rejects a release descriptor that omits required protocol and native adapter contracts", async () => {
+    const root = await fixtureRoot();
+    const source = path.join(root, "missing release contracts");
+    await buildLocalAppPackage({ outputDirectory: source });
+    const manifestPath = path.join(source, ".localapp-artifact.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    delete manifest.protocolVersions;
+    delete manifest.nativeAdapters;
+    const { artifactDigest: _artifactDigest, ...descriptor } = manifest;
+    manifest.artifactDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(verifyReleaseArtifact(source)).rejects.toMatchObject({ code: "release_artifact_invalid" });
+  }, 30_000);
+
+  it("rejects a native adapter contract that omits a runtime-required asset", async () => {
+    const root = await fixtureRoot();
+    const source = await writeArtifact(path.join(root, "missing native IPC client"), "one");
+    const manifestPath = path.join(source, ".localapp-artifact.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const missingPath = "runtime/native/linux-x64/localapp-native-ipc-client.mjs";
+    manifest.files = manifest.files.filter((file: { path: string }) => file.path !== missingPath);
+    manifest.nativeAdapters[0].assets = manifest.nativeAdapters[0].assets.filter(
+      (asset: { path: string }) => asset.path !== "linux-x64/localapp-native-ipc-client.mjs",
+    );
+    const nativePath = path.join(source, "runtime/native/adapter-manifest.json");
+    const native = JSON.parse(await fs.readFile(nativePath, "utf8"));
+    native.adapters[0].assets = native.adapters[0].assets.filter(
+      (asset: { path: string }) => asset.path !== "linux-x64/localapp-native-ipc-client.mjs",
+    );
+    const nativeBytes = Buffer.from(`${JSON.stringify(native, null, 2)}\n`);
+    await fs.writeFile(nativePath, nativeBytes);
+    await fs.rm(path.join(source, missingPath));
+    const nativeEntry = manifest.files.find((file: { path: string }) => file.path === "runtime/native/adapter-manifest.json");
+    nativeEntry.size = nativeBytes.byteLength;
+    nativeEntry.sha256 = crypto.createHash("sha256").update(nativeBytes).digest("hex");
+    const { artifactDigest: _artifactDigest, ...descriptor } = manifest;
+    manifest.artifactDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(verifyReleaseArtifact(source)).rejects.toMatchObject({ code: "release_artifact_invalid" });
+  });
 });
 
 async function fixtureRoot(): Promise<string> {
@@ -221,10 +295,24 @@ async function fixtureRoot(): Promise<string> {
 }
 
 async function writeArtifact(directory: string, marker: string): Promise<string> {
+  const nativeAssets = new Map([
+    ["linux-x64/localapp-notifications", "native adapter\n"],
+    ["linux-x64/localapp-native-ipc-client.mjs", "native IPC client\n"],
+  ]);
+  const nativeAdapters = [{
+    target: "linux-x64",
+    signing: { mode: "adhoc" },
+    assets: [...nativeAssets].map(([assetPath, bytes]) => ({
+      path: assetPath,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    })),
+  }];
   const values = new Map<string, string>([
     ["bin/localapp.mjs", `#!/usr/bin/env node\nconsole.log(${JSON.stringify(marker)});\n`],
     ["package.json", `${JSON.stringify({ name: "localapp", version: "0.1.0", bin: { localapp: "bin/localapp.mjs" } })}\n`],
     ["runtime/bootstrap/localapp-daemon-bootstrap.mjs", "// stable launcher reads current.json\n"],
+    ...[...nativeAssets].map(([assetPath, bytes]) => [`runtime/native/${assetPath}`, bytes] as [string, string]),
+    ["runtime/native/adapter-manifest.json", `${JSON.stringify({ schemaVersion: 2, adapters: nativeAdapters }, null, 2)}\n`],
   ]);
   for (const [relativePath, value] of values) {
     const target = path.join(directory, relativePath);
@@ -244,6 +332,8 @@ async function writeArtifact(directory: string, marker: string): Promise<string>
     entrypoint: "bin/localapp.mjs",
     bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs",
     files,
+    protocolVersions: { deviceAction: 2, notificationDelivery: 2, peerSync: 1 },
+    nativeAdapters,
   } as const;
   const artifactDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
   await fs.writeFile(path.join(directory, ".localapp-artifact.json"), `${JSON.stringify({ ...descriptor, artifactDigest }, null, 2)}\n`);

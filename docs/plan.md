@@ -1,6 +1,6 @@
 # LocalApp - 总体方案
 
-> **历史文档（已废弃）**：本文记录早期上传/CRUD 平台方案，不再描述当前产品。现行架构与实施状态以 [统一 Server 设计](./superpowers/specs/2026-08-09-unified-server-and-tray-design.md) 和 [统一 Server 实施计划](./superpowers/plans/2026-08-09-unified-server-and-tray.md) 为准；不得从本文恢复 `localapp upload`、独立 MiniServer 或 Local Runtime。
+> **历史文档（已废弃）**：本文记录早期上传/CRUD 平台方案，不再描述当前产品。现行架构与实施状态以 [单一 npm 包设计](./superpowers/specs/2026-08-12-single-package-daemon-notifications-design.md) 和 [单一 npm 包实施计划](./superpowers/plans/2026-08-12-single-package-daemon-notifications.md) 为准；不得从本文恢复 `localapp upload`、独立 MiniServer 或 Local Runtime。
 
 ## 项目概述
 

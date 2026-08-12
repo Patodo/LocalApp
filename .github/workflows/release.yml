@@ -144,8 +144,7 @@ jobs:
         env:
           LOCALAPP_PREBUILT_NATIVE_ADAPTERS_DIR: ${{ github.workspace }}/tmp/release-native-adapters
         run: |
-          mkdir -p tmp/localapp-package
-          pnpm -C packages/localapp pack --pack-destination "$GITHUB_WORKSPACE/tmp/localapp-package"
+          pnpm package:localapp
           version="$(node -p "require('./packages/localapp/package.json').version")"
           test -f "tmp/localapp-package/localapp-${version}.tgz"
           if [[ "$(find tmp/localapp-package -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')" != "1" ]]; then
@@ -192,6 +191,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: localapp-release
+          path: tmp/localapp-package
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:

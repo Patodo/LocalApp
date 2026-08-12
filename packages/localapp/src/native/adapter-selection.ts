@@ -83,6 +83,15 @@ function ipcClientFor(target: string): string {
 }
 
 function parseManifest(value: unknown, target: string, root: string, platform: NodeJS.Platform, arch: string): { signing: { mode: "adhoc" | "release" }; assets: NativeAdapterAsset[] } {
+  if (record(value) && exactKeys(value, ["schemaVersion", "adapters"]) && value.schemaVersion === 2 && Array.isArray(value.adapters)) {
+    const candidates = value.adapters.filter((entry) => record(entry) && entry.target === target);
+    if (candidates.length !== 1) throw unsupported(platform, arch);
+    return parseSingleManifest({ schemaVersion: 1, ...candidates[0] }, target, root, platform, arch);
+  }
+  return parseSingleManifest(value, target, root, platform, arch);
+}
+
+function parseSingleManifest(value: unknown, target: string, root: string, platform: NodeJS.Platform, arch: string): { signing: { mode: "adhoc" | "release" }; assets: NativeAdapterAsset[] } {
   if (!record(value) || !exactKeys(value, ["schemaVersion", "target", "signing", "assets"])
     || value.schemaVersion !== 1 || value.target !== target || !record(value.signing) || !exactKeys(value.signing, ["mode"])
     || (value.signing.mode !== "adhoc" && value.signing.mode !== "release") || !Array.isArray(value.assets) || value.assets.length === 0) {

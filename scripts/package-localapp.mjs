@@ -14,6 +14,8 @@ const expectedName = `localapp-${manifest.version}.tgz`;
 await fs.rm(outputDirectory, { recursive: true, force: true });
 await fs.mkdir(outputDirectory, { recursive: true, mode: 0o755 });
 try {
+  await run("pnpm", ["-C", "packages/server-core", "build"], repositoryRoot);
+  await run("pnpm", ["-C", "packages/web", "build"], repositoryRoot);
   await buildLocalAppPackage({ outputDirectory: stagingDirectory });
   await run("npm", ["pack", stagingDirectory, "--pack-destination", outputDirectory], repositoryRoot);
 } finally {
