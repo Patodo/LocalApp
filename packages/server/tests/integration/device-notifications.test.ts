@@ -92,6 +92,11 @@ describe("device notification source authority", () => {
     expect(created.body).not.toContain(getTestApiKey());
     expect(created.json().data).toMatchObject({ generation: 1, test: { id: expect.any(String), state: "pending", result: null } });
     const commandId = created.json().data.test.id as string;
+    const repeatedCreate = await app.inject({
+      method: "POST", url: "/api/device-notifications/test", headers: originHeaders(baseUrl), payload: { generation: 0 },
+    });
+    expect(repeatedCreate.statusCode).toBe(202);
+    expect(repeatedCreate.json().data).toEqual(created.json().data);
 
     const claim = await app.inject({
       method: "POST", url: "/api/internal/device-notifications/test/claim",

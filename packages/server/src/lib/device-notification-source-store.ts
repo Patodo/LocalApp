@@ -286,14 +286,22 @@ export class DeviceNotificationSourceStore {
 
   createTestCommand(input: { ownerUserId: string; expectedGeneration: number; now?: Date }) {
     if (!findUserById(input.ownerUserId)) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_ACCOUNT_NOT_FOUND");
+    const now = input.now ?? new Date();
+    const existing = getDb().exec(`
+      SELECT id, state FROM device_notification_test_commands
+      WHERE user_id = ? AND state IN ('pending', 'claimed') AND expires_at > ?
+      ORDER BY created_at, id LIMIT 1
+    `, [input.ownerUserId, now.toISOString()])[0]?.values[0];
+    if (existing) return { generation: this.generation(), test: { id: String(existing[0]), state: String(existing[1]) as "pending" | "claimed", result: null } };
     this.assertGeneration(input.expectedGeneration);
     const id = randomUUID();
-    const now = input.now ?? new Date();
     const createdAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
     mutateMetaDbAtomically((database) => {
       incrementGeneration(database);
+      database.run("DELETE FROM device_notification_test_commands WHERE expires_at <= ?", [createdAt]);
       database.run(`INSERT INTO device_notification_test_commands (id, user_id, state, result, created_at, expires_at, completed_at) VALUES (?, ?, 'pending', NULL, ?, ?, NULL)`, [id, input.ownerUserId, createdAt, expiresAt]);
+      database.run(`DELETE FROM device_notification_test_commands WHERE state = 'completed' AND id NOT IN (SELECT id FROM device_notification_test_commands WHERE state = 'completed' ORDER BY completed_at DESC, id DESC LIMIT 100)`);
     });
     return { generation: this.generation(), test: { id, state: "pending" as const, result: null } };
   }
