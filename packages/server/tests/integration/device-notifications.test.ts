@@ -74,6 +74,13 @@ describe("device notification source authority", () => {
     });
     expect(stale.statusCode).toBe(409);
     expect(stale.json().code).toBe("DEVICE_NOTIFICATION_GENERATION_CONFLICT");
+
+    const invalid = await app.inject({
+      method: "PUT", url: "/api/device-notifications/settings", headers: originHeaders(baseUrl),
+      payload: { generation: 1, settings: { quietHours: { start: "22:30", end: "22:30", timeZone: "Invalid/Secret" }, preview: "hidden" } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.body).not.toContain(getTestApiKey());
   });
 
   it("creates, atomically claims, and completes one fixed user-bound test command", async () => {

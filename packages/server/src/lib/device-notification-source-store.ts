@@ -249,11 +249,19 @@ export class DeviceNotificationSourceStore {
       SELECT id, state, result FROM device_notification_test_commands
       WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
     `, [ownerUserId])[0]?.values[0];
+    const permission = String(state.native_permission);
+    if (!NOTIFICATION_PERMISSIONS.has(permission) || !validStoredVersion(state.daemon_version) || !validStoredVersion(state.adapter_version)
+      || !validStoredDate(state.native_updated_at) || !Number.isSafeInteger(Number(state.generation)) || Number(state.generation) < 0) {
+      throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+    }
+    if (last && (!NOTIFICATION_TEST_STATES.has(String(last[1])) || (last[2] !== null && !NOTIFICATION_TEST_RESULTS.has(String(last[2]))))) {
+      throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+    }
     return {
       generation: Number(state.generation),
       settings: displaySettings(state),
       native: {
-        permission: String(state.native_permission) as DeviceNotificationPermissionState,
+        permission: permission as DeviceNotificationPermissionState,
         daemonVersion: state.daemon_version == null ? null : String(state.daemon_version),
         adapterVersion: state.adapter_version == null ? null : String(state.adapter_version),
         updatedAt: state.native_updated_at == null ? null : String(state.native_updated_at),
@@ -465,11 +473,22 @@ function displaySettings(row: Record<string, unknown>): DeviceNotificationDispla
   const start = row.quiet_hours_start == null ? null : String(row.quiet_hours_start);
   const end = row.quiet_hours_end == null ? null : String(row.quiet_hours_end);
   const timeZone = row.quiet_hours_timezone == null ? null : String(row.quiet_hours_timezone);
-  return {
-    quietHours: start !== null && end !== null && timeZone !== null ? { start, end, timeZone } : null,
-    preview: row.preview === "hidden" ? "hidden" : "full",
-  };
+  if (row.preview !== "full" && row.preview !== "hidden") throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+  const allNull = start === null && end === null && timeZone === null;
+  const allPresent = start !== null && end !== null && timeZone !== null;
+  if (!allNull && !allPresent) throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+  if (allPresent && (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(end) || start === end || !validStoredTimeZone(timeZone))) {
+    throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+  }
+  return { quietHours: allPresent ? { start, end, timeZone } : null, preview: row.preview };
 }
+
+const NOTIFICATION_PERMISSIONS = new Set(["not-determined", "granted", "denied", "unsupported", "unknown"]);
+const NOTIFICATION_TEST_STATES = new Set(["pending", "claimed", "completed"]);
+const NOTIFICATION_TEST_RESULTS = new Set(["shown", "denied", "unsupported", "failed"]);
+function validStoredVersion(value: unknown): boolean { return value == null || (typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(value)); }
+function validStoredDate(value: unknown): boolean { return value == null || (typeof value === "string" && value.length <= 32 && !Number.isNaN(Date.parse(value))); }
+function validStoredTimeZone(value: string): boolean { try { new Intl.DateTimeFormat("en-US", { timeZone: value }).format(); return true; } catch { return false; } }
 
 function sourceRow(row: Record<string, unknown>): SourceRow {
   return {
