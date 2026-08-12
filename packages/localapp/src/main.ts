@@ -6,6 +6,8 @@ import { whoami } from "./commands/whoami.js";
 import { initializeProject } from "./commands/init.js";
 import { syncManagedTemplate } from "./commands/sync-template.js";
 import { ejectManagedTemplate } from "./commands/eject-template.js";
+import { check } from "./commands/check.js";
+import { buildPackage } from "./commands/build.js";
 import { loadPackageVersion } from "./version.js";
 import { LocalAppLifecycleError } from "./errors.js";
 import path from "node:path";
@@ -33,6 +35,10 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
     } else if (command.kind === "eject-template") {
       const result = await ejectManagedTemplate(process.cwd());
       io.stdout(`${JSON.stringify({ success: true, ...result })}\n`);
+    } else if (command.kind === "check") {
+      return check(io, command.json);
+    } else if (command.kind === "build-package") {
+      return buildPackage(command.output, io);
     }
     return 0;
   } catch (error) {

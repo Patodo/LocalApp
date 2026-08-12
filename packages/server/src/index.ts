@@ -1,4 +1,5 @@
 export { buildServer } from "./server.js";
+export * from "./app-package-api.js";
 import { runCli } from "./cli.js";
 
 if (require.main === module) {

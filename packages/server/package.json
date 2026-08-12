@@ -5,6 +5,16 @@
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./app-package-api": {
+      "types": "./dist/app-package-api.d.ts",
+      "default": "./dist/app-package-api.js"
+    }
+  },
   "bin": {
     "localapp-server": "dist/cli.js"
   },

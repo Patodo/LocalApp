@@ -23,6 +23,10 @@ export async function buildLocalAppPackage(options = {}) {
   await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
   await build({
     absWorkingDir: projectDirectory,
+    alias: {
+      "@localapp/server/app-package-api": path.join(projectDirectory, "packages/server/src/app-package-api.ts"),
+      "@localapp/server-core": path.join(projectDirectory, "packages/server-core/src/index.ts"),
+    },
     bundle: true,
     entryPoints: [path.join(packageDirectory, "src/main.ts")],
     format: "esm",
@@ -31,7 +35,9 @@ export async function buildLocalAppPackage(options = {}) {
     platform: "node",
     sourcemap: false,
     target: "node24",
-    banner: { js: "#!/usr/bin/env node" },
+    banner: {
+      js: "#!/usr/bin/env node\nimport { createRequire as __localAppCreateRequire } from 'node:module';\nconst require = __localAppCreateRequire(import.meta.url);",
+    },
   });
   await fs.chmod(path.join(binDirectory, "localapp.mjs"), 0o755);
 

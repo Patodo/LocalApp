@@ -22,6 +22,9 @@
     "postpack": "node scripts/cleanup-pack.mjs",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@localapp/server": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "esbuild": "^0.27.0",
