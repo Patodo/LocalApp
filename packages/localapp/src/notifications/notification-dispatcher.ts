@@ -81,7 +81,7 @@ export class NotificationDispatcher {
       body: pending.delivery.body ?? "",
       sourceLabel: pending.sourceLabel,
       priority: pending.delivery.priority,
-      iconPath: this.iconPath,
+      iconPath: pending.iconPath,
     });
     await this.adapter.showNotification(envelope);
     await this.store.commitShown(sourceId, delivery.sequence);
@@ -120,12 +120,12 @@ export class NotificationDispatcher {
   private async prepare(sourceId: string, sourceLabel: string, delivery: DeliveryNotification): Promise<PendingDelivery | null> {
     const existing = await this.store.readPending(sourceId);
     if (existing !== null) {
-      if (JSON.stringify(existing.delivery) !== JSON.stringify(delivery) || existing.sourceLabel !== sourceLabel) {
+      if (JSON.stringify(existing.delivery) !== JSON.stringify(delivery) || existing.sourceLabel !== sourceLabel || existing.iconPath !== this.iconPath) {
         throw new Error("Notification source already has a different pending delivery");
       }
       return this.store.retryPending(sourceId);
     }
-    return this.store.preparePending(sourceId, delivery, undefined, sourceLabel);
+    return this.store.preparePending(sourceId, delivery, undefined, sourceLabel, this.iconPath);
   }
 }
 
