@@ -120,10 +120,11 @@ describe("application synchronization", () => {
   it.each(["rolled-back", "failed", "recovery-required"] as const)("keeps %s as a structured credential-safe terminal failure", async (status) => {
     // Break caught: treating terminal failures as success, collapsing their status, or retaining a raw job serializes Server credentials through error.job.
     const apiKey = "source-key-must-not-leak";
+    const jsonEscapedApiKey = "\\u0073\\u006F\\u0075\\u0072\\u0063\\u0065\\u002D\\u006B\\u0065\\u0079\\u002D\\u006D\\u0075\\u0073\\u0074\\u002D\\u006E\\u006F\\u0074\\u002D\\u006C\\u0065\\u0061\\u006B";
     const rawJob = {
       id: "job-terminal", status,
-      error: `Server error ${apiKey} and source\\u002dkey\\u002dmust\\u002dnot\\u002dleak`,
-      nested: { [apiKey]: [apiKey, { message: apiKey }] },
+      error: `Server error ${apiKey} and ${jsonEscapedApiKey}`,
+      nested: { [apiKey]: [apiKey, { message: apiKey }, { [jsonEscapedApiKey]: jsonEscapedApiKey }] },
     };
     let server: Server | undefined;
     try {
@@ -143,9 +144,9 @@ describe("application synchronization", () => {
       expect(thrown).toBeInstanceOf(SyncJobFailure);
       expect(thrown).toMatchObject({ code: `application_sync_${status.replaceAll("-", "_")}`, status });
       expect(JSON.stringify(thrown)).not.toContain(apiKey);
-      expect(JSON.stringify(thrown)).not.toContain("source\\u002dkey");
+      expect(JSON.stringify(thrown)).not.toContain(JSON.stringify(jsonEscapedApiKey).slice(1, -1));
       expect((thrown as SyncJobFailure).job).toMatchObject({
-        status, error: expect.stringContaining("[REDACTED]"), nested: { "[REDACTED]": ["[REDACTED]", { message: "[REDACTED]" }] },
+        status, error: expect.stringContaining("[REDACTED]"), nested: { "[REDACTED]": ["[REDACTED]", { message: "[REDACTED]" }, { "[REDACTED]": "[REDACTED]" }] },
       });
     } finally {
       await close(server);

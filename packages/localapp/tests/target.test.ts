@@ -13,11 +13,30 @@ afterEach(async () => {
 });
 
 describe("project publish target resolution", () => {
-  it("uses the current profile only when publish.json is absent", async () => {
-    // Break caught: accepting an unreadable publish configuration as absent silently selects a different deployment target.
+  it("uses the current profile when publish.json is stably absent", async () => {
+    // Break caught: rejecting a genuinely absent publish configuration prevents projects from using their current profile.
     const { projectDir, store } = await createProject();
+    await fs.mkdir(path.join(projectDir, ".localapp"));
 
     await expect(resolveProjectTarget({ projectDir, profileStore: store })).resolves.toMatchObject({ name: "current" });
+  });
+
+  it("rejects .localapp replacement before a missing publish.json can fall back", async () => {
+    // Break caught: an attacker can replace the validated .localapp directory with a different directory lacking publish.json and redirect deployment to the current profile.
+    const { projectDir, store } = await createProject();
+    const localApp = path.join(projectDir, ".localapp");
+    await fs.mkdir(localApp);
+
+    await expect(resolveProjectTarget({
+      projectDir,
+      profileStore: store,
+      readHooks: {
+        afterLocalAppValidated: async () => {
+          await fs.rename(localApp, `${localApp}.original`);
+          await fs.mkdir(localApp);
+        },
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
   });
 
   it.each([

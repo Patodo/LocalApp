@@ -36,8 +36,14 @@ function redactString(value: string, credential: string, marker: string): string
 function escapedCredentialPattern(credential: string): RegExp {
   const encoded = Array.from(credential).map((character) => {
     const literal = character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-    const unicode = `\\\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`;
+    const unicode = `\\\\u${unicodeHexPattern(character.codePointAt(0)!.toString(16).padStart(4, "0"))}`;
     return `(?:${literal}|${unicode})`;
   }).join("");
   return new RegExp(encoded, "g");
+}
+
+function unicodeHexPattern(value: string): string {
+  return Array.from(value).map((character) => /[a-f]/.test(character)
+    ? `[${character}${character.toUpperCase()}]`
+    : character).join("");
 }
