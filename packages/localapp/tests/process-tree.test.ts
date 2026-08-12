@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  confirmGuardianSignalDispatch,
   spawnOwnedProcess,
   type OwnedProcess,
   type OwnedProcessExit,
@@ -26,6 +27,132 @@ afterEach(async () => {
 });
 
 describe("owned process trees", () => {
+  it("requires guardian send callback success before accepting a signal response", async () => {
+    // Break caught: a fast guardian response can settle force before the delayed parent send callback reports an async write failure.
+    const sendCallback = deferred<void>();
+    const response = deferred<"signaled" | "ownership-lost">();
+    let result: "signaled" | "ownership-lost" | undefined;
+    const confirmation = confirmGuardianSignalDispatch(sendCallback.promise, response.promise);
+    void confirmation.then((value) => { result = value; });
+
+    response.resolve("signaled");
+    await Promise.resolve();
+    expect(result).toBeUndefined();
+
+    sendCallback.reject(new Error("guardian send callback failed"));
+    await expect(confirmation).resolves.toBe("ownership-lost");
+  });
+
+  it("does not report synthetic SIGKILL when the delayed force-send callback fails", async () => {
+    // Break caught: invoking onDispatched before guardian.send's callback can falsely report SIGKILL for an IPC send that later fails.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new ForceSendCallbackFailureModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 40,
+        unixAdapter: model,
+      });
+      const termination = settled(owned.terminate());
+
+      await vi.advanceTimersByTimeAsync(30);
+
+      await expect(termination).resolves.toEqual(expect.objectContaining({
+        message: expect.stringMatching(/ownership identity.*lost/i),
+      }));
+      await expect(owned.exited).resolves.toEqual(expect.objectContaining({
+        code: null,
+        signal: null,
+        error: expect.objectContaining({ message: "guardian send callback failed" }),
+      }));
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a never-resolving liveness read and still attempts guardian reap", async () => {
+    // Break caught: directly awaiting ownedGroupExists lets one hung read make terminate unbounded and skip guardian reaping.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new HungLivenessModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 40,
+        unixAdapter: model,
+      });
+      let result: unknown;
+      void settled(owned.terminate()).then((value) => { result = value; });
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(result).toEqual(expect.objectContaining({ code: "owned_process_tree_exit_unconfirmed" }));
+      expect(model.guardianReaped).toBe(true);
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for bounded guardian reap and preserves the primary group-confirmation error", async () => {
+    // Break caught: group-confirmation failure can reject immediately, skipping delayed guardian reap or replacing its structured error.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new PresentGroupDelayedReapFailureModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 40,
+        unixAdapter: model,
+      });
+      let result: unknown;
+      void settled(owned.terminate()).then((value) => { result = value; });
+
+      await vi.advanceTimersByTimeAsync(79);
+      expect(result).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toEqual(expect.objectContaining({
+        code: "owned_process_tree_exit_unconfirmed",
+        message: expect.stringMatching(/could not confirm.*group.*disappeared/i),
+      }));
+      expect(model.reapFailed).toBe(true);
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("consumes a rejected command-exit observer when the caller awaits only terminate", async () => {
+    // Break caught: a true commandExited rejection can surface as unhandled when cleanup callers never read OwnedProcess.exited.
+    if (process.platform === "win32") return;
+    const model = new RejectedCommandExitModel();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 0,
+        forceTimeoutMs: 40,
+        unixAdapter: model,
+      });
+
+      await owned.terminate();
+      await Promise.resolve();
+
+      expect(unhandled).toEqual([]);
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("reports deterministic forced exit and waits for group disappearance when guardian exits first", async () => {
     // Break caught: guardian exit can beat its command-exit IPC and make terminate resolve with a synthetic protocol error while the group remains.
     if (process.platform === "win32") return;
@@ -38,7 +165,6 @@ describe("owned process trees", () => {
         forceTimeoutMs: 100,
         unixAdapter: model,
       });
-      ownedProcesses.push(owned);
       let terminated = false;
       const termination = owned.terminate().then(() => { terminated = true; });
 
@@ -71,7 +197,6 @@ describe("owned process trees", () => {
         forceTimeoutMs: 40,
         unixAdapter: model,
       });
-      ownedProcesses.push(owned);
       const termination = owned.terminate().then(
         () => undefined,
         (error: unknown) => error,
@@ -206,6 +331,111 @@ describe("owned process trees", () => {
   });
 });
 
+class ForceSendCallbackFailureModel implements UnixProcessTreeAdapter {
+  readonly signals: NodeJS.Signals[] = [];
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    return {
+      child: fakeChild(61_061),
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise,
+      signalOwnedTree: (force, onDispatched) => {
+        this.signals.push(force ? "SIGKILL" : "SIGTERM");
+        if (!force) return "signaled";
+        onDispatched?.();
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            this.commandExit.resolve({ code: null, signal: null, error: new Error("guardian send callback failed") });
+            this.guardianExit.resolve({ code: 1, signal: null });
+            resolve("ownership-lost");
+          }, 10);
+        });
+      },
+      ownedGroupExists: () => false,
+    };
+  }
+}
+
+class HungLivenessModel implements UnixProcessTreeAdapter {
+  readonly signals: NodeJS.Signals[] = [];
+  guardianReaped = false;
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    return {
+      child: fakeChild(62_062),
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise.then((exit) => {
+        this.guardianReaped = true;
+        return exit;
+      }),
+      signalOwnedTree: (force, onDispatched) => {
+        this.signals.push(force ? "SIGKILL" : "SIGTERM");
+        if (force) {
+          onDispatched?.();
+          this.guardianExit.resolve({ code: null, signal: "SIGKILL" });
+        }
+        return "signaled";
+      },
+      ownedGroupExists: () => new Promise<boolean>(() => {}),
+    };
+  }
+}
+
+class PresentGroupDelayedReapFailureModel implements UnixProcessTreeAdapter {
+  readonly signals: NodeJS.Signals[] = [];
+  reapFailed = false;
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    return {
+      child: fakeChild(63_063),
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise.catch((error) => {
+        this.reapFailed = true;
+        throw error;
+      }),
+      signalOwnedTree: (force, onDispatched) => {
+        this.signals.push(force ? "SIGKILL" : "SIGTERM");
+        if (force) {
+          onDispatched?.();
+          setTimeout(() => this.guardianExit.reject(new Error("guardian reap failed")), 60);
+        }
+        return "signaled";
+      },
+      ownedGroupExists: () => true,
+    };
+  }
+}
+
+class RejectedCommandExitModel implements UnixProcessTreeAdapter {
+  readonly signals: NodeJS.Signals[] = [];
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    return {
+      child: fakeChild(64_064),
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise,
+      signalOwnedTree: (force, onDispatched) => {
+        this.signals.push(force ? "SIGKILL" : "SIGTERM");
+        if (force) {
+          onDispatched?.();
+          this.commandExit.reject(new Error("command exit observer rejected"));
+          this.guardianExit.resolve({ code: null, signal: "SIGKILL" });
+        }
+        return "signaled";
+      },
+      ownedGroupExists: () => false,
+    };
+  }
+}
+
 class ForcedCleanupModel implements UnixProcessTreeAdapter {
   readonly signals: NodeJS.Signals[] = [];
   groupPresent = true;
@@ -223,13 +453,14 @@ class ForcedCleanupModel implements UnixProcessTreeAdapter {
         const signal = force ? "SIGKILL" : "SIGTERM";
         this.signals.push(signal);
         if (force) {
-          onDispatched?.();
-          this.guardianExit.resolve({ code: null, signal: "SIGKILL" });
-          this.commandExit.resolve({
-            code: null,
-            signal: null,
-            error: new Error("guardian exited before command IPC"),
-          });
+          setTimeout(() => {
+            this.guardianExit.resolve({ code: null, signal: "SIGKILL" });
+            this.commandExit.resolve({
+              code: null,
+              signal: null,
+              error: new Error("guardian exited before command IPC"),
+            });
+          }, 0);
         }
         return "signaled";
       },
@@ -285,10 +516,15 @@ function fakeChild(pid: number): ChildProcess {
   }) as ChildProcess;
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function settled(promise: Promise<void>): Promise<void | unknown> {
+  return promise.then(() => undefined, (error: unknown) => error);
 }
 
 async function fixtureDirectory(): Promise<string> {

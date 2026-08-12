@@ -27,6 +27,7 @@ export interface RunDevDependencies {
   viteCommand?: DevCommandInvocation;
   readyTimeoutMs?: number;
   buildApplicationPackage?: (options: BuildApplicationPackageOptions) => Promise<BuildApplicationPackageResult>;
+  spawnOwnedProcess?: typeof spawnOwnedProcess;
   windowsAdapter?: WindowsProcessTreeAdapter;
 }
 
@@ -52,10 +53,12 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
   ]);
   let server: OwnedProcess | undefined;
   let vite: OwnedProcess | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => cleanupPromise ??= terminateDevProcesses(vite, server);
+  const spawnProcess = dependencies.spawnOwnedProcess ?? spawnOwnedProcess;
   const abortController = new AbortController();
   const abort = () => {
     abortController.abort();
-    void Promise.allSettled([vite?.terminate(), server?.terminate()].filter((value): value is Promise<void> => value !== undefined));
   };
   const onExternalAbort = () => abort();
   options.signal.addEventListener("abort", onExternalAbort, { once: true });
@@ -69,7 +72,7 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
     if (!await isFile(serverLauncher)) {
       throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable. Reinstall localapp.");
     }
-    server = spawnOwnedProcess(process.execPath, [
+    server = spawnProcess(process.execPath, [
       serverLauncher,
       "start",
       "--data-dir", dataDir,
@@ -123,7 +126,7 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
       "--port", String(appServerPort),
       "--strictPort",
     ];
-    vite = spawnOwnedProcess(configuredVite.command, viteArgs, {
+    vite = spawnProcess(configuredVite.command, viteArgs, {
       cwd: projectDir,
       env: { ...process.env, LOCALAPP_DEV_API_KEY: credentials.apiKey },
       stdio: "ignore",
@@ -134,13 +137,17 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
     options.io.stdout(`Local Server:     ${ready.listenUrl}\n`);
     options.io.stdout(`Server data:      ${dataDir}\n`);
     const outcome = await firstOutcome(server, vite, abortController.signal);
-    await Promise.all([vite.terminate(), server.terminate()]);
+    await cleanup();
     if (outcome.kind === "abort") return 0;
     if (outcome.kind === "vite" && outcome.code === 0) return 0;
     options.io.stderr(`${outcome.kind === "server" ? "Local Server" : "Vite"} exited unexpectedly.\n`);
     return 1;
   } catch (error) {
-    await Promise.allSettled([vite?.terminate(), server?.terminate()].filter((value): value is Promise<void> => value !== undefined));
+    const cleanupError = await cleanup().then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    if (cleanupError !== undefined) throw safeCleanupFailure(cleanupError);
     if (abortController.signal.aborted) return 0;
     if (error instanceof Error && "code" in error) throw error;
     throw lifecycleError("local_development_failed", safeFailureMessage(error));
@@ -149,6 +156,37 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
     process.off("SIGINT", abort);
     process.off("SIGTERM", abort);
   }
+}
+
+async function terminateDevProcesses(vite: OwnedProcess | undefined, server: OwnedProcess | undefined): Promise<void> {
+  const results = await Promise.allSettled(
+    [vite, server].filter((process): process is OwnedProcess => process !== undefined).map((process) => process.terminate()),
+  );
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason as unknown);
+  if (failures.length === 0) return;
+  if (failures.some((failure) => isErrorCode(failure, "owned_process_tree_exit_unconfirmed"))) {
+    throw lifecycleError(
+      "owned_process_tree_exit_unconfirmed",
+      "Local development could not confirm that all owned process trees exited",
+    );
+  }
+  throw lifecycleError("local_development_cleanup_failed", "Local development could not clean up all owned process trees");
+}
+
+function safeCleanupFailure(error: unknown): Error {
+  if (isErrorCode(error, "owned_process_tree_exit_unconfirmed")) {
+    return lifecycleError(
+      "owned_process_tree_exit_unconfirmed",
+      "Local development could not confirm that all owned process trees exited",
+    );
+  }
+  return lifecycleError("local_development_cleanup_failed", "Local development could not clean up all owned process trees");
+}
+
+function isErrorCode(value: unknown, code: string): boolean {
+  return value instanceof Error && "code" in value && value.code === code;
 }
 
 export async function writeDevConfig(options: WriteDevConfigOptions): Promise<void> {

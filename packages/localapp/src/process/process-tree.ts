@@ -18,10 +18,7 @@ export interface UnixOwnedProcessHandle {
   readonly child: ChildProcess;
   readonly commandExited: Promise<OwnedProcessExit>;
   readonly guardianExited: Promise<OwnedProcessExit>;
-  signalOwnedTree(
-    force: boolean,
-    onDispatched?: () => void,
-  ): "signaled" | "ownership-lost" | Promise<"signaled" | "ownership-lost">;
+  signalOwnedTree(force: boolean): "signaled" | "ownership-lost" | Promise<"signaled" | "ownership-lost">;
   /** Read-only post-force liveness observation. Implementations must never signal from this method. */
   ownedGroupExists(): boolean | Promise<boolean>;
   dispose?(): void | Promise<void>;
@@ -105,7 +102,7 @@ function ownedUnixProcess(handle: UnixOwnedProcessHandle, options: SpawnOwnedPro
     terminate() {
       termination ??= terminateUnixOwnedTree({
         ...handle,
-        onForceDispatched: () => settleOnce({ code: null, signal: "SIGKILL" }),
+        onForceConfirmed: () => settleOnce({ code: null, signal: "SIGKILL" }),
         gracefulTimeoutMs: options.gracefulTimeoutMs ?? DEFAULT_GRACEFUL_TIMEOUT_MS,
         forceTimeoutMs: options.forceTimeoutMs ?? DEFAULT_FORCE_TIMEOUT_MS,
         pid,
@@ -139,35 +136,39 @@ function ownedWindowsProcess(handle: WindowsOwnedProcessHandle, options: SpawnOw
 }
 
 export async function terminateUnixOwnedTree(options: UnixOwnedProcessHandle & {
-  onForceDispatched(): void;
+  onForceConfirmed(): void;
   gracefulTimeoutMs: number;
   forceTimeoutMs: number;
   pid: number;
 }): Promise<void> {
+  let primaryError: unknown;
   try {
     await requestOwnedSignal(options, false, options.forceTimeoutMs);
     await gracePeriod(options.gracefulTimeoutMs);
-    await requestOwnedSignal(options, true, options.forceTimeoutMs, options.onForceDispatched);
-    if (!await waitUntil(() => options.ownedGroupExists(), false, options.forceTimeoutMs)) {
-      throw new OwnedProcessTreeExitUnconfirmedError(options.pid);
-    }
-    await Promise.race([
-      options.guardianExited,
-      timeout(options.forceTimeoutMs, `Owned process guardian ${options.pid} was not reaped`),
-    ]);
-  } finally {
-    await options.dispose?.();
+    await requestOwnedSignal(options, true, options.forceTimeoutMs);
+    options.onForceConfirmed();
+    await confirmUnixGroupExit(options, Date.now() + options.forceTimeoutMs);
+  } catch (error) {
+    primaryError = error;
   }
+
+  const reapError = await boundedGuardianReap(options.guardianExited, options.pid, options.forceTimeoutMs);
+  try {
+    await options.dispose?.();
+  } catch (error) {
+    if (primaryError === undefined && reapError === undefined) primaryError = error;
+  }
+  if (primaryError !== undefined) throw primaryError;
+  if (reapError !== undefined) throw reapError;
 }
 
 async function requestOwnedSignal(
   options: Pick<UnixOwnedProcessHandle, "signalOwnedTree"> & { pid: number },
   force: boolean,
   timeoutMs: number,
-  onDispatched?: () => void,
 ): Promise<void> {
   const result = await Promise.race([
-    Promise.resolve(options.signalOwnedTree(force, onDispatched)),
+    Promise.resolve(options.signalOwnedTree(force)),
     timeout(timeoutMs, `Owned process guardian ${options.pid} did not accept ${force ? "SIGKILL" : "SIGTERM"}`),
   ]);
   if (result === "ownership-lost") {
@@ -245,19 +246,15 @@ function superviseUnixGuardian(
     child: guardian,
     commandExited,
     guardianExited,
-    signalOwnedTree(force, onDispatched) {
+    signalOwnedTree(force) {
       const id = ++requestId;
-      return new Promise((resolve) => {
+      const response = new Promise<"signaled" | "ownership-lost">((resolve) => {
         signalRequests.set(id, resolve);
-        void sendGuardianMessage(
-          guardian,
-          { type: "signal", id, force },
-          force ? onDispatched : undefined,
-        ).catch(() => {
-          if (!signalRequests.delete(id)) return;
-          resolve("ownership-lost");
-        });
       });
+      return confirmGuardianSignalDispatch(
+        sendGuardianMessage(guardian, { type: "signal", id, force }),
+        response,
+      ).finally(() => { signalRequests.delete(id); });
     },
     ownedGroupExists() {
       return unixGroupExists(rootPid);
@@ -267,6 +264,18 @@ function superviseUnixGuardian(
       loseOwnership();
     },
   };
+}
+
+export async function confirmGuardianSignalDispatch(
+  sendCompleted: Promise<void>,
+  response: Promise<"signaled" | "ownership-lost">,
+): Promise<"signaled" | "ownership-lost"> {
+  try {
+    const [, result] = await Promise.all([sendCompleted, response]);
+    return result;
+  } catch {
+    return "ownership-lost";
+  }
 }
 
 function guardianStdio(stdio: StdioOptions | undefined): StdioOptions {
@@ -282,11 +291,7 @@ function guardianStdio(stdio: StdioOptions | undefined): StdioOptions {
   throw new Error("Unix process guardian received unsupported stdio configuration");
 }
 
-function sendGuardianMessage(
-  guardian: ChildProcess,
-  message: Record<string, unknown>,
-  onDispatched?: () => void,
-): Promise<void> {
+function sendGuardianMessage(guardian: ChildProcess, message: Record<string, unknown>): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!guardian.connected) {
       reject(new Error("Owned process guardian IPC is unavailable"));
@@ -294,7 +299,6 @@ function sendGuardianMessage(
     }
     try {
       guardian.send(message, (error) => error ? reject(error) : resolve());
-      onDispatched?.();
     } catch (error) {
       reject(error);
     }
@@ -346,6 +350,46 @@ export class OwnedProcessTreeExitUnconfirmedError extends Error {
   }
 }
 
+async function confirmUnixGroupExit(
+  options: Pick<UnixOwnedProcessHandle, "ownedGroupExists"> & { pid: number },
+  deadline: number,
+): Promise<void> {
+  const failure = () => new OwnedProcessTreeExitUnconfirmedError(options.pid);
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw failure();
+    let exists: boolean;
+    try {
+      exists = await Promise.race([
+        Promise.resolve().then(() => options.ownedGroupExists()),
+        rejectAtDeadline(remaining, failure),
+      ]);
+    } catch {
+      throw failure();
+    }
+    if (!exists) return;
+    const pause = Math.min(20, deadline - Date.now());
+    if (pause <= 0) throw failure();
+    await delay(pause);
+  }
+}
+
+async function boundedGuardianReap(
+  guardianExited: Promise<OwnedProcessExit>,
+  pid: number,
+  timeoutMs: number,
+): Promise<unknown | undefined> {
+  try {
+    await Promise.race([
+      guardianExited,
+      timeout(timeoutMs, `Owned process guardian ${pid} was not reaped`),
+    ]);
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 async function terminateWindowsOwnedTree(options: {
   exited: Promise<OwnedProcessExit>;
   treeExists(): boolean | Promise<boolean>;
@@ -390,6 +434,20 @@ async function waitUntil(
 function timeout(timeoutMs: number, message: string): Promise<never> {
   return new Promise((_, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timer.unref?.();
+  });
+}
+
+function rejectAtDeadline(timeoutMs: number, createError: () => Error): Promise<never> {
+  return new Promise((_, reject) => {
+    const timer = setTimeout(() => reject(createError()), timeoutMs);
+    timer.unref?.();
+  });
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
     timer.unref?.();
   });
 }

@@ -138,6 +138,52 @@ describe("canonical local development", () => {
     await expect(waitForProcessExit(pid)).resolves.toBe(true);
   });
 
+  it("fails closed when abort cleanup cannot confirm an owned process tree exited", async () => {
+    // Break caught: runDev catches terminate rejection with allSettled and returns abort success even though process ownership is unresolved.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = path.join(fixtureRoot, "cleanup-failure-server.mjs");
+    const pidPath = path.join(fixtureRoot, "cleanup-failure-server.pid");
+    await fs.writeFile(serverLauncher, `
+      import fs from "node:fs";
+      fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `);
+    const credentials = await readOrCreateDevCredentials(projectDir);
+    const controller = new AbortController();
+    const output = captureIo();
+    const cleanupFailure = Object.assign(new Error(`cleanup failed ${credentials.apiKey}`), {
+      code: "owned_process_tree_exit_unconfirmed",
+    });
+    const running = runDev({ projectDir, signal: controller.signal, io: output.io }, {
+      serverLauncher,
+      readyTimeoutMs: 5_000,
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      spawnOwnedProcess: (...args: Parameters<typeof spawnOwnedProcess>) => {
+        const owned = spawnOwnedProcess(...args);
+        let termination: Promise<void> | undefined;
+        return {
+          ...owned,
+          terminate() {
+            termination ??= owned.terminate().then(() => { throw cleanupFailure; });
+            return termination;
+          },
+        };
+      },
+    });
+    const pid = Number(await waitForFile(pidPath));
+
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({
+      code: "owned_process_tree_exit_unconfirmed",
+      message: expect.not.stringContaining(credentials.apiKey),
+    });
+    await expect(waitForProcessExit(pid)).resolves.toBe(true);
+    expect(output.stdout + output.stderr).not.toContain(credentials.apiKey);
+  });
+
   it("builds and installs a unique package before loopback Vite, then abort cleans both trees without leaking credentials", async () => {
     // Break caught: starting Vite before canonical install serves stale APIs, and leader-only abort cleanup leaves Server/Vite descendants alive.
     const projectDir = await fixtureProject();
