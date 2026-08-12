@@ -22,6 +22,7 @@ export interface DeviceNotificationDisplaySettings {
 export interface DeviceNotificationPublicSource {
   id: string;
   kind: DeviceNotificationSourceKind;
+  peerId?: string;
   sourceLabel: string;
   accountLabel: string;
   desiredEnabled: boolean;
@@ -368,6 +369,7 @@ export class DeviceNotificationSourceStore {
     return {
       id: row.id,
       kind: row.kind,
+      ...(row.kind === "peer" && row.peerId !== null ? { peerId: row.peerId } : {}),
       sourceLabel: row.sourceLabel,
       accountLabel: row.accountLabel,
       desiredEnabled: row.desiredEnabled,

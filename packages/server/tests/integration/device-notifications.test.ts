@@ -400,6 +400,7 @@ describe("device notification source authority", () => {
     });
     expect(enabled.statusCode).toBe(200);
     const sourceId = enabled.json().data.source.id as string;
+    expect(enabled.json().data.source.peerId).toBe(peerId);
     expect(enabled.body).not.toContain(getTestApiKey());
     const sourceRow = getDb().exec(`SELECT encrypted_credential FROM device_notification_sources WHERE id = '${sourceId}'`)[0]?.values[0];
     expect(sourceRow).toEqual([[null]][0]);
