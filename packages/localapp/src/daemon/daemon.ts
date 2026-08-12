@@ -107,11 +107,13 @@ export class LocalAppDaemon {
   private stopPromise: Promise<void> | undefined;
   private restartPromise: Promise<void> | undefined;
   private stoppedResolve!: () => void;
-  readonly stopped = new Promise<void>((resolve) => { this.stoppedResolve = resolve; });
+  private stoppedReject!: (error: unknown) => void;
+  readonly stopped = new Promise<void>((resolve, reject) => { this.stoppedResolve = resolve; this.stoppedReject = reject; });
 
   constructor(options: LocalAppDaemonOptions) {
     this.options = options;
     this.bootId = options.bootId ?? crypto.randomBytes(24).toString("base64url");
+    void this.stopped.catch(() => undefined);
   }
 
   async start(): Promise<void> {
@@ -183,7 +185,7 @@ export class LocalAppDaemon {
       this.listenUrl = ready.listenUrl;
       this.serverStatus = "ready";
       void server.exited.then(() => {
-        if (this.server === server && this.stopPromise === undefined) {
+        if (this.server === server && this.stopPromise === undefined && this.serverStatus !== "stopping") {
           this.serverStatus = "error";
           void this.stop().catch(() => undefined);
         }
@@ -198,12 +200,12 @@ export class LocalAppDaemon {
 
   private async stopServer(): Promise<void> {
     const server = this.server;
-    this.server = undefined;
-    this.listenUrl = undefined;
-    this.deviceControlToken = undefined;
     if (server === undefined) return;
     this.serverStatus = "stopping";
     await server.terminate();
+    if (this.server === server) this.server = undefined;
+    this.listenUrl = undefined;
+    this.deviceControlToken = undefined;
     this.serverStatus = "stopped";
   }
 
@@ -213,11 +215,17 @@ export class LocalAppDaemon {
     try { await this.ipc?.close(); } catch (error) { failure = error; }
     this.ipc = undefined;
     try { await this.stopServer(); } catch (error) { failure ??= error; }
-    try { await this.lock?.release(); } catch (error) { failure ??= error; }
+    if (failure === undefined) {
+      try { await this.lock?.release(); } catch (error) { failure = error; }
+    }
+    if (failure !== undefined) {
+      this.serverStatus = "error";
+      this.stoppedReject(failure);
+      throw failure;
+    }
     this.lock = undefined;
     this.serverStatus = "stopped";
     this.stoppedResolve();
-    if (failure !== undefined) throw failure;
   }
 }
 
