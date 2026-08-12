@@ -97,11 +97,21 @@ function withLogs(manager: Omit<ServiceManager, "logs">, layout: RuntimeLayout):
       if (!Number.isSafeInteger(lines) || lines < 1 || lines > 10_000) {
         throw lifecycleError("user_service_logs_invalid", "The requested log line count is invalid");
       }
-      const value = await fs.readFile(layout.daemonLogPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return "";
+      const handle = await fs.open(layout.daemonLogPath, "r").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
         throw error;
       });
-      return value.split(/\r?\n/).slice(-(lines + 1), -1).join("\n");
+      if (handle === undefined) return "";
+      try {
+        const stat = await handle.stat();
+        const cap = 1024 * 1024;
+        const size = Math.min(stat.size, cap);
+        const buffer = Buffer.alloc(size);
+        await handle.read(buffer, 0, size, Math.max(0, stat.size - size));
+        const text = buffer.toString("utf8");
+        const tail = text.split(/\r?\n/).slice(-(lines + 1), -1).join("\n");
+        return stat.size > cap ? `[truncated to ${cap} bytes]\n${tail}` : tail;
+      } finally { await handle.close(); }
     },
   };
 }

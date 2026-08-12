@@ -30,8 +30,8 @@ function requestIpc(endpoint: string, request: DaemonControlRequest, timeoutMs: 
     };
     const timer = setTimeout(() => finish(lifecycleError("ipc_timeout", "The LocalApp daemon control request timed out")), timeoutMs);
     timer.unref?.();
-    socket.once("error", () => finish(lifecycleError("ipc_unreachable", "The LocalApp daemon control endpoint is unavailable")));
-    socket.once("connect", () => socket.write(encodeControlRequest(request)));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish(transportError(error)));
+    socket.once("connect", () => socket.end(encodeControlRequest(request)));
     socket.on("data", (chunk: Buffer) => {
       if (settled) return;
       if (bytes.byteLength + chunk.byteLength > CONTROL_FRAME_LIMIT_BYTES) return finish(lifecycleError("ipc_response_invalid", "The LocalApp daemon response is too large"));
@@ -45,4 +45,9 @@ function requestIpc(endpoint: string, request: DaemonControlRequest, timeoutMs: 
       catch { finish(lifecycleError("ipc_response_invalid", "The LocalApp daemon response is invalid")); }
     });
   });
+}
+
+function transportError(error: NodeJS.ErrnoException): Error {
+  if (error.code === "ENOENT" || error.code === "ECONNREFUSED") return lifecycleError("ipc_unreachable", "The LocalApp daemon control endpoint is unavailable");
+  return lifecycleError("ipc_transport_failed", "The LocalApp daemon control transport failed");
 }

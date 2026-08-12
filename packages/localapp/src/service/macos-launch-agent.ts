@@ -41,10 +41,15 @@ export function createMacosLaunchAgent(options: PlatformServiceOptions): Omit<Se
       return { mode: "service", installed };
     },
     async start(): Promise<void> {
+      const loaded = await options.run({ command: "/bin/launchctl", args: ["print", target] });
+      if (loaded.code !== 0) {
+        const result = await options.run({ command: "/bin/launchctl", args: ["bootstrap", domain, registrationPath] });
+        if (result.code !== 0) throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent could not be registered");
+      }
       await runServiceCommand(options.run, { command: "/bin/launchctl", args: ["kickstart", "-k", target] });
     },
     async stop(): Promise<void> {
-      const result = await options.run({ command: "/bin/launchctl", args: ["kill", "SIGTERM", target] });
+      const result = await options.run({ command: "/bin/launchctl", args: ["bootout", domain, registrationPath] });
       if (result.code !== 0 && !/could not find service|no such process/i.test(result.stderr)) {
         throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent could not be stopped");
       }

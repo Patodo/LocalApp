@@ -53,6 +53,33 @@ describe("private daemon IPC", () => {
     await expect(createIpcClient({ endpoint, timeoutMs: 500 }).request({ type: "status" }))
       .resolves.toMatchObject({ ok: false, code: "IPC_TIMEOUT" });
   });
+
+  it.skipIf(process.platform === "win32")("rejects a duplicate frame split across writes before exactly-once dispatch", async () => {
+    const root = await fixtureRoot();
+    const endpoint = path.join(root, "control.sock");
+    let calls = 0;
+    const server = await createIpcServer({ endpoint, async handle() {
+      calls += 1;
+      return { ok: true, type: "stop" };
+    } });
+    servers.push(server);
+
+    const response = await writeSplit(endpoint, ['{"type":"status"}\n', '{"type":"stop"}\n']);
+    expect(response).toMatchObject({ ok: false, code: "IPC_MULTIPLE_FRAMES" });
+    expect(calls).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("bounds a peer that never half-closes and lets close settle", async () => {
+    const root = await fixtureRoot();
+    const endpoint = path.join(root, "control.sock");
+    const server = await createIpcServer({ endpoint, timeoutMs: 50, async handle() { return { ok: true, type: "stop" }; } });
+    servers.push(server);
+    const peer = net.createConnection(endpoint);
+    await new Promise<void>((resolve, reject) => { peer.once("connect", resolve); peer.once("error", reject); });
+    peer.write('{"type":"status"}\n');
+    await expect(server.close()).resolves.toBeUndefined();
+    peer.destroy();
+  });
 });
 
 async function fixtureRoot(): Promise<string> {
@@ -66,7 +93,20 @@ async function writeRaw(endpoint: string, data: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const socket = net.createConnection(endpoint);
     socket.once("error", reject);
-    socket.once("connect", () => { socket.resume(); socket.write(data); });
+    socket.once("connect", () => { socket.resume(); socket.end(data); });
     socket.once("close", () => resolve());
+  });
+}
+
+async function writeSplit(endpoint: string, frames: string[]): Promise<unknown> {
+  return await new Promise((resolve, reject) => {
+    let response = Buffer.alloc(0);
+    const socket = net.createConnection(endpoint);
+    socket.once("error", reject);
+    socket.on("data", (chunk: Buffer) => { response = Buffer.concat([response, chunk]); });
+    socket.once("connect", () => { socket.write(frames[0]!); setTimeout(() => socket.end(frames[1]!), 5); });
+    socket.once("end", () => {
+      try { resolve(JSON.parse(response.toString("utf8").trim())); } catch (error) { reject(error); }
+    });
   });
 }

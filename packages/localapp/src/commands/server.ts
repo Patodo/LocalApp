@@ -7,6 +7,7 @@ import { createIpcClient, type IpcClient } from "../daemon/ipc-client.js";
 import { publishRelease, readCurrentRelease, verifyReleaseArtifact, type CurrentRelease } from "../daemon/release-store.js";
 import { createRuntimeLayout, type RuntimeLayout } from "../daemon/runtime-layout.js";
 import { createServiceManager, type ServiceManager } from "../service/service-manager.js";
+import { spawnOwnedProcess } from "../process/process-tree.js";
 
 export type ServerCommandAction = "start" | "stop" | "restart" | "status" | "logs" | "uninstall";
 export interface RunServerCommandOptions { action: ServerCommandAction; }
@@ -30,7 +31,8 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
     await (dependencies.verifyReleaseArtifact ?? verifyReleaseArtifact)(artifactDirectory);
     const release = await (dependencies.publishRelease ?? publishRelease)({ sourceDirectory: artifactDirectory, layout });
     const manager = service();
-    await manager.install();
+    const installed = await manager.install();
+    if (installed.mode === "foreground") return { action: "start", mode: "foreground", reason: installed.reason };
     try {
       const status = await readyStatus(ipc(), health);
       return { action: "start", release: publicRelease(release), status: status.data };
@@ -53,9 +55,13 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
     await removeTransientRuntimeFiles(layout);
     return { action: "uninstall", stopped };
   }
-  if (options.action === "stop") return { action: "stop", stopped: await stopViaIpcOrService(ipc(), service()) };
+  if (options.action === "stop") {
+    const stopped = await stopViaIpcOrService(ipc(), service());
+    if (stopped.via === "ipc") await waitForStopped(layout, ipc());
+    return { action: "stop", stopped };
+  }
   const response = await requestControl(ipc(), { type: "restart" }, service(), "restart");
-  if (response.via === "ipc") await readyStatus(ipc(), health);
+  await waitForReady(ipc(), health);
   return { action: "restart", ...response };
 }
 
@@ -67,14 +73,13 @@ export async function runServerForeground(options: { dataDir?: string; host?: st
   const manifest = await verifyReleaseArtifact(artifact);
   if (typeof manifest.serverEntrypoint !== "string") throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable");
   const entrypoint = path.join(artifact, ...manifest.serverEntrypoint.split("/"));
-  const child = spawn(process.execPath, [entrypoint, "start", "--data-dir", options.dataDir ?? layout.dataDir,
-    "--host", options.host ?? "127.0.0.1", "--port", String(options.port ?? 0)], { stdio: "inherit", shell: false, windowsHide: true });
+  const child = spawnOwnedProcess(process.execPath, [entrypoint, "start", "--data-dir", options.dataDir ?? layout.dataDir,
+    "--host", options.host ?? "127.0.0.1", "--port", String(options.port ?? 0)], { stdio: "inherit" });
   return await new Promise<number>((resolve, reject) => {
-    const stop = (signal: NodeJS.Signals) => child.kill(signal);
-    process.once("SIGINT", () => stop("SIGINT"));
-    process.once("SIGTERM", () => stop("SIGTERM"));
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? 1));
+    const stop = () => { void child.terminate().catch(reject); };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    child.exited.then((exit) => exit.error ? reject(exit.error) : resolve(exit.code ?? 1));
   });
 }
 
@@ -93,12 +98,28 @@ async function waitForReady(ipc: IpcClient, health: (listenUrl: string) => Promi
 async function readyStatus(ipc: IpcClient, health: (listenUrl: string) => Promise<void>) {
   let response;
   try { response = await ipc.request({ type: "status" }); }
-  catch { throw lifecycleError("daemon_unreachable", "The LocalApp daemon is unreachable"); }
+  catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ipc_unreachable") throw lifecycleError("daemon_unreachable", "The LocalApp daemon is unreachable");
+    throw error;
+  }
   if (!response.ok || response.type !== "status" || response.data.server.status !== "ready" || response.data.server.listenUrl === undefined) {
     throw lifecycleError("daemon_unhealthy", "The LocalApp daemon has not proven Server health");
   }
   await health(response.data.server.listenUrl);
   return response;
+}
+
+async function waitForStopped(layout: RuntimeLayout, ipc: IpcClient): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const lockMissing = await fs.lstat(layout.lockPath).then(() => false, (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+    try { await ipc.request({ type: "status" }); } catch (error) {
+      if (lockMissing && typeof error === "object" && error !== null && "code" in error && error.code === "ipc_unreachable") return;
+      if (typeof error === "object" && error !== null && "code" in error && error.code !== "ipc_unreachable") throw error;
+    }
+    await delay(100);
+  }
+  throw lifecycleError("daemon_stop_incomplete", "The LocalApp daemon did not release ownership after stop");
 }
 
 async function stopViaIpcOrService(ipc: IpcClient, service: ServiceManager): Promise<{ via: "ipc" | "service" }> {
@@ -160,13 +181,13 @@ function publicRelease(release: CurrentRelease) {
 }
 
 async function removeTransientRuntimeFiles(layout: RuntimeLayout): Promise<void> {
-  for (const target of [layout.lockPath, layout.controlEndpoint]) {
+  // A stopped daemon removes only the lock/socket inode it owns. Uninstall has
+  // no boot identity for a concurrent replacement, so it deliberately leaves
+  // any remaining transient node in place rather than unlinking unproven state.
+  await Promise.all([layout.lockPath, layout.controlEndpoint].map(async (target) => {
     const stat = await fs.lstat(target).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
-    if (stat === undefined) continue;
-    if (target === layout.lockPath && (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== "win32" && (stat.mode & 0o077) !== 0))) continue;
-    if (target === layout.controlEndpoint && (!stat.isSocket() || stat.isSymbolicLink())) continue;
-    await fs.unlink(target);
-  }
+    if (stat !== undefined) throw lifecycleError("daemon_ownership_unproven", "LocalApp refuses to remove an unproven daemon ownership artifact");
+  }));
 }
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }

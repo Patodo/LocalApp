@@ -106,6 +106,8 @@ export class LocalAppDaemon {
   private deviceControlToken: string | undefined;
   private stopPromise: Promise<void> | undefined;
   private restartPromise: Promise<void> | undefined;
+  private sealed = false;
+  private unexpectedExit = false;
   private stoppedResolve!: () => void;
   private stoppedReject!: (error: unknown) => void;
   readonly stopped = new Promise<void>((resolve, reject) => { this.stoppedResolve = resolve; this.stoppedReject = reject; });
@@ -126,27 +128,32 @@ export class LocalAppDaemon {
         reclaimStaleEndpoint: async () => this.lock?.reclaimed === true,
         verifyWindowsCurrentUser: this.options.verifyWindowsCurrentUser,
         handle: async (request) => this.handle(request.type),
+        afterResponse: async (request, response) => {
+          if (request.type === "stop" && response.ok && response.type === "stop") await this.stop();
+        },
       });
     } catch (error) {
-      await this.cleanup().catch(() => undefined);
+      try { await this.cleanup(); } catch (cleanupError) { throw cleanupError; }
       throw error;
     }
   }
 
   async stop(): Promise<void> {
     if (this.stopPromise === undefined) {
+      this.sealed = true;
       // Cleanup awaits unref'd process-tree deadlines. Keep the daemon alive until
       // it has released its lock and endpoint; awaiting a Promise alone does not.
       const hold = setInterval(() => undefined, 2 ** 30);
-      this.stopPromise = this.cleanup().finally(() => clearInterval(hold));
+      this.stopPromise = (async () => { await this.restartPromise?.catch(() => undefined); await this.cleanup(); })().finally(() => clearInterval(hold));
     }
     return this.stopPromise;
   }
 
   async restart(): Promise<void> {
     this.restartPromise ??= (async () => {
-      if (this.stopPromise !== undefined) throw lifecycleError("daemon_stopping", "The LocalApp daemon is stopping");
+      if (this.sealed) throw lifecycleError("daemon_stopping", "The LocalApp daemon is stopping");
       await this.stopServer();
+      if (this.sealed) throw lifecycleError("daemon_stopping", "The LocalApp daemon is stopping");
       await this.startServer();
     })().finally(() => { this.restartPromise = undefined; });
     return this.restartPromise;
@@ -160,7 +167,6 @@ export class LocalAppDaemon {
       },
     };
     if (type === "restart") { await this.restart(); return { ok: true, type }; }
-    void this.stop().catch(() => undefined);
     return { ok: true, type };
   }
 
@@ -187,6 +193,7 @@ export class LocalAppDaemon {
       void server.exited.then(() => {
         if (this.server === server && this.stopPromise === undefined && this.serverStatus !== "stopping") {
           this.serverStatus = "error";
+          this.unexpectedExit = true;
           void this.stop().catch(() => undefined);
         }
       }, () => undefined);
@@ -225,7 +232,8 @@ export class LocalAppDaemon {
     }
     this.lock = undefined;
     this.serverStatus = "stopped";
-    this.stoppedResolve();
+    if (this.unexpectedExit) this.stoppedReject(lifecycleError("server_exited", "The LocalApp Server exited unexpectedly"));
+    else this.stoppedResolve();
   }
 }
 
