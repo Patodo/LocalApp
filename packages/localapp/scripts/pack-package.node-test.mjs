@@ -14,9 +14,9 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   await fs.mkdir(testRoot, { recursive: true });
   t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
 
-  const packed = await run("pnpm", ["pack", "--pack-destination", testRoot], packageDirectory);
+  const packed = await run(process.execPath, [path.join(projectDirectory, "scripts/package-localapp.mjs")], projectDirectory);
   assert.equal(packed.code, 0, packed.stderr);
-  const tarball = path.join(testRoot, (await fs.readdir(testRoot)).find((file) => file.endsWith(".tgz")) ?? "missing.tgz");
+  const tarball = path.join(projectDirectory, "tmp/localapp-package/localapp-0.1.0.tgz");
   const extracted = path.join(testRoot, "extracted");
   await fs.mkdir(extracted, { recursive: true });
   const unpacked = await run("tar", ["-xzf", tarball, "-C", extracted], projectDirectory);
@@ -27,6 +27,8 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.equal((await fs.stat(binary)).isFile(), true);
   assert.equal((await fs.stat(path.join(extracted, "package/.localapp-artifact.json"))).isFile(), true);
   assert.deepEqual(manifest.dependencies ?? {}, {});
+  assert.deepEqual(manifest.devDependencies ?? {}, {});
+  assert.deepEqual(manifest.scripts ?? {}, {});
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
   assert.equal((await fs.stat(path.join(extracted, "package/runtime/server/bin/server.mjs"))).isFile(), true);
   const nativeRoot = path.join(extracted, "package/runtime/native");
