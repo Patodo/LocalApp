@@ -49,10 +49,12 @@ describe("DeliveryStore", () => {
     expect((await store.retryPending("local"))?.nativeId).toBe(pending.nativeId);
 
     await store.commitShown("local", 1);
+    const committedBytes = await fs.readFile(statePath);
     await store.commitShown("local", 1);
     expect(await store.readSource("local")).toMatchObject({ cursor: 1, pending: null });
     expect(await fs.readFile(statePath, "utf8")).not.toContain(pending.ticket);
     expect(await store.preparePending("local", notification())).toBeNull();
+    expect(await fs.readFile(statePath)).toEqual(committedBytes);
   });
 
   it("rejects gaps, unsafe delivery serializers, and corrupt state without resetting", async () => {
@@ -69,6 +71,8 @@ describe("DeliveryStore", () => {
     const { statePath } = await fixture();
     await fs.mkdir(path.dirname(statePath), { recursive: true, mode: 0o700 });
     await fs.writeFile(statePath, '{"version":1,"version":1,"sources":[]}\n', { mode: 0o600 });
+    await expect(new DeliveryStore({ statePath }).readSource("local")).rejects.toThrow(/state/i);
+    await fs.writeFile(statePath, '{"version":1,\u00a0"sources":[]}\n', { mode: 0o600 });
     await expect(new DeliveryStore({ statePath }).readSource("local")).rejects.toThrow(/state/i);
   });
 

@@ -56,6 +56,7 @@ interface SourceState {
   tickets: TicketRecord[];
 }
 interface StateDocument { version: 1; sources: SourceState[] }
+interface Unchanged<T> { readonly unchanged: true; readonly value: T }
 
 const EMPTY_STATE: StateDocument = { version: 1, sources: [] };
 const SOURCE_ID = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,127})$/;
@@ -131,7 +132,7 @@ export class DeliveryStore {
         throw new Error("Notification source already has a pending delivery");
       }
       const duplicate = source.dedupe.find((item) => item.id === delivery.id || item.sequence === delivery.sequence);
-      if (duplicate?.id === delivery.id && duplicate.sequence === delivery.sequence) return null;
+      if (duplicate?.id === delivery.id && duplicate.sequence === delivery.sequence) return unchanged(null);
       if (duplicate !== undefined) throw new Error("Notification delivery identity conflicts with committed state");
       if (delivery.sequence !== source.cursor + 1) throw new Error("Notification delivery gap detected");
       const ticket = this.token();
@@ -170,7 +171,7 @@ export class DeliveryStore {
   async commitShown(sourceId: string, sequence: number): Promise<void> {
     await this.mutate((state) => {
       const source = pendingForCommit(state, sourceId, sequence);
-      if (source === null) return;
+      if (source === null) return unchanged(undefined);
       const pending = source.pending!;
       const ticket: TicketRecord = {
         hash: sha256(pending.ticket),
@@ -189,7 +190,7 @@ export class DeliveryStore {
   async commitInboxOnly(sourceId: string, sequence: number): Promise<void> {
     await this.mutate((state) => {
       const source = pendingForCommit(state, sourceId, sequence);
-      if (source === null) return;
+      if (source === null) return unchanged(undefined);
       commitPending(source);
       this.pruneState(state);
     });
@@ -240,11 +241,12 @@ export class DeliveryStore {
     await this.mutate((state) => this.pruneState(state));
   }
 
-  private async mutate<T>(operation: (state: StateDocument) => T): Promise<T> {
+  private async mutate<T>(operation: (state: StateDocument) => T | Unchanged<T>): Promise<T> {
     return this.serial(async () => {
       return this.withFileLock(async () => {
         const state = await this.read();
         const result = operation(state);
+        if (isUnchanged(result)) return result.value;
         await this.publish(validateState(state));
         return result;
       });
@@ -568,7 +570,7 @@ async function removeOwnedStaleTemps(parent: string, basename: string): Promise<
 /** Strict JSON subset parser that rejects duplicate object keys before schema validation. */
 function strictJsonParse(input: string): unknown {
   let index = 0;
-  const whitespace = () => { while (/\s/u.test(input[index] ?? "")) index += 1; };
+  const whitespace = () => { while (input[index] === " " || input[index] === "\t" || input[index] === "\r" || input[index] === "\n") index += 1; };
   const parseString = (): string => {
     if (input[index] !== '"') throw new SyntaxError("Invalid JSON");
     const start = index++;
@@ -737,3 +739,6 @@ async function unlinkOwned(target: string, identity: FileIdentity): Promise<bool
   await fs.unlink(target);
   return true;
 }
+
+function unchanged<T>(value: T): Unchanged<T> { return { unchanged: true, value }; }
+function isUnchanged<T>(value: T | Unchanged<T>): value is Unchanged<T> { return record(value) && value.unchanged === true && exactKeys(value, ["unchanged", "value"]); }
