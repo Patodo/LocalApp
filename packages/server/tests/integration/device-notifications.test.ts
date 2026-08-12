@@ -323,11 +323,21 @@ describe("device notification source authority", () => {
 
   it("keeps one stable peer source for a target account across equivalent verified peers", async () => {
     const { app, baseUrl } = await startServer();
+    const secondKeyResponse = await app.inject({
+      method: "POST",
+      url: "/api/keys",
+      headers: { "x-api-key": getTestApiKey(), "content-type": "application/json" },
+      payload: { userId: "localadmin" },
+    });
+    expect(secondKeyResponse.statusCode).toBe(200);
+    const secondKey = secondKeyResponse.json().data.key as string;
+    const peerOrigins = [baseUrl, baseUrl.replace("127.0.0.1", "localhost")];
+    const peerCredentials = [getTestApiKey(), secondKey];
     const peerIds: string[] = [];
-    for (const name of ["remote-one", "remote-two"]) {
+    for (const [index, name] of ["remote-one", "remote-two"].entries()) {
       const created = await app.inject({
         method: "POST", url: "/api/peers", headers: originHeaders(baseUrl),
-        payload: { name, baseUrl, apiKey: getTestApiKey(), acceptInsecureHttp: true },
+        payload: { name, baseUrl: peerOrigins[index], apiKey: peerCredentials[index], acceptInsecureHttp: true },
       });
       expect(created.statusCode).toBe(201);
       const peerId = created.json().data.id as string;
@@ -350,9 +360,67 @@ describe("device notification source authority", () => {
     });
     expect(second.statusCode).toBe(200);
     expect(second.json().data).toMatchObject({ generation: 2, source: { id: firstId, sourceLabel: "Remote two" } });
+    expect((await internalSnapshot(app)).json().data.sources).toEqual([
+      expect.objectContaining({
+        id: firstId,
+        kind: "peer",
+        sourceLabel: "Remote two",
+        sourceOrigin: peerOrigins[1],
+        credential: secondKey,
+      }),
+    ]);
+
+    getDb().run("UPDATE peers SET connection_version = connection_version + 1 WHERE id = ?", [peerIds[0]]);
     expect((await app.inject({
       method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() },
-    })).json().data.sources).toEqual([expect.objectContaining({ id: firstId, kind: "peer", sourceLabel: "Remote two" })]);
+    })).json().data).toMatchObject({
+      generation: 2,
+      sources: [expect.objectContaining({ id: firstId, desiredEnabled: true })],
+    });
+
+    getDb().run("UPDATE peers SET connection_version = connection_version + 1 WHERE id = ?", [peerIds[1]]);
+    expect((await app.inject({
+      method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() },
+    })).json().data).toMatchObject({
+      generation: 3,
+      sources: [expect.objectContaining({ id: firstId, desiredEnabled: false })],
+    });
+  });
+
+  it.each([
+    ["base_url", "UPDATE peers SET base_url = 'https://changed.invalid' WHERE id = ?"],
+    ["credential", "UPDATE peers SET credential = 'changed-ciphertext' WHERE id = ?"],
+    ["accept_insecure_http", "UPDATE peers SET accept_insecure_http = 0 WHERE id = ?"],
+    ["connection_version", "UPDATE peers SET connection_version = connection_version + 1 WHERE id = ?"],
+    ["verified_user_id", "UPDATE peers SET verified_user_id = NULL WHERE id = ?"],
+    ["verified_user_name", "UPDATE peers SET verified_user_name = NULL WHERE id = ?"],
+    ["verified_at", "UPDATE peers SET verified_at = NULL WHERE id = ?"],
+  ])("invalidates an enabled peer source when %s changes directly with null-safe comparison", async (_field, mutation) => {
+    const { app, baseUrl } = await startServer();
+    const created = await app.inject({
+      method: "POST", url: "/api/peers", headers: originHeaders(baseUrl),
+      payload: { name: "direct-mutation-peer", baseUrl, apiKey: getTestApiKey(), acceptInsecureHttp: true },
+    });
+    const peerId = created.json().data.id as string;
+    expect((await app.inject({
+      method: "POST", url: `/api/peers/${peerId}/check`, headers: { "x-api-key": getTestApiKey() },
+    })).statusCode).toBe(200);
+    expect((await app.inject({
+      method: "POST", url: `/api/device-notifications/peers/${peerId}/enable`, headers: originHeaders(baseUrl),
+      payload: { generation: 0, label: "Direct mutation peer" },
+    })).statusCode).toBe(200);
+
+    getDb().run(mutation, [peerId]);
+
+    expect((await app.inject({
+      method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() },
+    })).json().data).toMatchObject({
+      generation: 2,
+      sources: [expect.objectContaining({
+        desiredEnabled: false,
+        capability: { available: false, reason: "PEER_CONFIGURATION_CHANGED" },
+      })],
+    });
   });
 
   it("isolates a corrupt local credential and removes a deleted user's source and exact key", async () => {

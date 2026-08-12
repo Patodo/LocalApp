@@ -149,7 +149,7 @@ export class DeviceNotificationSourceStore {
     const peer = getPeerRecord(input.peerId);
     if (!isVerifiedPeer(peer)) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_PEER_NOT_VERIFIED");
     const existing = this.findRow("owner_user_id = ? AND kind = 'peer' AND target_user_id = ?", [input.ownerUserId, peer.verifiedUserId]);
-    if (existing?.desiredEnabled && existing.peerConnectionVersion === peer.connectionVersion
+    if (existing?.desiredEnabled && existing.peerId === peer.id && existing.peerConnectionVersion === peer.connectionVersion
       && existing.targetUserId === peer.verifiedUserId && existing.sourceLabel === input.sourceLabel) {
       return { generation: this.generation(), source: this.publicSource(existing) };
     }
@@ -167,6 +167,7 @@ export class DeviceNotificationSourceStore {
         ) VALUES (?, ?, 'peer', ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL, 'pending', NULL, NULL, NULL, NULL, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           target_user_id = excluded.target_user_id,
+          peer_id = excluded.peer_id,
           peer_connection_version = excluded.peer_connection_version,
           source_origin = excluded.source_origin,
           source_label = excluded.source_label,

@@ -727,13 +727,22 @@ export async function initMetaDb(
   db.run("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)");
 
+  db.run("DROP TRIGGER IF EXISTS invalidate_device_notification_peer_update");
   db.run(`
-    CREATE TRIGGER IF NOT EXISTS invalidate_device_notification_peer_update
-    AFTER UPDATE OF base_url, credential, accept_insecure_http, connection_version, verified_user_id, verified_at ON peers
+    CREATE TRIGGER invalidate_device_notification_peer_update
+    AFTER UPDATE OF base_url, credential, accept_insecure_http, connection_version, verified_user_id, verified_user_name, verified_at ON peers
     WHEN EXISTS (
       SELECT 1 FROM device_notification_sources
       WHERE peer_id = OLD.id AND desired_enabled = 1
-        AND (peer_connection_version != NEW.connection_version OR NEW.verified_user_id IS NULL OR target_user_id != NEW.verified_user_id)
+        AND (
+          OLD.base_url IS NOT NEW.base_url
+          OR OLD.credential IS NOT NEW.credential
+          OR OLD.accept_insecure_http IS NOT NEW.accept_insecure_http
+          OR OLD.connection_version IS NOT NEW.connection_version
+          OR target_user_id IS NOT NEW.verified_user_id
+          OR NEW.verified_user_name IS NULL
+          OR NEW.verified_at IS NULL
+        )
     )
     BEGIN
       UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1;
@@ -748,7 +757,15 @@ export async function initMetaDb(
           status_error_message = 'Peer configuration changed',
           updated_at = NEW.updated_at
       WHERE peer_id = OLD.id AND desired_enabled = 1
-        AND (peer_connection_version != NEW.connection_version OR NEW.verified_user_id IS NULL OR target_user_id != NEW.verified_user_id);
+        AND (
+          OLD.base_url IS NOT NEW.base_url
+          OR OLD.credential IS NOT NEW.credential
+          OR OLD.accept_insecure_http IS NOT NEW.accept_insecure_http
+          OR OLD.connection_version IS NOT NEW.connection_version
+          OR target_user_id IS NOT NEW.verified_user_id
+          OR NEW.verified_user_name IS NULL
+          OR NEW.verified_at IS NULL
+        );
     END
   `);
   db.run(`
