@@ -156,7 +156,7 @@ describe("device notification source authority", () => {
     expect(state.statusCode).toBe(200);
     expect(state.json()).toEqual({
       success: true,
-      data: { deviceIntegration: { available: false }, generation: 0, sources: [] },
+      data: { deviceIntegration: { available: false }, generation: 0, sources: [], availablePeers: [] },
     });
 
     const enabled = await app.inject({
@@ -394,6 +394,11 @@ describe("device notification source authority", () => {
 
     const checked = await app.inject({ method: "POST", url: `/api/peers/${peerId}/check`, headers: { "x-api-key": getTestApiKey() } });
     expect(checked.statusCode, checked.body).toBe(200);
+    const candidateState = await app.inject({ method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() } });
+    expect(candidateState.json().data.availablePeers).toEqual([{ peerId, sourceLabel: "remote", accountLabel: "localadmin" }]);
+    const ordinaryUser = await createTestUser(baseUrl, "notify-peer-candidate-user");
+    const ordinaryState = await app.inject({ method: "GET", url: "/api/device-notifications", headers: { cookie: ordinaryUser.cookie } });
+    expect(ordinaryState.json().data.availablePeers).toEqual([]);
     const enabled = await app.inject({
       method: "POST", url: `/api/device-notifications/peers/${peerId}/enable`, headers: originHeaders(baseUrl),
       payload: { generation: 0, label: "Remote Server" },
@@ -401,6 +406,8 @@ describe("device notification source authority", () => {
     expect(enabled.statusCode).toBe(200);
     const sourceId = enabled.json().data.source.id as string;
     expect(enabled.json().data.source.peerId).toBe(peerId);
+    const afterEnableState = await app.inject({ method: "GET", url: "/api/device-notifications", headers: { "x-api-key": getTestApiKey() } });
+    expect(afterEnableState.json().data.availablePeers).toEqual([]);
     expect(enabled.body).not.toContain(getTestApiKey());
     const sourceRow = getDb().exec(`SELECT encrypted_credential FROM device_notification_sources WHERE id = '${sourceId}'`)[0]?.values[0];
     expect(sourceRow).toEqual([[null]][0]);

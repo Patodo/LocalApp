@@ -39,6 +39,7 @@ export interface DeviceNotificationsSnapshot {
   deviceIntegration: { available: boolean };
   generation: number;
   sources: DeviceNotificationSource[];
+  availablePeers?: Array<{ peerId: string; sourceLabel: string; accountLabel: string }>;
 }
 
 export interface DeviceNotificationSettingsSnapshot {
@@ -127,6 +128,17 @@ export function enableLocalDeviceNotificationSource(
   );
 }
 
+export function enablePeerDeviceNotificationSource(
+  peerId: string,
+  generation: number,
+  label: string,
+): Promise<DeviceNotificationSourceMutation> {
+  return requestData(
+    `/api/device-notifications/peers/${encodeURIComponent(peerId)}/enable`,
+    jsonMutation("POST", { generation, label }),
+  );
+}
+
 export function enableDeviceNotificationSource(
   source: DeviceNotificationSource,
   generation: number,
@@ -137,10 +149,7 @@ export function enableDeviceNotificationSource(
   if (!source.peerId) {
     throw new DeviceNotificationsApiError(400, "DEVICE_NOTIFICATION_PEER_NOT_FOUND");
   }
-  return requestData(
-    `/api/device-notifications/peers/${encodeURIComponent(source.peerId)}/enable`,
-    jsonMutation("POST", { generation, label: source.sourceLabel }),
-  );
+  return enablePeerDeviceNotificationSource(source.peerId, generation, source.sourceLabel);
 }
 
 export function disableDeviceNotificationSource(

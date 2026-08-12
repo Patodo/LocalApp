@@ -5,6 +5,7 @@ import {
   findUserById,
   getDb,
   getPeerRecord,
+  listPeerRecords,
   mutateMetaDbAtomically,
   type PeerRow,
 } from "./meta-sqlite.js";
@@ -17,6 +18,11 @@ export type DeviceNotificationTestResult = "shown" | "denied" | "unsupported" | 
 export interface DeviceNotificationDisplaySettings {
   quietHours: { start: string; end: string; timeZone: string } | null;
   preview: "full" | "hidden";
+}
+export interface DeviceNotificationPeerCandidate {
+  peerId: string;
+  sourceLabel: string;
+  accountLabel: string;
 }
 
 export interface DeviceNotificationPublicSource {
@@ -98,6 +104,18 @@ export class DeviceNotificationSourceStore {
   getPublic(ownerUserId: string, sourceId: string): DeviceNotificationPublicSource | null {
     const row = this.findRow("owner_user_id = ? AND id = ?", [ownerUserId, sourceId]);
     return row ? this.publicSource(row) : null;
+  }
+
+  listPeerCandidates(ownerUserId: string): DeviceNotificationPeerCandidate[] {
+    const existing = new Set(this.listRows("WHERE owner_user_id = ? AND kind = 'peer'", [ownerUserId]).map((row) => row.peerId));
+    return listPeerRecords()
+      .filter((peer) => isVerifiedPeer(peer) && !existing.has(peer.id))
+      .map((peer) => ({
+        peerId: peer.id,
+        sourceLabel: peer.name,
+        accountLabel: peer.verifiedUserDisplayName ?? peer.verifiedUserName ?? "Unknown user",
+      }))
+      .sort((left, right) => left.sourceLabel.localeCompare(right.sourceLabel) || left.peerId.localeCompare(right.peerId));
   }
 
   enableLocal(input: { ownerUserId: string; sourceOrigin: string; sourceLabel: string; expectedGeneration: number }) {

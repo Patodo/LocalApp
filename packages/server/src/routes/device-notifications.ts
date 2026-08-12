@@ -202,7 +202,15 @@ export async function deviceNotificationsRoutes(app: FastifyInstance, store: Dev
 }
 
 function stateResponse(store: DeviceNotificationSourceStore, userId: string, available: boolean) {
-  return { success: true, data: { deviceIntegration: { available }, generation: store.generation(), sources: store.listPublic(userId) } };
+  return {
+    success: true,
+    data: {
+      deviceIntegration: { available },
+      generation: store.generation(),
+      sources: store.listPublic(userId),
+      availablePeers: getUserRole(userId) === "admin" ? store.listPeerCandidates(userId) : [],
+    },
+  };
 }
 
 function parseEnableBody(body: unknown, reply: FastifyReply): { generation: number; label: string } | null {

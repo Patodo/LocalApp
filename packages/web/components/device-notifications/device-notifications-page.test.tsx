@@ -38,6 +38,7 @@ const overview = {
   deviceIntegration: { available: true },
   generation: 7,
   sources: [localSource, peerSource],
+  availablePeers: [],
 };
 
 const settings = {
@@ -214,6 +215,21 @@ describe("DeviceNotificationsPage", () => {
       expect.objectContaining({ method: "POST", credentials: "include", body: JSON.stringify({ generation: 7 }) }),
     ));
     expect(await screen.findByText(/测试状态：pending/)).toBeInTheDocument();
+  });
+
+  it("enables a newly verified peer that has no historical notification source", async () => {
+    const candidate = { peerId: "33333333-3333-4333-8333-333333333333", sourceLabel: "新对端", accountLabel: "Peer User" };
+    const fetchMock = installFetch((url, init) => {
+      if (url === "/api/device-notifications") return json({ success: true, data: { ...overview, availablePeers: [candidate] } });
+      if (url === `/api/device-notifications/peers/${candidate.peerId}/enable`) {
+        expect(init?.body).toBe(JSON.stringify({ generation: 7, label: "新对端" }));
+        return json({ success: true, data: { generation: 8, source: { ...peerSource, id: candidate.peerId, peerId: candidate.peerId, sourceLabel: "新对端", desiredEnabled: true } } });
+      }
+    });
+    render(<DeviceNotificationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "启用 新对端" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/device-notifications/peers/${candidate.peerId}/enable`, expect.objectContaining({ method: "POST" })));
+    expect(await screen.findByText("对端通知来源已启用。")).toBeInTheDocument();
   });
 
   it("renders a completed test result using only stable public labels", async () => {

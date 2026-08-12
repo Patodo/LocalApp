@@ -14,6 +14,7 @@ import {
   disableDeviceNotificationSource,
   enableDeviceNotificationSource,
   enableLocalDeviceNotificationSource,
+  enablePeerDeviceNotificationSource,
   getDeviceNotificationSettings,
   getDeviceNotifications,
   isDeviceNotificationGenerationConflict,
@@ -149,6 +150,26 @@ export function DeviceNotificationsPage() {
     }
   };
 
+  const enablePeer = async (peer: { peerId: string; sourceLabel: string }) => {
+    if (controlsDisabled) return;
+    setBusy(peer.peerId);
+    setFeedback(null);
+    try {
+      const result = await enablePeerDeviceNotificationSource(peer.peerId, generation, peer.sourceLabel);
+      setSnapshot((current) => current ? {
+        ...current,
+        generation: result.generation,
+        sources: [...current.sources, result.source],
+        availablePeers: current.availablePeers?.filter((candidate) => candidate.peerId !== peer.peerId),
+      } : current);
+      setSettingsSnapshot((current) => current ? { ...current, generation: result.generation } : current);
+      setFeedback({ kind: "status", text: "对端通知来源已启用。" });
+    } catch (error) {
+      if (isDeviceNotificationGenerationConflict(error)) await handleConflict();
+      else setFeedback({ kind: "alert", text: "无法启用对端通知来源。请稍后重试。" });
+    } finally { setBusy(null); }
+  };
+
   const sendTest = async () => {
     if (controlsDisabled) return;
     setBusy("test");
@@ -245,6 +266,12 @@ export function DeviceNotificationsPage() {
               busy={busy === source.id}
               onToggle={(enable) => void mutateSource(source, enable)}
             />
+          ))}
+          {(snapshot.availablePeers ?? []).map((peer) => (
+            <article key={peer.peerId} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4">
+              <div><h3 className="font-medium">{peer.sourceLabel}</h3><p className="text-xs text-muted-foreground">已验证对端 · {peer.accountLabel}</p></div>
+              <Button type="button" size="sm" disabled={controlsDisabled || busy === peer.peerId} onClick={() => void enablePeer(peer)}>启用 {peer.sourceLabel}</Button>
+            </article>
           ))}
           {!hasLocalSource ? (
             <Button type="button" variant="outline" disabled={controlsDisabled} onClick={() => void enableLocal()}>
