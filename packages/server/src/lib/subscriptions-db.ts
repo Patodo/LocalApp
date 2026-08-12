@@ -1,4 +1,4 @@
-import { getDb } from "./meta-sqlite.js";
+import { flushMetaDb, getDb } from "./meta-sqlite.js";
 
 export type SubscriptionLevel = "all" | "important" | "muted";
 
@@ -37,6 +37,7 @@ export function upsertSubscription(
      ON CONFLICT(user_id, app_owner, app_name) DO UPDATE SET level = excluded.level`,
     [userId, appOwner, appName, level, now],
   );
+  flushMetaDb();
 }
 
 /**
@@ -48,6 +49,7 @@ export function deleteSubscription(userId: string, appOwner: string, appName: st
     `DELETE FROM subscriptions WHERE user_id = ? AND app_owner = ? AND app_name = ?`,
     [userId, appOwner, appName],
   );
+  if (db.getRowsModified() > 0) flushMetaDb();
 }
 
 /**

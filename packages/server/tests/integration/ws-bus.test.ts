@@ -97,6 +97,21 @@ describe("WsManager 单元测试（spec: WebSocket 系统消息总线）", () =>
     expect(sent).toBe(0);
   });
 
+  it("sendToUser isolates a throwing socket and continues with the remaining sockets", () => {
+    const broken = new FakeSocket();
+    broken.send = () => { throw new Error("socket send failed"); };
+    const healthy = new FakeSocket();
+    wsManager.add("isolated-send", broken as any);
+    wsManager.add("isolated-send", healthy as any);
+
+    expect(() => wsManager.sendToUser("isolated-send", { type: "notify:notification", data: { id: "n1" } }))
+      .not.toThrow();
+    expect(healthy.sent).toHaveLength(1);
+
+    wsManager.remove("isolated-send", broken as any);
+    wsManager.remove("isolated-send", healthy as any);
+  });
+
   it("totalConnections 返回所有 user 连接数总和", () => {
     const before = wsManager.totalConnections();
     const s1 = new FakeSocket();

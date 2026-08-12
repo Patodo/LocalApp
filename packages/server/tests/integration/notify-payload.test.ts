@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { BOOTSTRAP_USER_ID } from "../../src/lib/meta-sqlite.js";
 import fs from "node:fs";
 import path from "node:path";
+import { validateRelativeUrl } from "../../src/lib/notify-payload.js";
 
 async function loginAndGetCookie(baseUrl: string, username: string, password: string): Promise<string> {
   const res = await fetch(`${baseUrl}/api/auth/login`, {
@@ -103,6 +104,23 @@ describe("notify payload 校验（spec: 通知 payload 校验）", () => {
   it("url 为协议相对（//）返回 400", async () => {
     const constres = await postNotify({ title: "x", url: "//evil.com" });
     expect(constres.status).toBe(400);
+  });
+
+  it.each([
+    "/\\\\evil.example/x",
+    "/safe\\evil",
+    "/%2fevil.example/x",
+    "/%2Fevil.example/x",
+    "/%5cevil.example/x",
+    "/%5Cevil.example/x",
+    "/safe%00path",
+    "/safe\u0009path",
+    "/%2e%2e//evil.example/x",
+    "/..//evil.example/x",
+    "///user:pass@evil.example/x",
+    "/\\user:pass@evil.example/x",
+  ])("拒绝会跨源或经正规化形成危险目标的 url %j", (url) => {
+    expect(validateRelativeUrl(url)).toBe(false);
   });
 
   it("合法相对路径 url 通过校验（不返回 400）", async () => {

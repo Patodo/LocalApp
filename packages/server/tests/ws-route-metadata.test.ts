@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildWsReadyMessage,
   MAX_WS_INSTALLATION_ID_LENGTH,
   parseWsConnectionMetadata,
+  shouldSendLegacyMissed,
 } from "../src/routes/ws.js";
 
 describe("WebSocket route metadata parsing", () => {
@@ -58,4 +60,34 @@ describe("WebSocket route metadata parsing", () => {
     expect(parseWsConnectionMetadata({ client: ["desktop"] })).toEqual({ clientKind: "generic" });
     expect(parseWsConnectionMetadata({ client: true })).toEqual({ clientKind: "generic" });
   });
+
+  it("negotiates notification protocol 2 independently from Desktop Action protocol", () => {
+    const daemon = parseWsConnectionMetadata({
+      client: "notification-daemon",
+      notificationProtocolVersion: "2",
+      protocolVersion: "1",
+      installationId: "must-not-become-desktop",
+    });
+    expect(daemon).toEqual({ clientKind: "notification-daemon", notificationProtocolVersion: 2 });
+    expect(buildWsReadyMessage("alice", daemon, 42)).toEqual({
+      type: "bus:ready",
+      data: { userId: "alice", notificationProtocolVersion: 2, latestSequence: 42 },
+    });
+    expect(shouldSendLegacyMissed(daemon)).toBe(false);
+
+    const desktop = parseWsConnectionMetadata({ client: "desktop", protocolVersion: "1" });
+    expect(buildWsReadyMessage("alice", desktop, 42)).toEqual({
+      type: "bus:ready",
+      data: { userId: "alice" },
+    });
+    expect(shouldSendLegacyMissed(desktop)).toBe(true);
+  });
+
+  it.each([undefined, "", "02", "2.0", " 2", "3", ["2"]])(
+    "does not negotiate alternate notification protocol form %j",
+    (notificationProtocolVersion) => {
+      expect(parseWsConnectionMetadata({ client: "notification-daemon", notificationProtocolVersion }))
+        .toEqual({ clientKind: "generic" });
+    },
+  );
 });

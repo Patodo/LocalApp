@@ -18,13 +18,16 @@ export interface CreateTestServerOptions {
   websocket?: boolean;
   cleanSetup?: boolean;
   webRoot?: string;
+  dataRoot?: string;
 }
 
 export async function createTestServer(
   options?: CreateTestServerOptions,
 ): Promise<{ app: FastifyInstance; baseUrl: string; dataDir: string; setupTokens: SetupTokenStore; stop: () => Promise<void> }> {
   closeMetaDb();
-  const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-test-"));
+  const dataRoot = options?.dataRoot ?? os.tmpdir();
+  await fs.promises.mkdir(dataRoot, { recursive: true });
+  const dataDir = await fs.promises.mkdtemp(path.join(dataRoot, "localapp-test-"));
 
   if (options?.configToml) {
     fs.writeFileSync(path.join(dataDir, "config.toml"), options.configToml, "utf-8");

@@ -2,8 +2,10 @@ import { FastifyInstance } from "fastify";
 import type { SocketStream } from "@fastify/websocket";
 import { validateApiKey } from "../lib/meta-sqlite.js";
 import { getUnreadInboxItems } from "../lib/notifications-db.js";
+import { getNotificationDeliveryHighWater } from "../lib/notification-delivery.js";
 import {
   DESKTOP_ACTION_PROTOCOL_VERSION,
+  NOTIFICATION_DELIVERY_PROTOCOL_VERSION,
   wsManager,
   type WsConnectionMetadata,
   type WsMessage,
@@ -17,6 +19,15 @@ export function parseWsConnectionMetadata(query: unknown): WsConnectionMetadata 
   }
 
   const values = query as Record<string, unknown>;
+  if (values.client === "notification-daemon") {
+    if (values.notificationProtocolVersion === String(NOTIFICATION_DELIVERY_PROTOCOL_VERSION)) {
+      return {
+        clientKind: "notification-daemon",
+        notificationProtocolVersion: NOTIFICATION_DELIVERY_PROTOCOL_VERSION,
+      };
+    }
+    return { clientKind: "generic" };
+  }
   if (values.client !== "desktop") {
     return { clientKind: "generic" };
   }
@@ -33,6 +44,34 @@ export function parseWsConnectionMetadata(query: unknown): WsConnectionMetadata 
     metadata.installationId = values.installationId;
   }
   return metadata;
+}
+
+export function buildWsReadyMessage(
+  userId: string,
+  metadata: WsConnectionMetadata,
+  latestSequence: number,
+): WsMessage {
+  if (
+    metadata.clientKind === "notification-daemon"
+    && metadata.notificationProtocolVersion === NOTIFICATION_DELIVERY_PROTOCOL_VERSION
+  ) {
+    return {
+      type: "bus:ready",
+      data: {
+        userId,
+        notificationProtocolVersion: NOTIFICATION_DELIVERY_PROTOCOL_VERSION,
+        latestSequence,
+      },
+    };
+  }
+  return { type: "bus:ready", data: { userId } };
+}
+
+export function shouldSendLegacyMissed(metadata: WsConnectionMetadata): boolean {
+  return !(
+    metadata.clientKind === "notification-daemon"
+    && metadata.notificationProtocolVersion === NOTIFICATION_DELIVERY_PROTOCOL_VERSION
+  );
 }
 
 /**
@@ -64,14 +103,21 @@ export async function wsRoutes(app: FastifyInstance) {
         return;
       }
 
-      wsManager.add(userId, socket, parseWsConnectionMetadata(req.query));
+      const metadata = parseWsConnectionMetadata(req.query);
+      wsManager.add(userId, socket, metadata);
 
-      socket.send(JSON.stringify({ type: "bus:ready", data: { userId } } satisfies WsMessage));
+      socket.send(JSON.stringify(buildWsReadyMessage(
+        userId,
+        metadata,
+        getNotificationDeliveryHighWater(),
+      )));
 
       // 建链后推送未读通知摘要（仅 count；daemon 收到后调 inbox API 拉取详情）
-      const missed = getUnreadInboxItems(userId, 50);
-      if (missed.length > 0) {
-        socket.send(JSON.stringify({ type: "notify:missed", data: { count: missed.length } } satisfies WsMessage));
+      if (shouldSendLegacyMissed(metadata)) {
+        const missed = getUnreadInboxItems(userId, 50);
+        if (missed.length > 0) {
+          socket.send(JSON.stringify({ type: "notify:missed", data: { count: missed.length } } satisfies WsMessage));
+        }
       }
 
       socket.on("message", (raw) => {

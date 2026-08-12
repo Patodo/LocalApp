@@ -47,16 +47,22 @@ describe("WsManager desktop connection filtering", () => {
     const generic = new FakeSocket();
     const oldDesktop = new FakeSocket();
     const capableDesktop = new FakeSocket();
+    const notificationDaemon = new FakeSocket();
     const otherUserDesktop = new FakeSocket();
 
     manager.add("alice", generic as any);
     manager.add("alice", oldDesktop as any, { clientKind: "desktop" });
     manager.add("alice", capableDesktop as any, desktop());
+    manager.add("alice", notificationDaemon as any, {
+      clientKind: "notification-daemon",
+      notificationProtocolVersion: 2,
+    } as any);
     manager.add("bob", otherUserDesktop as any, desktop({ installationId: "desktop-b" }));
 
     expect(manager.sendToDesktopUser("alice", { requestId: "action-1" })).toBe(1);
     expect(generic.sent).toEqual([]);
     expect(oldDesktop.sent).toEqual([]);
+    expect(notificationDaemon.sent).toEqual([]);
     expect(otherUserDesktop.sent).toEqual([]);
     expect(JSON.parse(capableDesktop.sent[0])).toEqual({
       type: "desktop:action-requested",

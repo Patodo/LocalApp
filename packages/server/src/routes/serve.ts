@@ -26,9 +26,6 @@ import { validateNotifyPayload } from "../lib/notify-payload.js";
 import { validateReferer } from "../lib/notify-referer.js";
 import { getNotifyRateLimiter } from "../lib/notify-rate-limit.js";
 import { resolveRecipients, persistNotifications } from "../lib/notifications-db.js";
-import { getSubscriptionStatus } from "../lib/subscriptions-db.js";
-import { shouldPushToSubscriber } from "../lib/notify-routing.js";
-import { wsManager } from "../lib/ws-manager.js";
 import { handleDesktopActionCreation } from "./desktop-actions.js";
 import { handleDeviceActionCreation } from "./device-actions.js";
 import {
@@ -410,27 +407,6 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
             data: payload.data,
           }));
           const persisted = persistNotifications(records);
-          const createdAt = new Date().toISOString();
-          // WS 推送：按等级 × 优先级矩阵决定是否推送
-          for (const p of persisted) {
-            const status = getSubscriptionStatus(p.userId, userId, pageName);
-            const level = status?.level ?? "all";
-            if (shouldPushToSubscriber(level, payload.priority)) {
-              wsManager.sendToUser(p.userId, {
-                type: "notify:notification",
-                data: {
-                  id: p.id,
-                  app_owner: userId,
-                  app_name: pageName,
-                  title: payload.title,
-                  body: payload.body ?? null,
-                  url: payload.url ?? null,
-                  priority: payload.priority,
-                  created_at: createdAt,
-                },
-              });
-            }
-          }
           return {
             success: true,
             delivered: persisted.length,

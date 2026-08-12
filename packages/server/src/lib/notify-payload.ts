@@ -9,10 +9,30 @@
  */
 export function validateRelativeUrl(url: string): boolean {
   if (typeof url !== "string" || url.length === 0) return false;
-  if (url.startsWith("//")) return false;
+  if (!url.startsWith("/") || url.startsWith("//")) return false;
+  if (url.includes("\\") || /[\u0000-\u001f\u007f-\u009f]/u.test(url)) return false;
   if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return false;
-  if (!url.startsWith("/")) return false;
-  return true;
+  if (/%(?![0-9a-f]{2})/i.test(url)) return false;
+  for (const match of url.matchAll(/%([0-9a-f]{2})/gi)) {
+    const byte = Number.parseInt(match[1], 16);
+    if (byte === 0x25 || byte === 0x2f || byte === 0x5c || byte <= 0x1f || byte === 0x7f) {
+      return false;
+    }
+  }
+
+  try {
+    const decoded = decodeURI(url);
+    if (decoded.includes("\\") || /[\u0000-\u001f\u007f-\u009f]/u.test(decoded)) return false;
+    const base = new URL("http://localapp.invalid/");
+    const parsed = new URL(url, base);
+    return parsed.origin === base.origin
+      && parsed.username === ""
+      && parsed.password === ""
+      && parsed.pathname.startsWith("/")
+      && !parsed.pathname.startsWith("//");
+  } catch {
+    return false;
+  }
 }
 
 export interface NotifyPayload {

@@ -9,7 +9,7 @@ import { storagePlugin } from "../../src/plugins/storage.js";
 import { sessionPlugin } from "../../src/plugins/session.js";
 import { authRoutes } from "../../src/routes/auth.js";
 import { issuesRoutes } from "../../src/routes/issues.js";
-import { closeMetaDb } from "../../src/lib/meta-sqlite.js";
+import { closeMetaDb, getDb } from "../../src/lib/meta-sqlite.js";
 import { closeAllConnections } from "../../src/lib/app-db.js";
 import { registerAndLogin } from "../helpers/createUser.js";
 import { listInbox } from "../../src/lib/notifications-db.js";
@@ -1399,6 +1399,30 @@ describe("Issue workflow API", () => {
     expect(commentEdited.status).toBe(200);
     expect(mentionItems("commenter")).toHaveLength(beforeCommenter + 2);
     expect(mentionItems(owner)).toHaveLength(beforeOwner);
+  });
+
+  it("routes every Issue notification producer through durable ordered delivery", () => {
+    const statement = getDb().prepare(
+      `SELECT data, delivery_seq, delivery_eligible
+       FROM notifications
+       WHERE app_owner = ? AND app_name = ? AND data IS NOT NULL
+       ORDER BY delivery_seq`,
+    );
+    statement.bind([owner, pageName]);
+    const rows: Array<{ data: string; delivery_seq: number; delivery_eligible: number }> = [];
+    while (statement.step()) rows.push(statement.getAsObject() as never);
+    statement.free();
+
+    const types = new Set(rows.map((row) => JSON.parse(row.data).type));
+    expect([...types]).toEqual(expect.arrayContaining([
+      "issue_assigned",
+      "issue_mentioned",
+      "issue_commented",
+      "issue_status_changed",
+    ]));
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+    expect(rows.every((row) => Number.isSafeInteger(row.delivery_seq) && row.delivery_seq > 0)).toBe(true);
+    expect(rows.every((row) => row.delivery_eligible === 0 || row.delivery_eligible === 1)).toBe(true);
   });
 
   it("toggles body and comment reactions with authentication and target validation", async () => {

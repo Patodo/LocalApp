@@ -58,7 +58,7 @@ describe("meta.sqlite durable publication", () => {
     expect(findUserById(`portable-${code}`)?.id).toBe(`portable-${code}`);
   });
 
-  it("fails closed on a real parent-directory fsync error and reloads the successfully renamed disk image", async () => {
+  it("fail-stops after a post-rename parent-directory fsync error until an explicit close and reopen", async () => {
     const dataDir = tempDir();
     let armed = false;
     let failedOnce = false;
@@ -75,14 +75,15 @@ describe("meta.sqlite durable publication", () => {
     await initMetaDb(dataDir, { atomicFileOperations: operations });
     armed = true;
     expect(() => createUser("uncertain", "uncertain", "hash")).toThrow("injected meta directory fsync failure");
-    expect(findUserById("uncertain")?.id).toBe("uncertain");
+    expect(() => findUserById("uncertain")).toThrow(/commit state unknown/i);
+    expect(() => createUser("after-failure", "after-failure", "hash")).toThrow(/commit state unknown/i);
 
-    createUser("after-failure", "after-failure", "hash");
     armed = false;
     closeMetaDb();
     await initMetaDb(dataDir);
     expect(findUserById("uncertain")?.id).toBe("uncertain");
-    expect(findUserById("after-failure")?.id).toBe("after-failure");
+    expect(findUserById("after-failure")).toBeNull();
+    expect(createUser("after-reopen", "after-reopen", "hash").id).toBe("after-reopen");
   });
 
   it("does not mask a transactional caller's publication failure with rollback on a closed SQL.js image", async () => {

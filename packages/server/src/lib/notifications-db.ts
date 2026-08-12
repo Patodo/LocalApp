@@ -1,22 +1,13 @@
-import { randomBytes } from "node:crypto";
-import { getDb } from "./meta-sqlite.js";
+import { flushMetaDb, getDb } from "./meta-sqlite.js";
+import {
+  commitNotificationBatch,
+  type CommittedNotification,
+  type NotificationRecord,
+} from "./notification-delivery.js";
+import { wsManager } from "./ws-manager.js";
 
-export interface NotificationRecord {
-  id: string;
-  userId: string;
-  appOwner: string;
-  appName: string;
-  title: string;
-  body?: string;
-  url?: string;
-  priority: "normal" | "high";
-  data?: Record<string, unknown>;
-}
-
-export interface PersistedNotification {
-  id: string;
-  userId: string;
-}
+export type { NotificationRecord } from "./notification-delivery.js";
+export type PersistedNotification = CommittedNotification;
 
 export interface InboxItem {
   id: string;
@@ -37,6 +28,11 @@ export interface InboxPage {
   items: InboxItem[];
   cursor: string | null;
 }
+
+const INBOX_COLUMNS = `
+  id, user_id, app_owner, app_name, title, body, url, priority, data,
+  created_at, read_at, deleted_at
+`;
 
 /**
  * 列出某 user 已订阅 (app_owner, app_name) 的订阅关系。
@@ -66,31 +62,15 @@ export function listSubscribers(appOwner: string, appName: string): string[] {
 export function persistNotifications(
   records: NotificationRecord[],
 ): PersistedNotification[] {
-  if (records.length === 0) return [];
-  const db = getDb();
-  const now = new Date().toISOString();
-  const results: PersistedNotification[] = [];
-  for (const r of records) {
-    const id = randomBytes(16).toString("hex");
-    db.run(
-      `INSERT INTO notifications (id, user_id, app_owner, app_name, title, body, url, priority, data, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        r.userId,
-        r.appOwner,
-        r.appName,
-        r.title,
-        r.body ?? null,
-        r.url ?? null,
-        r.priority,
-        r.data ? JSON.stringify(r.data) : null,
-        now,
-      ],
-    );
-    results.push({ id, userId: r.userId });
+  const committed = commitNotificationBatch(records);
+  for (const notification of committed) {
+    if (!notification.eligible) continue;
+    wsManager.sendToUser(notification.userId, {
+      type: "notify:notification",
+      data: notification.delivery,
+    });
   }
-  return results;
+  return committed;
 }
 
 /**
@@ -137,7 +117,7 @@ export function listInbox(
     params.push(createdAt, createdAt, id);
   }
   params.push(String(limit + 1));
-  const sql = `SELECT * FROM notifications
+  const sql = `SELECT ${INBOX_COLUMNS} FROM notifications
                WHERE ${conditions.join(" AND ")}
                ORDER BY created_at DESC, id DESC LIMIT ?`;
 
@@ -188,7 +168,10 @@ export function markRead(userId: string, notificationId: string): InboxItem | nu
   );
   stmt.bind([now, notificationId, userId]);
   stmt.step();
+  const changed = db.getRowsModified() > 0;
   stmt.free();
+
+  if (changed) flushMetaDb();
 
   return getInboxItem(userId, notificationId);
 }
@@ -207,6 +190,7 @@ export function softDelete(userId: string, notificationId: string): boolean {
   stmt.step();
   const changes = db.getRowsModified();
   stmt.free();
+  if (changes > 0) flushMetaDb();
   return changes > 0;
 }
 
@@ -224,6 +208,7 @@ export function markAllRead(userId: string): number {
   stmt.step();
   const changes = db.getRowsModified();
   stmt.free();
+  if (changes > 0) flushMetaDb();
   return changes;
 }
 
@@ -233,7 +218,7 @@ export function markAllRead(userId: string): number {
 function getInboxItem(userId: string, notificationId: string): InboxItem | null {
   const db = getDb();
   const stmt = db.prepare(
-    `SELECT * FROM notifications WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
+    `SELECT ${INBOX_COLUMNS} FROM notifications WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,
   );
   stmt.bind([notificationId, userId]);
   let item: InboxItem | null = null;
@@ -250,7 +235,7 @@ function getInboxItem(userId: string, notificationId: string): InboxItem | null 
 export function getUnreadInboxItems(userId: string, limit: number): InboxItem[] {
   const db = getDb();
   const stmt = db.prepare(
-    `SELECT * FROM notifications
+    `SELECT ${INBOX_COLUMNS} FROM notifications
      WHERE user_id = ? AND read_at IS NULL AND deleted_at IS NULL
      ORDER BY created_at DESC LIMIT ?`,
   );

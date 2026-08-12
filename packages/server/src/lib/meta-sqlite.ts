@@ -5,6 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { ISSUE_SAVED_REPLY_LIMIT, normalizeIssueSavedReplyInput, type IssueSavedReplyInput } from "@localapp/server-core";
 
 export const BOOTSTRAP_USER_ID = "localadmin";
+export const MAX_NOTIFICATION_DELIVERY_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
 export const PROTECTED_USER_IDS = [BOOTSTRAP_USER_ID] as const;
 
@@ -97,6 +98,17 @@ let db: SqlJsDatabase | null = null;
 let dbPath: string = "";
 let SqlJs: initSqlJs.SqlJsStatic | null = null;
 let publishing = false;
+let commitStateUnknown: MetaDatabaseCommitStateUnknownError | null = null;
+
+export class MetaDatabaseCommitStateUnknownError extends Error {
+  readonly code = "META_DATABASE_COMMIT_STATE_UNKNOWN";
+
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Meta database commit state unknown after atomic rename: ${detail}`, { cause });
+    this.name = "MetaDatabaseCommitStateUnknownError";
+  }
+}
 
 export interface MetaAtomicFileOperations {
   mkdirSync: typeof fs.mkdirSync;
@@ -138,6 +150,10 @@ function guardSqlJsCall<T>(fn: () => T): T {
   }
 }
 
+function assertMetaDatabaseAvailable(): void {
+  if (commitStateUnknown) throw commitStateUnknown;
+}
+
 function guardStatement<T extends Record<string, unknown>>(stmt: T): T {
   const target = stmt as Record<string, unknown>;
   for (const method of ["bind", "step", "get", "getAsObject", "run", "free"]) {
@@ -174,6 +190,7 @@ function guardDatabase(database: SqlJsDatabase): SqlJsDatabase {
 }
 
 function openMetaDbFromDisk(): SqlJsDatabase {
+  assertMetaDatabaseAvailable();
   if (!SqlJs || !dbPath) throw new Error("Meta database not initialized. Call initMetaDb first.");
   const nextDb = fs.existsSync(dbPath)
     ? new SqlJs.Database(fs.readFileSync(dbPath))
@@ -183,11 +200,13 @@ function openMetaDbFromDisk(): SqlJsDatabase {
 }
 
 function saveDb(): void {
+  assertMetaDatabaseAvailable();
   if (!db || !dbPath) return;
   if (publishing) throw new Error("Meta database publication is already in progress");
   publishing = true;
   const directory = path.dirname(dbPath);
   const temporaryPath = path.join(directory, `.${path.basename(dbPath)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+  let renamed = false;
   try {
     const buffer = Buffer.from(db.export());
     atomicFileOperations.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -199,10 +218,19 @@ function saveDb(): void {
       atomicFileOperations.closeSync(descriptor);
     }
     atomicFileOperations.renameSync(temporaryPath, dbPath);
+    renamed = true;
     syncMetaDirectory(directory);
   } catch (error) {
     try { atomicFileOperations.rmSync(temporaryPath, { force: true }); } catch { /* retain publication error */ }
     publishing = false;
+    if (renamed) {
+      const uncertain = new MetaDatabaseCommitStateUnknownError(error);
+      commitStateUnknown = uncertain;
+      const current = db;
+      db = null;
+      try { current?.close(); } catch { /* the process remains fail-stopped */ }
+      throw uncertain;
+    }
     reloadMetaDbFromVisibleDisk();
     throw error;
   } finally {
@@ -236,10 +264,91 @@ export function flushMetaDb(): void {
   saveDb();
 }
 
+function migrateNotificationDeliverySchema(database: SqlJsDatabase): void {
+  const columns = new Set(
+    (database.exec("PRAGMA table_info(notifications)")[0]?.values ?? []).map((row) => String(row[1])),
+  );
+  if (!columns.has("delivery_seq")) {
+    database.run(`
+      ALTER TABLE notifications ADD COLUMN delivery_seq INTEGER CHECK (
+        delivery_seq IS NULL OR
+        (delivery_seq > 0 AND delivery_seq <= ${MAX_NOTIFICATION_DELIVERY_SEQUENCE})
+      )
+    `);
+  }
+  if (!columns.has("delivery_eligible")) {
+    database.run(`
+      ALTER TABLE notifications ADD COLUMN delivery_eligible INTEGER CHECK (
+        delivery_eligible IS NULL OR delivery_eligible IN (0, 1)
+      )
+    `);
+  }
+
+  database.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_delivery_seq
+    ON notifications(delivery_seq)
+    WHERE delivery_seq IS NOT NULL
+  `);
+  database.run(`
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_delivery
+    ON notifications(user_id, delivery_eligible, delivery_seq)
+  `);
+  database.run(`
+    CREATE TABLE IF NOT EXISTS notification_delivery_state (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      high_water INTEGER NOT NULL CHECK (
+        high_water >= 0 AND high_water <= ${MAX_NOTIFICATION_DELIVERY_SEQUENCE}
+      )
+    )
+  `);
+
+  const stateRows = database.exec(
+    "SELECT singleton, high_water FROM notification_delivery_state ORDER BY singleton",
+  )[0]?.values ?? [];
+  if (stateRows.length === 0) {
+    const assigned = database.exec(`
+      SELECT 1 FROM notifications
+      WHERE delivery_seq IS NOT NULL OR delivery_eligible IS NOT NULL
+      LIMIT 1
+    `)[0]?.values.length ?? 0;
+    if (assigned > 0) {
+      throw new Error("Notification delivery state is missing for a partial migration with assigned rows");
+    }
+    database.run("INSERT INTO notification_delivery_state (singleton, high_water) VALUES (1, 0)");
+    return;
+  }
+
+  if (stateRows.length !== 1 || Number(stateRows[0][0]) !== 1) {
+    throw new Error("Notification delivery state must contain exactly the singleton row");
+  }
+  const highWater = Number(stateRows[0][1]);
+  if (!Number.isSafeInteger(highWater) || highWater < 0) {
+    throw new Error("Notification delivery high-water is not a non-negative safe integer");
+  }
+  const invalidRow = database.exec(`
+    SELECT 1 FROM notifications
+    WHERE
+      (delivery_seq IS NULL AND delivery_eligible IS NOT NULL)
+      OR (delivery_seq IS NOT NULL AND delivery_eligible IS NULL)
+      OR (delivery_seq IS NOT NULL AND (
+        typeof(delivery_seq) != 'integer'
+        OR delivery_seq <= 0
+        OR delivery_seq > ${MAX_NOTIFICATION_DELIVERY_SEQUENCE}
+        OR delivery_seq > ${highWater}
+      ))
+      OR (delivery_eligible IS NOT NULL AND delivery_eligible NOT IN (0, 1))
+    LIMIT 1
+  `)[0]?.values.length ?? 0;
+  if (invalidRow > 0) {
+    throw new Error("Notification delivery rows are inconsistent with the durable high-water");
+  }
+}
+
 export async function initMetaDb(
   dataDir: string,
   options: { atomicFileOperations?: MetaAtomicFileOperations } = {},
 ): Promise<void> {
+  assertMetaDatabaseAvailable();
   if (db) return;
 
   atomicFileOperations = options.atomicFileOperations ?? fs;
@@ -391,9 +500,17 @@ export async function initMetaDb(
       data TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       read_at TEXT,
-      deleted_at TEXT
+      deleted_at TEXT,
+      delivery_seq INTEGER CHECK (
+        delivery_seq IS NULL OR
+        (delivery_seq > 0 AND delivery_seq <= ${MAX_NOTIFICATION_DELIVERY_SEQUENCE})
+      ),
+      delivery_eligible INTEGER CHECK (
+        delivery_eligible IS NULL OR delivery_eligible IN (0, 1)
+      )
     )
   `);
+  migrateNotificationDeliverySchema(db);
   db.run(`CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_notifications_app ON notifications(app_owner, app_name)`);
 
@@ -574,11 +691,20 @@ export async function initMetaDb(
 }
 
 export function getDb(): SqlJsDatabase {
+  assertMetaDatabaseAvailable();
   if (!db) return openMetaDbFromDisk();
   return db;
 }
 
 export function closeMetaDb(): void {
+  if (commitStateUnknown) {
+    const current = db;
+    db = null;
+    try { current?.close(); } catch { /* explicit shutdown clears the fail-stop latch */ }
+    commitStateUnknown = null;
+    publishing = false;
+    return;
+  }
   const current = db;
   if (current) {
     try {

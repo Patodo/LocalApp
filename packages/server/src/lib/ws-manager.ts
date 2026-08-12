@@ -13,10 +13,12 @@ export interface WsMessage {
 }
 
 export const DESKTOP_ACTION_PROTOCOL_VERSION = 1;
+export const NOTIFICATION_DELIVERY_PROTOCOL_VERSION = 2;
 
 export interface WsConnectionMetadata {
-  clientKind: "desktop" | "generic";
+  clientKind: "desktop" | "notification-daemon" | "generic";
   protocolVersion?: number;
+  notificationProtocolVersion?: number;
   installationId?: string;
 }
 
@@ -63,8 +65,12 @@ export class WsManager {
     let sent = 0;
     for (const socket of set.keys()) {
       if (socket.readyState === socket.OPEN) {
-        socket.send(payload);
-        sent++;
+        try {
+          socket.send(payload);
+          sent++;
+        } catch {
+          // One broken connection must not prevent durable delivery to peers.
+        }
       }
     }
     return sent;
@@ -87,8 +93,12 @@ export class WsManager {
         socket.readyState === socket.OPEN
         && this.meetsDesktopProtocol(metadata, minimumProtocolVersion)
       ) {
-        socket.send(payload);
-        sent++;
+        try {
+          socket.send(payload);
+          sent++;
+        } catch {
+          // Isolate individual Desktop transports just like notification sockets.
+        }
       }
     }
     return sent;
