@@ -41,6 +41,11 @@ export class NotificationDispatcher {
   private readonly iconPath: string;
 
   constructor(options: NotificationDispatcherOptions) {
+    if (options === null || typeof options !== "object" || !(options.store instanceof DeliveryStore)
+      || options.adapter === null || typeof options.adapter !== "object"
+      || typeof options.adapter.permissionState !== "function" || typeof options.adapter.showNotification !== "function") {
+      throw new Error("Notification dispatcher options are invalid");
+    }
     this.store = options.store;
     this.adapter = options.adapter;
     this.iconPath = validateNativeNotificationEnvelope({ identifier: "localapp_dispatcher_validation", ticket: "localapp_dispatcher_validation", title: "LocalApp", body: "", sourceLabel: "LocalApp", priority: "normal", iconPath: options.iconPath }).iconPath;
@@ -51,9 +56,10 @@ export class NotificationDispatcher {
     const sourceLabel = validateSourceLabel(input.sourceLabel);
     if (input.policy !== "native" && input.policy !== "inbox-only") throw new Error("Notification delivery policy is invalid");
     const delivery = validateDeliveryNotification(input.delivery);
+    prevalidateEnvelope(delivery, sourceLabel, this.iconPath);
     if (input.signal?.aborted) return { outcome: "aborted", sequence: delivery.sequence };
 
-    const pending = await this.prepare(sourceId, delivery);
+    const pending = await this.prepare(sourceId, sourceLabel, delivery);
     if (pending === null) return { outcome: "duplicate", sequence: delivery.sequence };
     if (input.signal?.aborted) return { outcome: "aborted", sequence: delivery.sequence };
 
@@ -71,10 +77,10 @@ export class NotificationDispatcher {
     const envelope = validateNativeNotificationEnvelope({
       identifier: pending.nativeId,
       ticket: pending.ticket,
-      title: delivery.title,
-      body: delivery.body ?? "",
-      sourceLabel,
-      priority: delivery.priority,
+      title: pending.delivery.title,
+      body: pending.delivery.body ?? "",
+      sourceLabel: pending.sourceLabel,
+      priority: pending.delivery.priority,
       iconPath: this.iconPath,
     });
     await this.adapter.showNotification(envelope);
@@ -104,22 +110,35 @@ export class NotificationDispatcher {
     try {
       await this.adapter.showNotification(envelope);
     } catch (error) {
-      await this.store.consumeTicket(summary.ticket).catch(() => undefined);
+      try { await this.store.consumeTicket(summary.ticket); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Notification summary display and ticket cleanup failed"); }
       throw error;
     }
     return { outcome: "shown" };
   }
 
-  private async prepare(sourceId: string, delivery: DeliveryNotification): Promise<PendingDelivery | null> {
+  private async prepare(sourceId: string, sourceLabel: string, delivery: DeliveryNotification): Promise<PendingDelivery | null> {
     const existing = await this.store.readPending(sourceId);
     if (existing !== null) {
-      if (existing.delivery.id !== delivery.id || existing.delivery.sequence !== delivery.sequence) {
+      if (JSON.stringify(existing.delivery) !== JSON.stringify(delivery) || existing.sourceLabel !== sourceLabel) {
         throw new Error("Notification source already has a different pending delivery");
       }
       return this.store.retryPending(sourceId);
     }
-    return this.store.preparePending(sourceId, delivery);
+    return this.store.preparePending(sourceId, delivery, undefined, sourceLabel);
   }
+}
+
+function prevalidateEnvelope(delivery: DeliveryNotification, sourceLabel: string, iconPath: string): void {
+  validateNativeNotificationEnvelope({
+    identifier: "localapp_pending_identifier_validation",
+    ticket: "localapp_pending_ticket_validation",
+    title: delivery.title,
+    body: delivery.body ?? "",
+    sourceLabel,
+    priority: delivery.priority,
+    iconPath,
+  });
 }
 
 function validateSource(value: string): string {

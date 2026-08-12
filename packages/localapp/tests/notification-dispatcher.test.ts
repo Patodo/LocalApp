@@ -64,6 +64,22 @@ describe("NotificationDispatcher", () => {
     expect(pending?.retryCount).toBe(0);
   });
 
+  it("rejects an altered retry and an oversized envelope without mutating pending state", async () => {
+    const { store, adapter, dispatcher } = await fixture();
+    adapter.showNotification.mockRejectedValueOnce(new Error("native unavailable"));
+    const input = { sourceId: "local", sourceLabel: "Local", policy: "native" as const, delivery: notification() };
+    await expect(dispatcher.dispatch(input)).rejects.toThrow(/native unavailable/);
+    await expect(dispatcher.dispatch({ ...input, delivery: { ...notification(), title: "Changed" } })).rejects.toThrow(/different pending/i);
+    expect(adapter.showNotification).toHaveBeenCalledTimes(1);
+
+    const other = new DeliveryStore({ statePath: path.join((await fs.mkdtemp(path.join(repositoryRoot, "tmp/task-10b2-oversize-"))), "notifications.json") });
+    roots.push(path.dirname(other.statePath));
+    await other.baseline("peer", 0);
+    const oversized = new NotificationDispatcher({ store: other, adapter, iconPath: path.resolve(repositoryRoot, "icon.png") });
+    await expect(oversized.dispatch({ sourceId: "peer", sourceLabel: "Peer", policy: "native", delivery: { ...notification(), title: "x".repeat(4_096), body: "y".repeat(4_096) } })).rejects.toThrow(/NATIVE_NOTIFICATION_INVALID/);
+    expect(await other.readPending("peer")).toBeNull();
+  });
+
   it("dedupes committed delivery and rejects gaps before native calls", async () => {
     const { adapter, dispatcher } = await fixture();
     const input = { sourceId: "local", sourceLabel: "Local", policy: "native" as const, delivery: notification() };
@@ -87,5 +103,10 @@ describe("NotificationDispatcher", () => {
     await expect(dispatcher.dispatch({ sourceId: "local", sourceLabel: "<script>api-key", policy: "native", delivery: notification() })).rejects.toThrow(/source label/i);
     expect(adapter.permissionState).not.toHaveBeenCalled();
     expect((await store.readSource("local"))?.cursor).toBe(0);
+  });
+
+  it("rejects malformed constructor dependencies", async () => {
+    const { store, root } = await fixture();
+    expect(() => new NotificationDispatcher({ store, adapter: {} as never, iconPath: path.join(root, "icon.png") })).toThrow(/options/i);
   });
 });

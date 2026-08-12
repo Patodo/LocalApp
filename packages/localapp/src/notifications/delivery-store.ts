@@ -19,6 +19,7 @@ export interface DeliveryNotification {
 
 export interface PendingDelivery {
   delivery: DeliveryNotification;
+  sourceLabel: string;
   nativeId: string;
   ticket: string;
   ticketExpiresAt: string;
@@ -124,10 +125,11 @@ export class DeliveryStore {
     });
   }
 
-  async preparePending(sourceId: string, value: DeliveryNotification, expiresAt?: Date): Promise<PendingDelivery | null> {
+  async preparePending(sourceId: string, value: DeliveryNotification, expiresAt?: Date, sourceLabel = sourceId): Promise<PendingDelivery | null> {
     return this.mutate((state) => {
       const source = requiredSource(state, sourceId);
       const delivery = validateDelivery(value);
+      const canonicalSourceLabel = validateDisplaySourceLabel(sourceLabel);
       if (source.pending !== null) {
         if (source.pending.delivery.id === delivery.id && source.pending.delivery.sequence === delivery.sequence) {
           return unchanged(clonePending(source.pending));
@@ -142,6 +144,7 @@ export class DeliveryStore {
       const nativeId = this.token(18);
       source.pending = {
         delivery,
+        sourceLabel: canonicalSourceLabel,
         nativeId,
         ticket,
         ticketExpiresAt: canonicalFutureDate(expiresAt ?? new Date(this.now().getTime() + this.ticketTtlMs), this.now()),
@@ -442,12 +445,13 @@ function parseSource(value: unknown): SourceState {
 }
 
 function parsePending(value: unknown): PendingDelivery {
-  if (!record(value) || !exactKeys(value, ["delivery", "nativeId", "ticket", "ticketExpiresAt", "retryCount"])
+  if (!record(value) || !exactKeys(value, ["delivery", "sourceLabel", "nativeId", "ticket", "ticketExpiresAt", "retryCount"])
+    || typeof value.sourceLabel !== "string"
     || typeof value.nativeId !== "string" || !/^[A-Za-z0-9_-]{16,256}$/.test(value.nativeId)
     || typeof value.ticket !== "string" || !TOKEN.test(value.ticket)
     || typeof value.ticketExpiresAt !== "string" || !canonicalDate(value.ticketExpiresAt)
     || !Number.isSafeInteger(value.retryCount) || (value.retryCount as number) < 0 || (value.retryCount as number) > MAX_RETRY) invalidState();
-  return { delivery: validateDelivery(value.delivery), nativeId: value.nativeId, ticket: value.ticket, ticketExpiresAt: value.ticketExpiresAt, retryCount: value.retryCount as number };
+  return { delivery: validateDelivery(value.delivery), sourceLabel: validateDisplaySourceLabel(value.sourceLabel), nativeId: value.nativeId, ticket: value.ticket, ticketExpiresAt: value.ticketExpiresAt, retryCount: value.retryCount as number };
 }
 
 function parseDedupe(value: unknown): DedupeRecord {
@@ -505,6 +509,7 @@ function safeText(value: string): boolean {
   return value.length <= MAX_TEXT && !/[\u0000-\u001f\u007f<>]/.test(value);
 }
 function safeName(value: string): boolean { return value.length > 0 && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value); }
+function validateDisplaySourceLabel(value: string): string { if (typeof value !== "string" || value.length < 1 || value.length > 128 || /[\u0000-\u001f\u007f<>]/.test(value)) throw new Error("Notification source label is invalid"); return value; }
 function validateSourceId(value: unknown): asserts value is string { if (typeof value !== "string" || !SOURCE_ID.test(value)) throw new Error("Notification source id is invalid"); }
 function validateSequence(value: unknown): asserts value is number { if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_SEQUENCE) throw new Error("Notification sequence is invalid"); }
 function canonicalDate(value: string): boolean { const parsed = new Date(value); return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value; }
