@@ -152,4 +152,22 @@ describe("DeliveryStore", () => {
     await expect(new DeliveryStore({ statePath }).baseline("local", 0)).rejects.toThrow(/ancestor.*unsafe/i);
     await expect(fs.lstat(path.join(external, "private"))).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.runIf(process.platform !== "win32")("pins the publication directory across a final parent replacement", async () => {
+    const { root, statePath } = await fixture();
+    await new DeliveryStore({ statePath }).baseline("local", 0);
+    const parent = path.dirname(statePath);
+    const held = path.join(root, "held-private");
+    let replaced = false;
+    const store = new DeliveryStore({ statePath, fault: async (point) => {
+      if (point === "before-rename" && !replaced) {
+        replaced = true;
+        await fs.rename(parent, held);
+        await fs.mkdir(parent, { mode: 0o700 });
+      }
+    } });
+    await expect(store.baseline("peer", 0)).rejects.toThrow(/pinned rename|parent was replaced/i);
+    await expect(fs.lstat(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(held, "notifications.json"), "utf8")).not.toContain('"peer"');
+  });
 });

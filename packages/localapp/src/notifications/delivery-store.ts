@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 export interface DeliveryNotification {
   id: string;
@@ -67,6 +69,7 @@ const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 const MAX_RETRY = 100;
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT = 4_096;
+const execFileAsync = promisify(execFile);
 
 /**
  * Sole machine-local authority for notification cursor, pending, dedupe and
@@ -337,7 +340,7 @@ export class DeliveryStore {
       const current = await optionalLstat(this.statePath);
       if (!optionalSameIdentity(existing, current)) throw unsafe("Notification delivery state was replaced");
       await this.fault?.("before-rename");
-      await fs.rename(temporary, this.statePath);
+      await renameInPinnedParent(parent, path.basename(temporary), path.basename(this.statePath), parentBefore);
       renamed = true;
       try {
         if (!sameIdentity(parentBefore, await privateDirectoryIdentity(parent))
@@ -550,6 +553,35 @@ function assertPrivateRegular(stat: Awaited<ReturnType<typeof fs.lstat>>, label:
 function sameIdentity(a: Awaited<ReturnType<typeof fs.lstat>>, b: Awaited<ReturnType<typeof fs.lstat>>): boolean { return a.dev === b.dev && a.ino === b.ino; }
 function optionalSameIdentity(a: Awaited<ReturnType<typeof fs.lstat>> | undefined, b: Awaited<ReturnType<typeof fs.lstat>> | undefined): boolean { return a === undefined ? b === undefined : b !== undefined && sameIdentity(a, b); }
 async function optionalLstat(target: string): Promise<Awaited<ReturnType<typeof fs.lstat>> | undefined> { try { return await fs.lstat(target, { bigint: true }); } catch (error) { if (isCode(error, "ENOENT")) return undefined; throw error; } }
+
+const PINNED_RENAME_SCRIPT = String.raw`
+const fs = require("node:fs");
+const [source, destination, expectedDev, expectedIno] = process.argv.slice(1);
+if (!source || !destination || source.includes("/") || destination.includes("/")) process.exit(71);
+const parent = fs.lstatSync(".", { bigint: true });
+if (!parent.isDirectory() || parent.isSymbolicLink() || String(parent.dev) !== expectedDev || String(parent.ino) !== expectedIno) process.exit(72);
+fs.renameSync(source, destination);
+const after = fs.lstatSync(".", { bigint: true });
+if (String(after.dev) !== expectedDev || String(after.ino) !== expectedIno) process.exit(73);
+`;
+
+/** The child pins cwd before checking identity, giving Node a renameat-like boundary. */
+async function renameInPinnedParent(
+  parent: string,
+  source: string,
+  destination: string,
+  identity: Awaited<ReturnType<typeof fs.lstat>>,
+): Promise<void> {
+  try {
+    await execFileAsync(process.execPath, ["-e", PINNED_RENAME_SCRIPT, source, destination, String(identity.dev), String(identity.ino)], {
+      cwd: parent,
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  } catch (error) {
+    throw unsafe(`Notification delivery pinned rename failed: ${(error as Error).message}`);
+  }
+}
 
 async function removeOwnedStaleTemps(parent: string, basename: string): Promise<void> {
   const prefix = `.${basename}.`;
