@@ -8,6 +8,7 @@ export interface SelectedNativeAdapter {
   target: string;
   root: string;
   executable: string;
+  ipcClient: string;
   signing: { mode: "adhoc" | "release" };
   assets: NativeAdapterAsset[];
 }
@@ -44,10 +45,18 @@ export async function selectNativeAdapter(options: SelectNativeAdapterOptions): 
     }
   }
   const executable = executableFor(target);
-  if (!manifest.assets.some((asset) => asset.path === executable)) {
+  const ipcClient = ipcClientFor(target);
+  if (!manifest.assets.some((asset) => asset.path === executable) || !manifest.assets.some((asset) => asset.path === ipcClient)) {
     throw lifecycleError("native_adapter_digest_invalid", "The selected LocalApp native adapter executable is missing");
   }
-  return { target, root, executable: path.join(root, ...executable.split("/")), signing: manifest.signing, assets: manifest.assets };
+  return {
+    target,
+    root,
+    executable: path.join(root, ...executable.split("/")),
+    ipcClient: path.join(root, ...ipcClient.split("/")),
+    signing: manifest.signing,
+    assets: manifest.assets,
+  };
 }
 
 export function nativeTargetFor(platform: NodeJS.Platform, arch: string): string {
@@ -65,6 +74,11 @@ function targetFor(platform: NodeJS.Platform, arch: string): string {
 function executableFor(target: string): string {
   if (target.startsWith("darwin-")) return `${target}/LocalAppBridge.app/Contents/MacOS/LocalAppBridge`;
   if (target.startsWith("win32-")) return `${target}/localapp-native.exe`;
+  return `${target}/localapp-native-ipc-client.mjs`;
+}
+
+function ipcClientFor(target: string): string {
+  if (target.startsWith("darwin-")) return `${target}/LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs`;
   return `${target}/localapp-native-ipc-client.mjs`;
 }
 

@@ -34,14 +34,21 @@ async function fixture(target: string): Promise<string> {
   const directory = await fs.mkdtemp(path.join(root, "fixture-"));
   directories.push(directory);
   const executable = path.join(directory, target, "LocalAppBridge.app", "Contents", "MacOS", "LocalAppBridge");
+  const ipcClient = path.join(directory, target, "LocalAppBridge.app", "Contents", "Resources", "localapp-native-ipc-client.mjs");
   await fs.mkdir(path.dirname(executable), { recursive: true });
   await fs.writeFile(executable, "native bridge\n", { mode: 0o755 });
+  await fs.mkdir(path.dirname(ipcClient), { recursive: true });
+  await fs.writeFile(ipcClient, "native client\n", { mode: 0o755 });
   const relative = `${target}/LocalAppBridge.app/Contents/MacOS/LocalAppBridge`;
+  const clientRelative = `${target}/LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs`;
   await fs.writeFile(path.join(directory, "adapter-manifest.json"), `${JSON.stringify({
     schemaVersion: 1,
     target,
     signing: { mode: "adhoc" },
-    assets: [{ path: relative, sha256: crypto.createHash("sha256").update("native bridge\n").digest("hex") }],
+    assets: [
+      { path: relative, sha256: crypto.createHash("sha256").update("native bridge\n").digest("hex") },
+      { path: clientRelative, sha256: crypto.createHash("sha256").update("native client\n").digest("hex") },
+    ],
   })}\n`);
   return directory;
 }

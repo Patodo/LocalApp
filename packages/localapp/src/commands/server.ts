@@ -7,7 +7,7 @@ import { publishRelease, readCurrentRelease, verifyReleaseArtifact, type Current
 import { createRuntimeLayout, type RuntimeLayout } from "../daemon/runtime-layout.js";
 import { createCurrentUserServiceManager, type ServiceManager } from "../service/service-manager.js";
 import { spawnOwnedProcess } from "../process/process-tree.js";
-import { createNativeAdapter, type NativeAdapter } from "../native/native-adapter.js";
+import { createNativeAdapter, type NativeAdapter, type NativeAdapterOptions } from "../native/native-adapter.js";
 
 export type ServerCommandAction = "start" | "stop" | "restart" | "status" | "logs" | "uninstall";
 export interface RunServerCommandOptions { action: ServerCommandAction; }
@@ -17,7 +17,7 @@ export interface ServerCommandDependencies {
   publishRelease?: typeof publishRelease;
   verifyReleaseArtifact?: typeof verifyReleaseArtifact;
   createServiceManager?: () => ServiceManager;
-  createNativeAdapter?: (root: string) => Promise<Pick<NativeAdapter, "installScheme">>;
+  createNativeAdapter?: (root: string, options?: NativeAdapterOptions) => Promise<Pick<NativeAdapter, "installScheme">>;
   ipcClient?: () => IpcClient;
   health?: (listenUrl: string) => Promise<void>;
 }
@@ -31,7 +31,7 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
     const artifactDirectory = dependencies.artifactDirectory ?? defaultArtifactDirectory();
     await (dependencies.verifyReleaseArtifact ?? verifyReleaseArtifact)(artifactDirectory);
     const release = await (dependencies.publishRelease ?? publishRelease)({ sourceDirectory: artifactDirectory, layout });
-    const native = await (dependencies.createNativeAdapter ?? createNativeAdapter)(path.join(release.releasePath, "runtime", "native"));
+    const native = await (dependencies.createNativeAdapter ?? createNativeAdapter)(path.join(release.releasePath, "runtime", "native"), { supportDir: layout.supportDir });
     await native.installScheme();
     const manager = service();
     const installed = await manager.install();

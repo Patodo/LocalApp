@@ -35,7 +35,6 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
     outputDirectory: path.join(testRoot, "native"),
     signing: "adhoc",
     bundleIdentifier: "dev.localapp.bridge.task8",
-    runtimeDir,
   });
   assert.equal(built.signing.mode, "adhoc");
   const codeSign = await run("/usr/bin/codesign", ["--verify", "--strict", built.appBundle]);
@@ -46,7 +45,15 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
     assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"), asset.sha256);
   }
 
-  assert.equal((await run(built.executable, ["--register"])).code, 0);
+  const malformedNotification = await run(built.executable, ["--show-notification", "{}"]);
+  assert.equal(malformedNotification.code, 1, malformedNotification.stderr);
+  const bridgeConfigPath = path.join(testRoot, "bridge-runtime.json");
+  await fs.writeFile(bridgeConfigPath, `${JSON.stringify({
+    nodePath: process.execPath,
+    ipcClientPath: built.ipcClient,
+    environment: { LOCALAPP_RUNTIME_DIR: runtimeDir },
+  })}\n`, { mode: 0o600 });
+  assert.equal((await run(built.executable, ["--register", bridgeConfigPath])).code, 0);
   t.after(async () => { await run(built.executable, ["--unregister"]); });
   t.after(async () => { await fs.rm(testRoot, { recursive: true, force: true }); });
   const activationUrl = "localapp://action/11111111-1111-4111-8111-111111111111?origin=https%3A%2F%2Fserver.example.test&nonce=nonce_abcdefghijklmnopqrstuvwxyz-0123456789&protocolVersion=2";
@@ -54,6 +61,45 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   assert.equal(opened.code, 0, opened.stderr);
   await waitFor(() => received.length === 1, "one bridge IPC activation");
   assert.deepEqual(received, [{ type: "activation", url: activationUrl }]);
+});
+
+test("Linux and Windows exact-target adapter builds can be injected without mutating this host", async (t) => {
+  const crossRoot = path.join(repositoryRoot, "tmp/task-8-native-cross-build");
+  await fs.rm(crossRoot, { recursive: true, force: true });
+  t.after(() => fs.rm(crossRoot, { recursive: true, force: true }));
+
+  const linux = await buildNativeAdapter({
+    platform: "linux",
+    arch: "x64",
+    outputDirectory: path.join(crossRoot, "linux"),
+  });
+  const linuxDesktop = await fs.readFile(path.join(linux.outputDirectory, "linux-x64", "localapp-handler.desktop"), "utf8");
+  assert.match(linuxDesktop, /^\[Desktop Entry\]\n/m);
+  assert.match(linuxDesktop, /MimeType=x-scheme-handler\/localapp;/);
+
+  const windows = await buildNativeAdapter({
+    platform: "win32",
+    arch: "x64",
+    outputDirectory: path.join(crossRoot, "windows"),
+    buildWindows: async ({ executable }) => {
+      await fs.mkdir(path.dirname(executable), { recursive: true });
+      await fs.writeFile(executable, "test Windows helper\n");
+    },
+  });
+  const manifest = JSON.parse(await fs.readFile(path.join(windows.outputDirectory, "adapter-manifest.json"), "utf8"));
+  assert.equal(manifest.target, "win32-x64");
+  assert.deepEqual((await fs.readdir(windows.outputDirectory)).sort(), ["adapter-manifest.json", "win32-x64"]);
+  assert.equal(manifest.assets.some((asset) => asset.path === "win32-x64/localapp-native.exe"), true);
+  assert.equal(manifest.assets.some((asset) => asset.path.includes("tauri") || asset.path.includes("electron")), false);
+});
+
+test("Windows helper preserves argv, has an explicit application path, and keeps browser opening outside Job ownership", async () => {
+  const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/windows/src/main.rs"), "utf8");
+  assert.doesNotMatch(source, /collect::<Vec<_>>\(\)\.join\(" "\)/);
+  assert.match(source, /CreateProcessW\(application_name\.as_ptr\(\)/);
+  assert.match(source, /RegCreateKeyExW\(HKEY_CURRENT_USER/);
+  assert.match(source, /--scheme/);
+  assert.match(source, /ShellExecuteW/);
 });
 
 function run(command, args) {

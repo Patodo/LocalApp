@@ -20,7 +20,7 @@ describe("server lifecycle command", () => {
       createNativeAdapter,
       createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false })), start: vi.fn(), stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
     });
-    expect(createNativeAdapter).toHaveBeenCalledWith("/release/runtime/native");
+    expect(createNativeAdapter).toHaveBeenCalledWith("/release/runtime/native", { supportDir: "/support" });
     expect(installScheme).toHaveBeenCalledTimes(1);
   });
 

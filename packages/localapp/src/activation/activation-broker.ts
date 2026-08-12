@@ -45,7 +45,7 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
   let lastError: unknown;
   while (Date.now() <= deadline) {
     try {
-      const response = await options.ipcClient.request({ type: "activation", url: options.url });
+      const response = await beforeDeadline(options.ipcClient.request({ type: "activation", url: options.url }), deadline);
       if (response.ok && response.type === "activation") return;
       throw lifecycleError("activation_ipc_rejected", "The LocalApp daemon rejected the Scheme activation");
     } catch (error) {
@@ -53,10 +53,20 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
       lastError = error;
       if (!started) {
         started = true;
-        await options.service.start();
+        try {
+          await beforeDeadline(options.service.start(), deadline);
+        } catch (startError) {
+          if (!isDeadlineElapsed(startError)) throw startError;
+          break;
+        }
       }
       if (Date.now() >= deadline) break;
-      await (options.delay ?? delay)(Math.min(100, Math.max(1, deadline - Date.now())));
+      try {
+        await beforeDeadline((options.delay ?? delay)(Math.min(100, Math.max(1, deadline - Date.now()))), deadline);
+      } catch (delayError) {
+        if (!isDeadlineElapsed(delayError)) throw delayError;
+        break;
+      }
     }
   }
   throw lastError instanceof Error ? lastError : lifecycleError("activation_ipc_unreachable", "The LocalApp daemon activation endpoint is unavailable");
@@ -154,6 +164,27 @@ function recordWithExactKeys(value: unknown, keys: readonly string[]): value is 
 
 function isUnreachable(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ipc_unreachable";
+}
+
+function isDeadlineElapsed(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "activation_deadline_elapsed";
+}
+
+async function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed");
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed")), remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {

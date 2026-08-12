@@ -9,21 +9,42 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageDirectory = path.resolve(scriptDirectory, "..");
 const repositoryRoot = path.resolve(process.env.LOCALAPP_REPOSITORY_ROOT ?? path.resolve(packageDirectory, "../.."));
 
-/** Builds the exact current-host adapter; cross-platform source is never packed. */
+/**
+ * Builds one exact target directory. The public package invokes this without a
+ * target override, so it can never accidentally pack adapters for other hosts.
+ * Cross-target tests must inject the Windows compiler seam explicitly.
+ */
 export async function buildNativeAdapter(options = {}) {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
-  const target = `${platform}-${arch}`;
+  const target = supportedTarget(platform, arch);
   const outputDirectory = path.resolve(options.outputDirectory ?? path.join(repositoryRoot, "tmp/localapp-native"));
   const signing = options.signing ?? process.env.LOCALAPP_NATIVE_SIGNING ?? "adhoc";
   if (signing !== "adhoc" && signing !== "release") throw new Error("LOCALAPP_NATIVE_SIGNING must be adhoc or release");
-  if (platform !== "darwin" || !["arm64", "x64"].includes(arch)) {
-    throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${target} on this host`);
-  }
+  if (signing === "release" && platform !== "darwin") throw new Error("release native signing is currently available only for macOS");
+
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(outputDirectory, { recursive: true, mode: 0o755 });
   const targetDirectory = path.join(outputDirectory, target);
-  const appBundle = path.join(targetDirectory, "LocalAppBridge.app");
+  await fs.mkdir(targetDirectory, { recursive: true, mode: 0o755 });
+
+  let result;
+  if (platform === "darwin") result = await buildMacAdapter({ target, targetDirectory, signing, ...options });
+  else if (platform === "linux") result = await buildLinuxAdapter({ targetDirectory });
+  else result = await buildWindowsAdapter({ target, targetDirectory, outputDirectory, buildWindows: options.buildWindows });
+
+  const assets = await collectAssets(outputDirectory);
+  await fs.writeFile(path.join(outputDirectory, "adapter-manifest.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    target,
+    signing: { mode: signing },
+    assets,
+  }, null, 2)}\n`, { mode: 0o644 });
+  return { outputDirectory, target, signing: { mode: signing }, ...result };
+}
+
+async function buildMacAdapter(options) {
+  const appBundle = path.join(options.targetDirectory, "LocalAppBridge.app");
   const macos = path.join(appBundle, "Contents", "MacOS");
   const resources = path.join(appBundle, "Contents", "Resources");
   await fs.mkdir(macos, { recursive: true, mode: 0o755 });
@@ -34,7 +55,56 @@ export async function buildNativeAdapter(options = {}) {
     .replaceAll("@BUNDLE_IDENTIFIER@", bundleIdentifier);
   await fs.writeFile(path.join(appBundle, "Contents", "Info.plist"), info, { mode: 0o644 });
   const executable = path.join(macos, "LocalAppBridge");
-  await copyCachedBridge({ target, executable, cacheDirectory: options.cacheDirectory });
+  await copyCachedBridge({ target: options.target, executable, cacheDirectory: options.cacheDirectory });
+  const ipcClient = path.join(resources, "localapp-native-ipc-client.mjs");
+  await bundleIpcClient(ipcClient);
+  const identity = options.signing === "release" ? process.env.LOCALAPP_MACOS_SIGNING_IDENTITY : "-";
+  if (options.signing === "release" && (!identity || identity === "-")) throw new Error("LOCALAPP_MACOS_SIGNING_IDENTITY is required for release signing");
+  await run("/usr/bin/codesign", ["--force", "--sign", identity, "--options", "runtime", appBundle]);
+  return { appBundle, executable, ipcClient };
+}
+
+async function buildLinuxAdapter({ targetDirectory }) {
+  const ipcClient = path.join(targetDirectory, "localapp-native-ipc-client.mjs");
+  await bundleIpcClient(ipcClient);
+  // The installed entry is rewritten by installLinuxScheme with the released
+  // asset path. This packaged copy remains a valid exact-target build artifact.
+  const desktop = (await fs.readFile(path.join(packageDirectory, "native/linux/localapp-handler.desktop"), "utf8"))
+    .replace("@LOCALAPP_NODE@", desktopExecQuote(process.execPath))
+    .replace("@LOCALAPP_NATIVE_IPC_CLIENT@", desktopExecQuote(ipcClient));
+  await fs.writeFile(path.join(targetDirectory, "localapp-handler.desktop"), desktop, { mode: 0o644 });
+  return { executable: ipcClient, ipcClient };
+}
+
+async function buildWindowsAdapter({ target, targetDirectory, outputDirectory, buildWindows }) {
+  const executable = path.join(targetDirectory, "localapp-native.exe");
+  const ipcClient = path.join(targetDirectory, "localapp-native-ipc-client.mjs");
+  await bundleIpcClient(ipcClient);
+  if (typeof buildWindows === "function") {
+    await buildWindows({ target, executable, targetDirectory });
+  } else {
+    if (process.platform !== "win32") throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${target} without an injected Windows toolchain`);
+    const cargoTarget = windowsCargoTarget(target);
+    const cargoDirectory = path.join(outputDirectory, ".cargo-target");
+    const cargoSource = path.join(outputDirectory, ".cargo-source");
+    await fs.cp(path.join(packageDirectory, "native", "windows"), cargoSource, { recursive: true });
+    try {
+      await run("cargo", ["build", "--release", "--manifest-path", path.join(cargoSource, "Cargo.toml"), "--target", cargoTarget], {
+        CARGO_TARGET_DIR: cargoDirectory,
+      });
+      await fs.copyFile(path.join(cargoDirectory, cargoTarget, "release", "localapp-native.exe"), executable);
+    } finally {
+      await Promise.all([
+        fs.rm(cargoDirectory, { recursive: true, force: true }),
+        fs.rm(cargoSource, { recursive: true, force: true }),
+      ]);
+    }
+  }
+  await fs.chmod(executable, 0o755);
+  return { executable, ipcClient };
+}
+
+async function bundleIpcClient(outfile) {
   await build({
     absWorkingDir: repositoryRoot,
     alias: { "@localapp/server/device-action-ticket": path.join(repositoryRoot, "packages/server/src/device-action-ticket.ts") },
@@ -42,32 +112,17 @@ export async function buildNativeAdapter(options = {}) {
     entryPoints: [path.join(packageDirectory, "src/native/native-ipc-client.ts")],
     format: "esm",
     legalComments: "none",
-    outfile: path.join(resources, "localapp-native-ipc-client.mjs"),
+    outfile,
     platform: "node",
     sourcemap: false,
     target: "node24",
     banner: { js: "#!/usr/bin/env node" },
   });
-  await fs.chmod(path.join(resources, "localapp-native-ipc-client.mjs"), 0o755);
-  if (typeof options.runtimeDir === "string") {
-    await fs.writeFile(path.join(resources, "runtime-configuration.json"), `${JSON.stringify({ LOCALAPP_RUNTIME_DIR: path.resolve(options.runtimeDir) })}\n`, { mode: 0o600 });
-  }
-  const identity = signing === "release" ? process.env.LOCALAPP_MACOS_SIGNING_IDENTITY : "-";
-  if (signing === "release" && (!identity || identity === "-")) {
-    throw new Error("LOCALAPP_MACOS_SIGNING_IDENTITY is required for release signing");
-  }
-  await run("/usr/bin/codesign", ["--force", "--sign", identity, "--options", "runtime", appBundle]);
-  const assets = await collectAssets(outputDirectory);
-  await fs.writeFile(path.join(outputDirectory, "adapter-manifest.json"), `${JSON.stringify({
-    schemaVersion: 1,
-    target,
-    signing: { mode: signing },
-    assets,
-  }, null, 2)}\n`, { mode: 0o644 });
-  return { outputDirectory, target, appBundle, executable, signing: { mode: signing } };
+  await fs.chmod(outfile, 0o755);
 }
 
 async function copyCachedBridge({ target, executable, cacheDirectory }) {
+  if (process.platform !== "darwin") throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot compile ${target} on this host`);
   const source = path.join(packageDirectory, "native/macos/LocalAppBridge.swift");
   const key = crypto.createHash("sha256").update(await fs.readFile(source)).update(target).digest("hex");
   const cacheRoot = path.resolve(cacheDirectory ?? path.join(repositoryRoot, "tmp/localapp-native-build-cache"));
@@ -85,6 +140,21 @@ async function copyCachedBridge({ target, executable, cacheDirectory }) {
   await fs.chmod(executable, 0o755);
 }
 
+function desktopExecQuote(value) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/%/g, "%%")}"`;
+}
+
+function supportedTarget(platform, arch) {
+  if ((platform === "darwin" || platform === "linux" || platform === "win32") && (arch === "arm64" || arch === "x64")) return `${platform}-${arch}`;
+  throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${platform}-${arch}`);
+}
+
+function windowsCargoTarget(target) {
+  if (target === "win32-x64") return "x86_64-pc-windows-msvc";
+  if (target === "win32-arm64") return "aarch64-pc-windows-msvc";
+  throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: no Windows Rust target for ${target}`);
+}
+
 async function collectAssets(root) {
   const files = [];
   const visit = async (directory, prefix) => {
@@ -100,9 +170,9 @@ async function collectAssets(root) {
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function run(command, args) {
+function run(command, args, environment = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { shell: false, stdio: ["ignore", "pipe", "pipe"], ...(environment === undefined ? {} : { env: { ...process.env, ...environment } }) });
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => { stderr += chunk; });

@@ -28,6 +28,42 @@ describe("Scheme activation broker", () => {
     expect(request).toHaveBeenLastCalledWith({ type: "activation", url });
   });
 
+  it("bounds a hanging service start within the one activation deadline", async () => {
+    const result = await Promise.race([
+      forwardActivationToDaemon({
+        url,
+        ipcClient: { request: async () => { throw Object.assign(new Error("endpoint absent"), { code: "ipc_unreachable" }); } },
+        service: { start: async () => await new Promise<never>(() => undefined) },
+        deadlineMs: 20,
+      }).then(() => "resolved", (error: unknown) => error),
+      new Promise<"test timeout">((resolve) => setTimeout(() => resolve("test timeout"), 80)),
+    ]);
+
+    expect(result).toMatchObject({ code: "ipc_unreachable" });
+  });
+
+  it("does not start the service for a malformed or refused private IPC response", async () => {
+    const start = vi.fn(async () => undefined);
+    await expect(forwardActivationToDaemon({
+      url,
+      ipcClient: { request: async () => { throw Object.assign(new Error("malformed"), { code: "ipc_response_invalid" }); } },
+      service: { start },
+      deadlineMs: 50,
+    })).rejects.toMatchObject({ code: "ipc_response_invalid" });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not start the service when the reachable daemon refuses activation", async () => {
+    const start = vi.fn(async () => undefined);
+    await expect(forwardActivationToDaemon({
+      url,
+      ipcClient: { request: async () => ({ ok: false, type: "activation" }) },
+      service: { start },
+      deadlineMs: 50,
+    })).rejects.toMatchObject({ code: "activation_ipc_rejected" });
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("reparses the URL then posts only the canonical ticket with the memory-only control token", async () => {
     const open = vi.fn(async () => undefined);
     const fetch = vi.fn(async (input: string, init: RequestInit) => {
