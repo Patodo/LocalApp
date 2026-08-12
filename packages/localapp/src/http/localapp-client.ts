@@ -57,6 +57,14 @@ export class LocalAppClient {
     return this.request("/api/me/apps/install", { method: "POST", body: form, timeoutMs: 30_000, headers: {} });
   }
 
+  async startApplicationSync(name: string, input: { peerName: string; withData: boolean; confirmation?: string }): Promise<JsonResult> {
+    return this.postJson(`/api/me/apps/${encodeURIComponent(name)}/sync`, input);
+  }
+
+  async getSyncJob(id: string): Promise<JsonResult> {
+    return this.getJson(`/api/sync-jobs/${encodeURIComponent(id)}`);
+  }
+
   private async request(path: string, options: { method: "GET" | "POST"; body?: BodyInit; timeoutMs: number; headers: Record<string, string> }): Promise<JsonResult> {
     if (!path.startsWith("/") || path.startsWith("//")) return { ok: false, error: "Request path must be relative to the LocalApp Server" };
     const controller = new AbortController();
@@ -79,12 +87,21 @@ export class LocalAppClient {
       } catch {
         return { ok: false, status: response.status, error: "Server response was not valid JSON" };
       }
-      if (!response.ok) return { ok: false, status: response.status, error: "Server returned an unsuccessful response" };
+      if (!response.ok) return { ok: false, status: response.status, error: this.publicError(body) };
       return { ok: true, status: response.status, body };
     } catch {
       return { ok: false, error: controller.signal.aborted ? "Request timed out" : "Request failed" };
     } finally {
       this.clearTimeout(timeout);
     }
+  }
+
+  private publicError(body: unknown): string {
+    const value = typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message
+      : undefined;
+    return typeof value === "string" && value.length > 0
+      ? value.replaceAll(this.apiKey, "[REDACTED]")
+      : "Server returned an unsuccessful response";
   }
 }

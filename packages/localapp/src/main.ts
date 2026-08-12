@@ -8,6 +8,10 @@ import { syncManagedTemplate } from "./commands/sync-template.js";
 import { ejectManagedTemplate } from "./commands/eject-template.js";
 import { check } from "./commands/check.js";
 import { buildPackage } from "./commands/build.js";
+import { installApplication } from "./commands/app-install.js";
+import { syncApplication } from "./commands/app-sync.js";
+import { writeCredentialSafeJson } from "./commands/shared.js";
+import { resolveProjectTarget } from "./project/target.js";
 import { loadPackageVersion } from "./version.js";
 import { LocalAppLifecycleError } from "./errors.js";
 import path from "node:path";
@@ -39,6 +43,22 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       return check(io, command.json);
     } else if (command.kind === "build-package") {
       return buildPackage(command.output, io);
+    } else if (command.kind === "app-install") {
+      const projectDir = process.cwd();
+      const result = await installApplication({ projectDir, target: command.target, packagePath: command.packagePath });
+      const profile = await resolveProjectTarget({ projectDir, target: command.target });
+      writeCredentialSafeJson(io, { success: true, ...result }, profile.apiKey);
+    } else if (command.kind === "app-sync") {
+      const projectDir = process.cwd();
+      const job = await syncApplication({
+        projectDir, target: command.target, peer: command.peer,
+        withData: command.withData, confirmation: command.confirmation,
+      });
+      const profile = await resolveProjectTarget({ projectDir, target: command.target });
+      writeCredentialSafeJson(io, {
+        success: true, status: job.status, job, sourceServer: profile.serverUrl,
+        peer: command.peer, withData: command.withData,
+      }, profile.apiKey);
     }
     return 0;
   } catch (error) {

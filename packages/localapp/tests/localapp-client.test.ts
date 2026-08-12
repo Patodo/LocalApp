@@ -90,6 +90,17 @@ describe("LocalAppClient", () => {
       .resolves.toEqual({ ok: true, status: 201, body: { success: true, data: { created: true } } });
   });
 
+  it("preserves a public Server error from an unsuccessful JSON response", async () => {
+    // Break caught: replacing a Server validation error with a generic client failure prevents commands from reportable, credential-safe sync failures.
+    const platformUrl = await listen(createServer((_request, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end('{"success":false,"error":"Peer not found"}');
+    }));
+
+    await expect(new LocalAppClient({ name: "local", serverUrl: platformUrl, apiKey: "error-key" }).postJson("/api/me/apps/notes/sync", {}))
+      .resolves.toEqual({ ok: false, status: 400, error: "Peer not found" });
+  });
+
   it("uploads a package as authenticated multipart form data", async () => {
     // Break caught: installPackage omitting multipart bytes or authentication cannot install an application package.
     const fixture = path.join(await createDirectory(), "notes.localapp");
