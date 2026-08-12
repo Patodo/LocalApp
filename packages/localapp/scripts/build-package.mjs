@@ -52,17 +52,29 @@ export async function buildLocalAppPackage(options = {}) {
     bin: { localapp: "bin/localapp.mjs" },
     engines: { node: ">=24" },
   };
+  const bootstrapEntrypoint = "runtime/bootstrap/localapp-daemon-bootstrap.mjs";
+  const bootstrapPath = path.join(outputDirectory, bootstrapEntrypoint);
+  await fs.mkdir(path.dirname(bootstrapPath), { recursive: true, mode: 0o755 });
+  await fs.writeFile(bootstrapPath, DAEMON_BOOTSTRAP_SOURCE, { mode: 0o755 });
+  await fs.chmod(bootstrapPath, 0o755);
   const manifestPath = path.join(outputDirectory, ".localapp-artifact.json");
   await writeJson(path.join(outputDirectory, "package.json"), packageJson);
-  await writeJson(manifestPath, {
-    schemaVersion: 1,
+  const files = await collectArtifactFiles(outputDirectory);
+  const artifactDescriptor = {
+    schemaVersion: 2,
     name: packageJson.name,
     version: packageJson.version,
     nodeMajor: 24,
     entrypoint: "bin/localapp.mjs",
+    bootstrapEntrypoint,
+    files,
     bundleDigest: await sha256(path.join(binDirectory, "localapp.mjs")),
     serverBundleDigest: serverArtifact.bundleDigest,
     serverEntrypoint: "runtime/server/bin/localapp-server.mjs",
+  };
+  await writeJson(manifestPath, {
+    ...artifactDescriptor,
+    artifactDigest: sha256Bytes(Buffer.from(JSON.stringify(artifactDescriptor))),
   });
 
   return { outputDirectory, tarballInput: outputDirectory, manifestPath };
@@ -98,6 +110,75 @@ async function sha256(filePath) {
   hash.update(await fs.readFile(filePath));
   return hash.digest("hex");
 }
+
+function sha256Bytes(bytes) {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+async function collectArtifactFiles(root) {
+  const files = [];
+  const visit = async (directory, prefix) => {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (relativePath === ".localapp-artifact.json") continue;
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`symbolic link is not allowed in LocalApp artifact: ${relativePath}`);
+      if (entry.isDirectory()) {
+        await visit(absolutePath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) throw new Error(`unsupported LocalApp artifact entry: ${relativePath}`);
+      const before = await fs.lstat(absolutePath, { bigint: true });
+      const bytes = await fs.readFile(absolutePath);
+      const after = await fs.lstat(absolutePath, { bigint: true });
+      if (!before.isFile() || before.isSymbolicLink() || !after.isFile() || after.isSymbolicLink()
+        || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+        || BigInt(bytes.byteLength) !== after.size) {
+        throw new Error(`LocalApp artifact entry changed while hashing: ${relativePath}`);
+      }
+      files.push({ path: relativePath, size: bytes.byteLength, sha256: sha256Bytes(bytes) });
+    }
+  };
+  await visit(root, "");
+  files.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  return files;
+}
+
+const DAEMON_BOOTSTRAP_SOURCE = String.raw`#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const launcher = fileURLToPath(import.meta.url);
+const support = path.resolve(path.dirname(launcher), "..");
+const currentPath = path.join(support, "current.json");
+const fail = () => { process.stderr.write("LocalApp current release is unavailable. Run localapp server start again.\n"); process.exit(1); };
+let current;
+try { current = JSON.parse(fs.readFileSync(currentPath, "utf8")); } catch { fail(); }
+const digest = typeof current?.artifactDigest === "string" && /^[0-9a-f]{64}$/.test(current.artifactDigest) ? current.artifactDigest : "";
+const version = typeof current?.version === "string" && /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/.test(current.version) ? current.version : "";
+const expectedRelease = path.join(support, "releases", version + "-" + digest);
+const entrypoint = typeof current?.entrypoint === "string" ? current.entrypoint : "";
+if (!version || !digest || path.resolve(current.releasePath ?? "") !== path.resolve(expectedRelease)
+  || !entrypoint || entrypoint.includes("\\") || path.posix.normalize(entrypoint) !== entrypoint
+  || entrypoint.startsWith("/") || entrypoint.split("/").some((part) => !part || part === "." || part === "..")) fail();
+const executable = path.join(expectedRelease, ...entrypoint.split("/"));
+const child = spawn(process.execPath, [executable, "_daemon"], {
+  cwd: expectedRelease,
+  env: { ...process.env, LOCALAPP_RELEASE_PATH: expectedRelease },
+  stdio: "inherit",
+  shell: false,
+  windowsHide: true,
+});
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => child.kill(signal));
+child.once("error", fail);
+child.once("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  else process.exit(code ?? 1);
+});
+`;
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   buildLocalAppPackage().then((result) => {

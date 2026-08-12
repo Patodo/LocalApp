@@ -35,12 +35,22 @@ test("packed product exposes one localapp binary without workspace references", 
   const outputDirectory = path.join(testRoot, "artifact with spaces");
   const result = await buildLocalAppPackage({ outputDirectory });
   const manifest = JSON.parse(await fs.readFile(path.join(result.outputDirectory, "package.json"), "utf8"));
+  const artifact = JSON.parse(await fs.readFile(path.join(result.outputDirectory, ".localapp-artifact.json"), "utf8"));
 
   assert.equal(manifest.name, "localapp");
   assert.deepEqual(manifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
   assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.1.0");
   assert.equal(await fs.stat(path.join(result.outputDirectory, "template/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
+  assert.equal(artifact.schemaVersion, 2);
+  assert.equal(artifact.bootstrapEntrypoint, "runtime/bootstrap/localapp-daemon-bootstrap.mjs");
+  assert.equal(artifact.files.some((entry) => entry.path === artifact.entrypoint), true);
+  assert.equal(artifact.files.some((entry) => entry.path === artifact.bootstrapEntrypoint), true);
+  const { artifactDigest, ...artifactDescriptor } = artifact;
+  assert.equal(
+    artifactDigest,
+    (await import("node:crypto")).createHash("sha256").update(JSON.stringify(artifactDescriptor)).digest("hex"),
+  );
 
   const projectRoot = path.join(testRoot, "project");
   await fs.mkdir(projectRoot, { recursive: true });
