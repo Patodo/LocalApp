@@ -11,7 +11,22 @@ export interface CollectedProjectFile {
 }
 
 export interface ProjectFileReadHooks {
+  afterAncestorValidation?(filePath: string): Promise<void>;
   beforeOpen?(filePath: string): Promise<void>;
+}
+
+interface FileIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+interface DirectoryIdentity extends FileIdentity {
+  path: string;
+}
+
+interface CapturedProjectFile {
+  file: FileIdentity;
+  ancestors: readonly DirectoryIdentity[];
 }
 
 export interface PreparedPackageOutput {
@@ -48,7 +63,7 @@ export async function collectProjectTree(options: {
   const root = await resolveProjectDirectory(options);
   if (root === undefined) return [];
   const files: CollectedProjectFile[] = [];
-  await collectTree(root, root, options.label, files, options.hooks);
+  await collectTree(path.resolve(options.projectDir), root, root, options.label, files, options.hooks);
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
@@ -56,17 +71,23 @@ export async function assertRegularProjectFile(projectDir: string, filePath: str
   await captureRegularProjectFile(projectDir, filePath, label);
 }
 
-async function captureRegularProjectFile(projectDir: string, filePath: string, label: string): Promise<{ dev: bigint; ino: bigint }> {
+async function captureRegularProjectFile(
+  projectDir: string,
+  filePath: string,
+  label: string,
+  hooks?: ProjectFileReadHooks,
+): Promise<CapturedProjectFile> {
   const root = path.resolve(projectDir);
   const target = path.resolve(filePath);
   if (!isInside(root, target) || target === root) throw unsafePath(`${label} must stay inside the project`);
-  await assertPathChainHasNoSymlinks(root, path.dirname(target), label);
+  const ancestors = await captureDirectoryChain(root, path.dirname(target), label);
+  await hooks?.afterAncestorValidation?.(target);
   const stat = await fs.lstat(target, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") throw lifecycleError("project_file_missing", `${label} does not exist`);
     throw error;
   });
   if (stat.isSymbolicLink() || !stat.isFile()) throw unsafePath(`${label} must be a regular file without symlinks`);
-  return { dev: stat.dev, ino: stat.ino };
+  return { file: { dev: stat.dev, ino: stat.ino }, ancestors };
 }
 
 export async function readVerifiedFile(
@@ -75,8 +96,8 @@ export async function readVerifiedFile(
   label: string,
   hooks?: ProjectFileReadHooks,
 ): Promise<Buffer> {
-  const identity = await captureRegularProjectFile(projectDir, filePath, label);
-  return readValidatedRegularFile(filePath, label, identity, hooks);
+  const captured = await captureRegularProjectFile(projectDir, filePath, label, hooks);
+  return readValidatedRegularFile(filePath, label, captured, hooks);
 }
 
 export async function resolveProjectDirectory(options: {
@@ -165,41 +186,6 @@ export async function capturePreparedTemporary(
   return { dev: stat.dev, ino: stat.ino };
 }
 
-export async function publishPreparedPackage(
-  prepared: PreparedPackageOutput,
-  temporaryIdentity: { dev: bigint; ino: bigint },
-): Promise<void> {
-  await verifyPreparedTemporary(prepared, temporaryIdentity);
-  if (prepared.overwrite) {
-    await fs.rename(prepared.temporaryPath, prepared.path);
-    return;
-  }
-  try {
-    await fs.link(prepared.temporaryPath, prepared.path);
-  } catch (error) {
-    if (isFileSystemError(error, "EEXIST")) throw packageOutputExists();
-    throw error;
-  }
-  await fs.unlink(prepared.temporaryPath);
-}
-
-export async function cleanupPreparedTemporary(
-  prepared: PreparedPackageOutput,
-  temporaryIdentity?: { dev: bigint; ino: bigint },
-): Promise<void> {
-  try {
-    await verifyPreparedParent(prepared);
-    const stat = await fs.lstat(prepared.temporaryPath, { bigint: true }).catch((error: NodeJS.ErrnoException) =>
-      error.code === "ENOENT" ? undefined : Promise.reject(error));
-    if (stat === undefined || stat.isSymbolicLink() || !stat.isFile()) return;
-    if (temporaryIdentity !== undefined
-      && (stat.dev !== temporaryIdentity.dev || stat.ino !== temporaryIdentity.ino)) return;
-    await fs.unlink(prepared.temporaryPath);
-  } catch {
-    // Never follow or remove through a changed output boundary while handling another failure.
-  }
-}
-
 export function normalizeArchiveRelativePath(value: string, label: string): string {
   const normalized = value.replaceAll("\\", "/").split("/").filter((part) => part !== "" && part !== ".").join("/");
   if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) {
@@ -213,6 +199,7 @@ function asyncReaddir(directory: string) {
 }
 
 async function collectTree(
+  projectDir: string,
   root: string,
   current: string,
   label: string,
@@ -226,15 +213,12 @@ async function collectTree(
     const stat = await fs.lstat(absolutePath, { bigint: true });
     if (stat.isSymbolicLink()) throw unsafePath(`${label} must not contain symlinks: ${relativePath}`);
     if (stat.isDirectory()) {
-      await collectTree(root, absolutePath, label, files, hooks);
+      await collectTree(projectDir, root, absolutePath, label, files, hooks);
     } else if (stat.isFile()) {
       files.push({
         absolutePath,
         relativePath,
-        content: await readValidatedRegularFile(absolutePath, `${label} file ${relativePath}`, {
-          dev: stat.dev,
-          ino: stat.ino,
-        }, hooks),
+        content: await readVerifiedFile(projectDir, absolutePath, `${label} file ${relativePath}`, hooks),
       });
     } else {
       throw unsafePath(`${label} must contain only regular files and directories: ${relativePath}`);
@@ -245,7 +229,7 @@ async function collectTree(
 async function readValidatedRegularFile(
   filePath: string,
   label: string,
-  expected: { dev: bigint; ino: bigint },
+  expected: CapturedProjectFile,
   hooks?: ProjectFileReadHooks,
 ): Promise<Buffer> {
   await hooks?.beforeOpen?.(filePath);
@@ -257,12 +241,46 @@ async function readValidatedRegularFile(
   });
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino) {
+    await verifyDirectoryChain(expected.ancestors, label);
+    const current = await fs.lstat(filePath, { bigint: true }).catch(() => undefined);
+    if (current === undefined || current.isSymbolicLink() || !current.isFile()
+      || current.dev !== expected.file.dev || current.ino !== expected.file.ino
+      || !opened.isFile() || opened.dev !== expected.file.dev || opened.ino !== expected.file.ino) {
       throw unsafePath(`${label} changed before it could be read safely`);
     }
     return await handle.readFile();
   } finally {
     await handle.close();
+  }
+}
+
+async function captureDirectoryChain(root: string, target: string, label: string): Promise<DirectoryIdentity[]> {
+  const relative = path.relative(root, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw unsafePath(`${label} escaped the project`);
+  const directories = [root];
+  let current = root;
+  for (const component of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    directories.push(current);
+  }
+  const identities: DirectoryIdentity[] = [];
+  for (const directory of directories) {
+    const stat = await fs.lstat(directory, { bigint: true }).catch(() => undefined);
+    if (stat === undefined || stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw unsafePath(`${label} must not contain symlinks`);
+    }
+    identities.push({ path: directory, dev: stat.dev, ino: stat.ino });
+  }
+  return identities;
+}
+
+async function verifyDirectoryChain(expected: readonly DirectoryIdentity[], label: string): Promise<void> {
+  for (const directory of expected) {
+    const stat = await fs.lstat(directory.path, { bigint: true }).catch(() => undefined);
+    if (stat === undefined || stat.isSymbolicLink() || !stat.isDirectory()
+      || stat.dev !== directory.dev || stat.ino !== directory.ino) {
+      throw unsafePath(`${label} changed before it could be read safely`);
+    }
   }
 }
 
@@ -304,17 +322,6 @@ async function verifyPreparedParent(prepared: PreparedPackageOutput): Promise<vo
   }
 }
 
-async function verifyPreparedTemporary(
-  prepared: PreparedPackageOutput,
-  identity: { dev: bigint; ino: bigint },
-): Promise<void> {
-  await verifyPreparedParent(prepared);
-  const stat = await fs.lstat(prepared.temporaryPath, { bigint: true });
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.dev !== identity.dev || stat.ino !== identity.ino) {
-    throw unsafePath("Application package temporary output changed during publication");
-  }
-}
-
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
@@ -326,10 +333,6 @@ function unsafePath(message: string) {
 
 function packageOutputExists() {
   return lifecycleError("package_output_exists", "Application package output already exists; choose another path or explicitly enable overwrite");
-}
-
-function isFileSystemError(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && error.code === code;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

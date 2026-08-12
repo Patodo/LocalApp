@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Transform, type Readable } from "node:stream";
+import { Transform, type Readable, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { validateName } from "./validate-name.js";
@@ -180,6 +180,26 @@ export async function writeAppPackage(input: {
   metadata: AppPackageMetadata;
   files: readonly PortablePackageFile[];
 }): Promise<{ digest: string }> {
+  fs.mkdirSync(path.dirname(input.outputPath), { recursive: true });
+  const output = fs.createWriteStream(input.outputPath, { flags: "wx", mode: 0o600 });
+  try {
+    return await writeAppPackageToStream({
+      output,
+      metadata: input.metadata,
+      files: input.files,
+    });
+  } catch (error) {
+    output.destroy();
+    fs.rmSync(input.outputPath, { force: true });
+    throw error;
+  }
+}
+
+export async function writeAppPackageToStream(input: {
+  output: Writable;
+  metadata: AppPackageMetadata;
+  files: readonly PortablePackageFile[];
+}): Promise<{ digest: string }> {
   validateMetadata(input.metadata as unknown as Record<string, unknown>);
   const files = [...input.files].sort((left, right) => left.path.localeCompare(right.path));
   const seen = new Set<string>();
@@ -200,28 +220,29 @@ export async function writeAppPackage(input: {
   for (const file of files) checksumFiles[file.path] = { sha256: sha256(file.content), size: file.content.length };
   const metadataBytes = Buffer.from(`${JSON.stringify(input.metadata)}\n`);
   const checksumBytes = Buffer.from(`${JSON.stringify({ schemaVersion: APP_PACKAGE_SCHEMA_VERSION, files: checksumFiles })}\n`);
-  fs.mkdirSync(path.dirname(input.outputPath), { recursive: true });
   const { ZipArchive } = await import("archiver");
-  const output = fs.createWriteStream(input.outputPath, { flags: "wx", mode: 0o600 });
-  const closed = new Promise<void>((resolve, reject) => {
-    output.on("close", resolve);
-    output.on("error", reject);
+  const hash = crypto.createHash("sha256");
+  const hashing = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      hash.update(chunk);
+      callback(null, chunk);
+    },
   });
   const archive = new ZipArchive({ zlib: { level: 9 } }) as ArchiveWriter;
-  archive.on("error", (error: Error) => output.destroy(error));
-  archive.pipe(output);
+  archive.on("error", (error: Error) => hashing.destroy(error));
+  archive.pipe(hashing);
+  const completed = pipeline(hashing, input.output);
   try {
     archive.append(metadataBytes, { name: "package.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
     archive.append(checksumBytes, { name: "checksums.json", date: FIXED_ARCHIVE_DATE, mode: 0o644 });
     for (const file of files) archive.append(file.content, { name: file.path, date: FIXED_ARCHIVE_DATE, mode: 0o644 });
     await archive.finalize();
-    await closed;
-    return { digest: await sha256File(input.outputPath) };
+    await completed;
+    return { digest: hash.digest("hex") };
   } catch (error) {
     archive.abort();
-    output.destroy();
-    await closed.catch(() => undefined);
-    fs.rmSync(input.outputPath, { force: true });
+    input.output.destroy(error instanceof Error ? error : undefined);
+    await completed.catch(() => undefined);
     throw error;
   }
 }

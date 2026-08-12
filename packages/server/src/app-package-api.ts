@@ -3,6 +3,7 @@ export {
   AppPackageValidationError,
   inspectAppPackage,
   writeAppPackage,
+  writeAppPackageToStream,
   type AppPackageMetadata,
   type InspectedAppPackage,
   type PortablePackageFile,

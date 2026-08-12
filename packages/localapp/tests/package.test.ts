@@ -127,6 +127,38 @@ describe("application package creation", () => {
     await expect(fs.access(outputPath)).rejects.toThrow();
   });
 
+  it("rejects outside content reached by replacing a checked dist ancestor", async () => {
+    // Break caught: checking ancestors only by pathname lets a replacement directory redirect both leaf lstat and open outside the project.
+    const projectDir = await createProject();
+    const outsideDir = await fs.mkdtemp(path.join(testRoot, "outside-"));
+    directories.push(outsideDir);
+    const distDir = path.join(projectDir, "dist");
+    const target = path.join(distDir, "index.html");
+    const outsideDist = path.join(outsideDir, "dist");
+    const outputPath = path.join(projectDir, "ancestor-raced.localapp");
+    await fs.mkdir(path.join(outsideDist, "assets"), { recursive: true });
+    await fs.writeFile(path.join(outsideDist, "index.html"), "<main>outside secret</main>\n");
+    await fs.writeFile(path.join(outsideDist, "assets/app.js"), "console.log('outside secret');\n");
+    let replaced = false;
+
+    await expect(buildApplicationPackage({
+      projectDir,
+      outputPath,
+      run: successfulRunner([]),
+      fileHooks: {
+        afterAncestorValidation: async (filePath: string) => {
+          if (filePath !== target || replaced) return;
+          replaced = true;
+          await fs.rename(distDir, `${distDir}.original`);
+          await fs.symlink(outsideDist, distDir);
+        },
+      },
+    })).rejects.toMatchObject({ code: "project_check_failed" });
+
+    expect(replaced).toBe(true);
+    await expect(fs.access(outputPath)).rejects.toThrow();
+  });
+
   it("revalidates an output parent after project scripts replace it with a symlink", async () => {
     // Break caught: validating the output parent before build scripts lets package creation escape through a replacement symlink.
     const projectDir = await createProject();
@@ -148,6 +180,34 @@ describe("application package creation", () => {
     await expect(buildApplicationPackage({ projectDir, outputPath, run })).rejects.toMatchObject({ code: "unsafe_project_path" });
     expect(replaced).toBe(true);
     expect(await fs.readdir(outsideDir)).toEqual([]);
+  });
+
+  it("does not create candidate files through an output parent replaced after preparation", async () => {
+    // Break caught: creating the sibling candidate by absolute pathname after validation can write package bytes outside the intended parent.
+    const projectDir = await createProject();
+    const outsideDir = await fs.mkdtemp(path.join(testRoot, "outside-"));
+    directories.push(outsideDir);
+    const outputParent = path.join(projectDir, "package-output");
+    const outputPath = path.join(outputParent, "items.localapp");
+    await fs.mkdir(outputParent);
+    let replaced = false;
+
+    await expect(buildApplicationPackage({
+      projectDir,
+      outputPath,
+      run: successfulRunner([]),
+      outputHooks: {
+        beforeCandidateCreate: async () => {
+          replaced = true;
+          await fs.rename(outputParent, `${outputParent}.original`);
+          await fs.symlink(outsideDir, outputParent);
+        },
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    expect(replaced).toBe(true);
+    expect(await fs.readdir(outsideDir)).toEqual([]);
+    await expect(fs.access(outputPath)).rejects.toThrow();
   });
 
   it("preserves an output created concurrently by a project build script", async () => {
