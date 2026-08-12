@@ -134,3 +134,116 @@ and API-key redaction. Existing argument-parser tests remained green.
 No outstanding concerns. Interactive login was intentionally not preserved:
 the parser-supported noninteractive Server URL and `--api-key` form is
 mandatory and avoids any secret prompt handling in this task.
+
+## Fix round: review findings
+
+This fix round addressed the Critical and three Important findings from the
+Task 2 review. The Minor logout-report finding was deliberately not changed.
+
+### Implementation
+
+- Command JSON serialization now redacts the exact selected credential after
+  serialization. This protects `login` against a credential reflected in
+  `id`, `name`, or `role`, and protects `whoami` regardless of field name or
+  nesting. Fixed command errors remain fixed strings and never serialize a
+  response body.
+- Existing `profiles.json` reads first reject symlinks, then use a POSIX
+  `O_NOFOLLOW` descriptor and validate the opened descriptor. POSIX reads
+  require a regular file owned by the current UID with mode exactly `0600`
+  before parsing any credentials. Windows keeps regular-file/symlink checks
+  without claiming that POSIX UID/mode metadata proves DACL safety.
+- `loadPackageVersion()` now reads the package-local manifest. Source code
+  resolves `packages/localapp/package.json`; the self-contained bundle resolves
+  the packed artifact's adjacent `package.json`. Both `--version` and the
+  authenticated `X-CLI-Version` header use it.
+- `LocalAppClient` has a narrow injectable timer boundary for deterministic
+  timeout tests. `login` has a narrow client-construction seam, letting its
+  10-second contract be observed using the real client and real local HTTP
+  server. No production timeout values changed.
+
+### Covering test files
+
+- `packages/localapp/tests/login.test.ts`: reflected credentials in login
+  identity fields and nested whoami fields; literal 10,000 ms login timeout.
+- `packages/localapp/tests/profile-store.test.ts`: unsafe existing mode,
+  symlink rejection, and an actual foreign-UID rejection when the test runs
+  with privilege.
+- `packages/localapp/tests/version.test.ts`: manifest loading plus shared
+  `--version` and authenticated-header manifest version.
+- `packages/localapp/tests/localapp-client.test.ts`: real HTTP JSON POST,
+  multipart package upload, authentication/version headers, and literal
+  30,000 ms ordinary timeout.
+
+### RED evidence
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 failed (1)
+Tests  2 failed | 4 passed (6)
+AssertionError: expected true to be false
+
+pnpm -C packages/localapp exec vitest run tests/profile-store.test.ts
+Test Files  1 failed (1)
+Tests  2 failed | 2 passed | 1 skipped (5)
+Profile document loaded instead of rejecting unsafe mode and symlink paths.
+
+pnpm -C packages/localapp exec vitest run tests/version.test.ts
+Test Files  1 failed (1)
+Cannot find module '../src/version.js'
+
+pnpm -C packages/localapp exec vitest run tests/localapp-client.test.ts tests/login.test.ts
+Test Files  2 failed (2)
+Tests  2 failed | 10 passed (12)
+expected [] to deeply equal [ 30000 ]
+expected [] to deeply equal [ 10000 ]
+```
+
+The POST and multipart tests passed before the timer seam existed; they were
+added as real-Server coverage for already-correct behavior, while the same RED
+run proved the previously unobservable timeout contracts were uncovered.
+
+### GREEN evidence
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 passed (1)
+Tests  6 passed (6)
+
+pnpm -C packages/localapp exec vitest run tests/profile-store.test.ts
+Test Files  1 passed (1)
+Tests  4 passed | 1 skipped (5)
+
+pnpm -C packages/localapp exec vitest run tests/version.test.ts
+Test Files  1 passed (1)
+Tests  2 passed (2)
+
+pnpm -C packages/localapp exec vitest run tests/localapp-client.test.ts tests/login.test.ts
+Test Files  2 passed (2)
+Tests  12 passed (12)
+
+pnpm -C packages/localapp test
+Test Files  5 passed (5)
+Tests  65 passed | 1 skipped (66)
+
+pnpm -C packages/localapp build
+tsc -p tsconfig.json (exit 0)
+
+pnpm -C packages/server exec vitest run tests/integration/auth.test.ts tests/integration/global-auth.test.ts
+Test Files  2 passed (2)
+Tests  9 passed (9)
+
+LOCALAPP_PACKAGE_DIR=<repo>/tmp/localapp-task-2-package pnpm -C packages/localapp build:package
+node <repo>/tmp/localapp-task-2-package/bin/localapp.mjs --version
+localapp 0.1.0
+```
+
+### Fix-round review and concern
+
+- `git diff --check` passed.
+- No source version literal remains outside `packages/localapp/package.json`.
+- The foreign-UID regression is a real filesystem test but is skipped for a
+  non-root developer process because POSIX correctly forbids manufacturing a
+  differently-owned file without privilege; the production UID check is active
+  on every POSIX run.
+- The temporary packed artifact was created only under the repository's
+  `tmp/localapp-task-2-package/` for the self-contained runtime check.

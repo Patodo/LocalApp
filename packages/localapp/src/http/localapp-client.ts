@@ -1,8 +1,7 @@
 import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
 import { normalizeServerUrl, type ServerProfile } from "../config/profile-store.js";
-
-const PRODUCT_VERSION = "0.1.0";
+import { loadPackageVersion } from "../version.js";
 
 export type JsonResult =
   | { ok: true; status: number; body: unknown }
@@ -14,13 +13,24 @@ export interface JsonRequestOptions {
   timeoutMs?: number;
 }
 
+type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
+
+export interface LocalAppClientDependencies {
+  setTimeout?: (callback: () => void, timeoutMs: number) => TimerHandle;
+  clearTimeout?: (handle: TimerHandle) => void;
+}
+
 export class LocalAppClient {
   private readonly serverUrl: string;
   private readonly apiKey: string;
+  private readonly setTimeout: (callback: () => void, timeoutMs: number) => TimerHandle;
+  private readonly clearTimeout: (handle: TimerHandle) => void;
 
-  constructor(profile: Pick<ServerProfile, "serverUrl" | "apiKey">) {
+  constructor(profile: Pick<ServerProfile, "serverUrl" | "apiKey">, dependencies: LocalAppClientDependencies = {}) {
     this.serverUrl = normalizeServerUrl(profile.serverUrl);
     this.apiKey = profile.apiKey;
+    this.setTimeout = dependencies.setTimeout ?? globalThis.setTimeout;
+    this.clearTimeout = dependencies.clearTimeout ?? globalThis.clearTimeout;
   }
 
   async requestJson(path: string, options: JsonRequestOptions = {}): Promise<JsonResult> {
@@ -50,12 +60,13 @@ export class LocalAppClient {
   private async request(path: string, options: { method: "GET" | "POST"; body?: BodyInit; timeoutMs: number; headers: Record<string, string> }): Promise<JsonResult> {
     if (!path.startsWith("/") || path.startsWith("//")) return { ok: false, error: "Request path must be relative to the LocalApp Server" };
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+    const timeout = this.setTimeout(() => controller.abort(), options.timeoutMs);
     try {
+      const version = await loadPackageVersion();
       const response = await fetch(`${this.serverUrl}${path}`, {
         method: options.method,
         body: options.body,
-        headers: { "X-API-Key": this.apiKey, "X-CLI-Version": PRODUCT_VERSION, ...options.headers },
+        headers: { "X-API-Key": this.apiKey, "X-CLI-Version": version, ...options.headers },
         redirect: "manual",
         signal: controller.signal,
       });
@@ -73,7 +84,7 @@ export class LocalAppClient {
     } catch {
       return { ok: false, error: controller.signal.aborted ? "Request timed out" : "Request failed" };
     } finally {
-      clearTimeout(timeout);
+      this.clearTimeout(timeout);
     }
   }
 }

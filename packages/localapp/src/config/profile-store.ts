@@ -1,4 +1,5 @@
-import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, rename, rm } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { localAppConfigDirectory, profilesPath } from "./paths.js";
@@ -50,10 +51,11 @@ export class ProfileStore {
 
   async load(): Promise<ProfileDocument> {
     try {
-      return parseProfileDocument(await readFile(this.path(), "utf8"));
+      return parseProfileDocument(await readProfileDocument(this.path()));
     } catch (error: unknown) {
       if (isNotFound(error)) return structuredClone(EMPTY_DOCUMENT);
       if (error instanceof SyntaxError) throw new Error("Profile document is invalid");
+      if (isUnsafeSymlinkOpen(error)) throw new Error("Profile document path is unsafe");
       throw error;
     }
   }
@@ -144,6 +146,25 @@ function normalizeProfile(value: unknown): ServerProfile {
   return { name: value.name, serverUrl: normalizeServerUrl(value.serverUrl), apiKey: value.apiKey };
 }
 
+async function readProfileDocument(filePath: string): Promise<string> {
+  const pathMetadata = await lstat(filePath);
+  if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
+    throw new Error("Profile document path is unsafe");
+  }
+  const handle = await open(filePath, process.platform === "win32" ? "r" : constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) throw new Error("Profile document path is unsafe");
+    if (process.platform !== "win32") {
+      if ((metadata.mode & 0o777) !== 0o600) throw new Error("Profile document permissions are unsafe");
+      if (metadata.uid !== process.getuid?.()) throw new Error("Profile document ownership is unsafe");
+    }
+    return handle.readFile({ encoding: "utf8" });
+  } finally {
+    await handle.close();
+  }
+}
+
 async function atomicWrite(destination: string, content: string): Promise<void> {
   const directory = path.dirname(destination);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -178,4 +199,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNotFound(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isUnsafeSymlinkOpen(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ELOOP";
 }

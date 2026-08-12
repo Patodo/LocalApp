@@ -1,7 +1,7 @@
 import type { CliIo } from "../cli/output.js";
 import { ProfileStore } from "../config/profile-store.js";
 import { LocalAppClient } from "../http/localapp-client.js";
-import { writeCommandError } from "./shared.js";
+import { writeCommandError, writeCredentialSafeJson } from "./shared.js";
 
 export async function whoami(command: { profile?: string }, io: CliIo): Promise<number> {
   let profile;
@@ -16,7 +16,7 @@ export async function whoami(command: { profile?: string }, io: CliIo): Promise<
     writeCommandError(io, "whoami_failed", "Could not authenticate with the LocalApp Server");
     return 1;
   }
-  io.stdout(`${JSON.stringify(withoutApiKeys(result.body))}\n`);
+  writeCredentialSafeJson(io, withoutApiKeys(result.body), profile.apiKey);
   return 0;
 }
 

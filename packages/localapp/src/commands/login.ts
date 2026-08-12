@@ -1,9 +1,13 @@
 import type { CliIo } from "../cli/output.js";
 import { normalizeServerUrl, ProfileStore } from "../config/profile-store.js";
 import { LocalAppClient } from "../http/localapp-client.js";
-import { writeCommandError } from "./shared.js";
+import { writeCommandError, writeCredentialSafeJson } from "./shared.js";
 
-export async function login(command: { serverUrl?: string; apiKey?: string; profile?: string }, io: CliIo): Promise<number> {
+export interface LoginDependencies {
+  createClient?: (profile: { serverUrl: string; apiKey: string }) => LocalAppClient;
+}
+
+export async function login(command: { serverUrl?: string; apiKey?: string; profile?: string }, io: CliIo, dependencies: LoginDependencies = {}): Promise<number> {
   if (command.serverUrl === undefined || command.apiKey === undefined) {
     writeCommandError(io, "login_input_required", "login requires a Server URL and --api-key");
     return 1;
@@ -16,7 +20,8 @@ export async function login(command: { serverUrl?: string; apiKey?: string; prof
     return 1;
   }
 
-  const result = await new LocalAppClient({ serverUrl, apiKey: command.apiKey }).getJson("/api/me", 10_000);
+  const client = dependencies.createClient?.({ serverUrl, apiKey: command.apiKey }) ?? new LocalAppClient({ serverUrl, apiKey: command.apiKey });
+  const result = await client.getJson("/api/me", 10_000);
   if (!result.ok) {
     writeCommandError(io, result.status === 401 ? "login_invalid_api_key" : "login_connection_failed", result.status === 401 ? "API Key was rejected by the LocalApp Server" : "Could not validate the LocalApp Server");
     return 1;
@@ -34,7 +39,7 @@ export async function login(command: { serverUrl?: string; apiKey?: string; prof
     writeCommandError(io, "profile_save_failed", "Could not save the authenticated profile");
     return 1;
   }
-  io.stdout(`${JSON.stringify({ success: true, user, profile, serverUrl })}\n`);
+  writeCredentialSafeJson(io, { success: true, user, profile, serverUrl }, command.apiKey);
   return 0;
 }
 

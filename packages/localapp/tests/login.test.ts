@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProfileStore } from "../src/config/profile-store.js";
+import { login } from "../src/commands/login.js";
+import { LocalAppClient } from "../src/http/localapp-client.js";
 import { runLocalApp } from "../src/main.js";
 
 const servers: Server[] = [];
@@ -131,5 +133,72 @@ describe("authentication commands", () => {
     expect(code).toBe(0);
     expect(stdout.includes("unexpected")).toBe(false);
     expect(stdout.includes(apiKey)).toBe(false);
+  });
+
+  it("does not serialize a credential reflected as login identity data", async () => {
+    // Break caught: serializing server-controlled id/name/role can reflect the submitted credential.
+    const configDir = await createConfigDirectory();
+    const apiKey = "reflected-login-credential";
+    const serverUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`{"success":true,"data":{"id":"${apiKey}","name":"Alice","role":"user"}}`);
+    }));
+    vi.stubEnv("LOCALAPP_CONFIG_DIR", configDir);
+    let stdout = "";
+    let stderr = "";
+
+    const code = await runLocalApp(["login", serverUrl, "--api-key", apiKey, "--profile", "local"], {
+      stdout: (value) => { stdout += value; },
+      stderr: (value) => { stderr += value; },
+    });
+
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`.includes(apiKey)).toBe(false);
+  });
+
+  it("does not serialize a credential reflected under arbitrary nested whoami data", async () => {
+    // Break caught: key-name redaction alone misses a credential reflected in arbitrary nested data.
+    const configDir = await createConfigDirectory();
+    const apiKey = "reflected-whoami-credential";
+    const serverUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`{"success":true,"data":{"id":"eve","name":"Eve","role":"user","metadata":{"echo":"${apiKey}"}}}`);
+    }));
+    await new ProfileStore(configDir).upsert({ name: "local", serverUrl, apiKey });
+    vi.stubEnv("LOCALAPP_CONFIG_DIR", configDir);
+    let stdout = "";
+    let stderr = "";
+
+    const code = await runLocalApp(["whoami"], {
+      stdout: (value) => { stdout += value; },
+      stderr: (value) => { stderr += value; },
+    });
+
+    expect(code).toBe(0);
+    expect(`${stdout}${stderr}`.includes(apiKey)).toBe(false);
+  });
+
+  it("uses a literal 10-second timeout for login validation", async () => {
+    // Break caught: login validation inheriting the ordinary 30-second timeout delays credential feedback.
+    const configDir = await createConfigDirectory();
+    const observedTimeouts: number[] = [];
+    const serverUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"success":true,"data":{"id":"alice","name":"Alice","role":"user"}}');
+    }));
+    vi.stubEnv("LOCALAPP_CONFIG_DIR", configDir);
+
+    const code = await login({ serverUrl, apiKey: "timeout-key", profile: "local" }, { stdout: () => undefined, stderr: () => undefined }, {
+      createClient: (profile) => new LocalAppClient(profile, {
+        setTimeout: (_callback: () => void, timeoutMs: number) => {
+          observedTimeouts.push(timeoutMs);
+          return undefined;
+        },
+        clearTimeout: () => undefined,
+      }),
+    });
+
+    expect(code).toBe(0);
+    expect(observedTimeouts).toEqual([10_000]);
   });
 });
