@@ -146,7 +146,8 @@ private func showNotification(_ rawEnvelope: String) -> Bool {
   guard rawEnvelope.lengthOfBytes(using: .utf8) <= notificationEnvelopeLimit,
         let data = rawEnvelope.data(using: .utf8),
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        Set(object.keys) == Set(["ticket", "title", "body", "sourceLabel", "priority", "iconPath"]),
+        Set(object.keys) == Set(["identifier", "ticket", "title", "body", "sourceLabel", "priority", "iconPath"]),
+        let identifier = object["identifier"] as? String, validTicket(identifier),
         let ticket = object["ticket"] as? String, validTicket(ticket),
         let title = object["title"] as? String, !title.isEmpty,
         let body = object["body"] as? String,
@@ -163,7 +164,7 @@ private func showNotification(_ rawEnvelope: String) -> Bool {
   content.sound = .default
   let completed = DispatchSemaphore(value: 0)
   var accepted = false
-  UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: ticket, content: content, trigger: nil)) { error in
+  UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { error in
     accepted = error == nil
     completed.signal()
   }

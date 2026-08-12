@@ -23,16 +23,16 @@ afterEach(async () => {
 describe("native adapter boundary", () => {
   it("bounds the native notification envelope and excludes arbitrary destinations", () => {
     expect(validateNativeNotificationEnvelope({
-      ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath: "/safe/icon.png",
+      identifier: "notification_native_0123456789", ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath: "/safe/icon.png",
     })).toEqual({
-      ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath: "/safe/icon.png",
+      identifier: "notification_native_0123456789", ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath: "/safe/icon.png",
     });
     expect(() => validateNativeNotificationEnvelope({
-      ticket: "notification_ticket_0123456789", title: "x".repeat(9_000), body: "body", sourceLabel: "source", priority: "normal", iconPath: "/safe/icon.png", url: "https://evil.example",
+      identifier: "notification_native_0123456789", ticket: "notification_ticket_0123456789", title: "x".repeat(9_000), body: "body", sourceLabel: "source", priority: "normal", iconPath: "/safe/icon.png", url: "https://evil.example",
     })).toThrow(/NATIVE_NOTIFICATION_INVALID/);
     for (const iconPath of ["file:///safe/icon.png", "relative/icon.png", "/safe/../icon.png", "/safe/\0icon.png"]) {
       expect(() => validateNativeNotificationEnvelope({
-        ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath,
+        identifier: "notification_native_0123456789", ticket: "notification_ticket_0123456789", title: "Build complete", body: "The task finished", sourceLabel: "Local server", priority: "normal", iconPath,
       })).toThrow(/NATIVE_NOTIFICATION_INVALID/);
     }
   });

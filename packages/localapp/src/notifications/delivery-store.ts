@@ -475,7 +475,7 @@ function parseIntent(value: unknown): ClickIntent {
   invalidState();
 }
 
-function validateDelivery(value: unknown): DeliveryNotification {
+export function validateDeliveryNotification(value: unknown): DeliveryNotification {
   if (!record(value) || !exactKeys(value, ["id", "sequence", "app_owner", "app_name", "title", "body", "url", "priority", "created_at"])
     || typeof value.id !== "string" || !RECORD_ID.test(value.id) || typeof value.app_owner !== "string" || typeof value.app_name !== "string"
     || typeof value.title !== "string" || value.title.length < 1 || !safeText(value.title)
@@ -488,6 +488,8 @@ function validateDelivery(value: unknown): DeliveryNotification {
   if (!safeName(value.app_owner) || !safeName(value.app_name)) throw new Error("Notification delivery serializer is invalid");
   return { id: value.id, sequence: value.sequence, app_owner: value.app_owner, app_name: value.app_name, title: value.title, body: value.body, url: value.url, priority: value.priority, created_at: value.created_at };
 }
+
+const validateDelivery = validateDeliveryNotification;
 
 function safeRelativeUrl(value: string): boolean {
   if (value.length < 1 || value.length > 2_048 || !value.startsWith("/") || value.startsWith("//") || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return false;

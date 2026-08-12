@@ -11,6 +11,7 @@ export const NATIVE_NOTIFICATION_ENVELOPE_LIMIT_BYTES = 8 * 1024;
 
 export type NativePermissionState = "not-determined" | "granted" | "denied" | "unsupported" | "unknown";
 export interface NativeNotificationEnvelope {
+  identifier: string;
   ticket: string;
   title: string;
   body: string;
@@ -99,14 +100,15 @@ export function validateNativeNotificationEnvelope(value: unknown, platform: Nod
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { throw invalidEnvelope(); }
   if (Buffer.byteLength(serialized, "utf8") > NATIVE_NOTIFICATION_ENVELOPE_LIMIT_BYTES
-    || !exactKeys(value, ["ticket", "title", "body", "sourceLabel", "priority", "iconPath"])
+    || !exactKeys(value, ["identifier", "ticket", "title", "body", "sourceLabel", "priority", "iconPath"])
+    || typeof value.identifier !== "string" || !/^[A-Za-z0-9_-]{16,256}$/.test(value.identifier)
     || typeof value.ticket !== "string" || !/^[A-Za-z0-9_-]{16,256}$/.test(value.ticket)
     || typeof value.title !== "string" || typeof value.body !== "string" || typeof value.sourceLabel !== "string"
     || (value.priority !== "normal" && value.priority !== "high") || typeof value.iconPath !== "string"
     || value.title.length === 0 || value.sourceLabel.length === 0 || !safeAbsoluteLocalPath(value.iconPath, platform)) {
     throw invalidEnvelope();
   }
-  return { ticket: value.ticket, title: value.title, body: value.body, sourceLabel: value.sourceLabel, priority: value.priority, iconPath: value.iconPath };
+  return { identifier: value.identifier, ticket: value.ticket, title: value.title, body: value.body, sourceLabel: value.sourceLabel, priority: value.priority, iconPath: value.iconPath };
 }
 
 export interface LinuxSchemeInstallOptions {

@@ -63,7 +63,10 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   const direct = await run(built.executable, [activationUrl]);
   assert.equal(direct.code, 0, direct.stderr);
   await waitFor(() => received.length === 1, "one direct bridge IPC activation");
-  const opened = await run("/usr/bin/open", ["-b", "dev.localapp.bridge.task8", activationUrl]);
+  // Force a fresh short-lived bridge instance. A prior interrupted acceptance
+  // may leave a background-only process alive, and LaunchServices otherwise
+  // reuses that process with its stale in-memory registration state.
+  const opened = await run("/usr/bin/open", ["-n", "-b", "dev.localapp.bridge.task8", activationUrl]);
   assert.equal(opened.code, 0, opened.stderr);
   await waitFor(() => received.length === 2, "one LaunchServices bridge IPC activation");
   assert.deepEqual(received, [{ type: "activation", url: activationUrl }, { type: "activation", url: activationUrl }]);
