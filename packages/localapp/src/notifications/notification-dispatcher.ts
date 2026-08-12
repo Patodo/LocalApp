@@ -144,17 +144,19 @@ export class NotificationDispatcher {
     if (permission === "denied") return { result: "denied", permission };
     if (permission === "unsupported") return { result: "unsupported", permission };
     if (permission !== "granted") return { result: "failed", permission };
-    await this.adapter.showNotification(validateNativeNotificationEnvelope({
-      identifier: commandId,
-      ticket: commandId,
-      productLabel: "LocalApp",
-      applicationLabel: "Notifications",
-      title: "LocalApp notifications are ready",
-      body: "This computer can display LocalApp notifications.",
-      sourceLabel: "This device",
-      priority: "normal",
-      iconPath: this.iconPath,
-    }));
+    try {
+      await this.adapter.showNotification(validateNativeNotificationEnvelope({
+        identifier: commandId,
+        ticket: commandId,
+        productLabel: "LocalApp",
+        applicationLabel: "Notifications",
+        title: "LocalApp notifications are ready",
+        body: "This computer can display LocalApp notifications.",
+        sourceLabel: "This device",
+        priority: "normal",
+        iconPath: this.iconPath,
+      }));
+    } catch { return { result: "failed", permission }; }
     return { result: "shown", permission };
   }
 

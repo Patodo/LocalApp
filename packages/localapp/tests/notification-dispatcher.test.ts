@@ -149,4 +149,10 @@ describe("NotificationDispatcher", () => {
     expect(adapter.requestPermission).toHaveBeenCalledTimes(1);
     expect(adapter.showNotification).not.toHaveBeenCalled();
   });
+
+  it("returns a stable failed test result when the desktop rejects display", async () => {
+    const { adapter, dispatcher } = await fixture("granted");
+    adapter.showNotification.mockRejectedValueOnce(new Error("desktop unavailable secret detail"));
+    await expect(dispatcher.sendTestNotification("11111111-1111-4111-8111-111111111111")).resolves.toEqual({ result: "failed", permission: "granted" });
+  });
 });
