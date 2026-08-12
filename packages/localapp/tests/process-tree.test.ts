@@ -26,6 +26,85 @@ afterEach(async () => {
 });
 
 describe("owned process trees", () => {
+  it("reports deterministic forced exit and waits for group disappearance when guardian exits first", async () => {
+    // Break caught: guardian exit can beat its command-exit IPC and make terminate resolve with a synthetic protocol error while the group remains.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new ForcedCleanupModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 100,
+        unixAdapter: model,
+      });
+      ownedProcesses.push(owned);
+      let terminated = false;
+      const termination = owned.terminate().then(() => { terminated = true; });
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(owned.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
+      expect(terminated).toBe(false);
+      expect(model.groupChecks).toBeGreaterThan(0);
+
+      model.groupPresent = false;
+      await vi.advanceTimersByTimeAsync(20);
+      await termination;
+
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(terminated).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed on post-force replacement liveness without sending another signal", async () => {
+    // Break caught: treating a reused PGID as owned after force can either resolve before disappearance or send a second KILL to the replacement.
+    if (process.platform === "win32") return;
+    vi.useFakeTimers();
+    try {
+      const model = new ForcedCleanupModel();
+      const owned = spawnOwnedProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        gracefulTimeoutMs: 20,
+        forceTimeoutMs: 40,
+        unixAdapter: model,
+      });
+      ownedProcesses.push(owned);
+      const termination = owned.terminate().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(60);
+
+      await expect(termination).resolves.toEqual(expect.objectContaining({
+        code: "owned_process_tree_exit_unconfirmed",
+        message: expect.stringMatching(/could not confirm.*group.*disappeared/i),
+      }));
+      expect(model.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(model.groupChecks).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the actual result when the command exits normally before cleanup", async () => {
+    // Break caught: always preferring the force sentinel discards an actual command status already reported by the guardian.
+    if (process.platform === "win32") return;
+    const owned = spawnOwnedProcess(process.execPath, ["-e", "process.exit(7)"], {
+      stdio: "ignore",
+      gracefulTimeoutMs: 20,
+      forceTimeoutMs: 2_000,
+    });
+    ownedProcesses.push(owned);
+
+    await expect(owned.exited).resolves.toEqual({ code: 7, signal: null });
+    await owned.terminate();
+    await expect(owned.exited).resolves.toEqual({ code: 7, signal: null });
+  });
+
   it("fails closed without signaling a replacement group when guardian identity retires before escalation", async () => {
     // Break caught: a cached numeric PGID can be reused after graceful polling and then receive the owned tree's SIGKILL.
     if (process.platform === "win32") return;
@@ -127,6 +206,41 @@ describe("owned process trees", () => {
   });
 });
 
+class ForcedCleanupModel implements UnixProcessTreeAdapter {
+  readonly signals: NodeJS.Signals[] = [];
+  groupPresent = true;
+  groupChecks = 0;
+  private readonly commandExit = deferred<OwnedProcessExit>();
+  private readonly guardianExit = deferred<OwnedProcessExit>();
+
+  spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
+    const child = fakeChild(51_051);
+    return {
+      child,
+      commandExited: this.commandExit.promise,
+      guardianExited: this.guardianExit.promise,
+      signalOwnedTree: async (force, onDispatched?: () => void) => {
+        const signal = force ? "SIGKILL" : "SIGTERM";
+        this.signals.push(signal);
+        if (force) {
+          onDispatched?.();
+          this.guardianExit.resolve({ code: null, signal: "SIGKILL" });
+          this.commandExit.resolve({
+            code: null,
+            signal: null,
+            error: new Error("guardian exited before command IPC"),
+          });
+        }
+        return "signaled";
+      },
+      ownedGroupExists: async () => {
+        this.groupChecks += 1;
+        return this.groupPresent;
+      },
+    };
+  }
+}
+
 class ReusedUnixGroupModel implements UnixProcessTreeAdapter {
   readonly signalAttempts: Array<{ identity: "owned" | "replacement"; signal: NodeJS.Signals }> = [];
   readonly ownedSignals: NodeJS.Signals[] = [];
@@ -136,14 +250,7 @@ class ReusedUnixGroupModel implements UnixProcessTreeAdapter {
   private readonly guardianExit = deferred<OwnedProcessExit>();
 
   spawnOwned(_command: string, _args: readonly string[], _options: SpawnOptions): UnixOwnedProcessHandle {
-    const child = Object.assign(new EventEmitter(), {
-      pid: 42_424,
-      exitCode: null,
-      signalCode: null,
-      stdout: null,
-      stderr: null,
-      stdin: null,
-    }) as ChildProcess;
+    const child = fakeChild(42_424);
     return {
       child,
       commandExited: this.commandExit.promise,
@@ -162,8 +269,20 @@ class ReusedUnixGroupModel implements UnixProcessTreeAdapter {
         }
         return "signaled";
       },
+      ownedGroupExists: () => true,
     };
   }
+}
+
+function fakeChild(pid: number): ChildProcess {
+  return Object.assign(new EventEmitter(), {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    stdout: null,
+    stderr: null,
+    stdin: null,
+  }) as ChildProcess;
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {

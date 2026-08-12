@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "
 
 export interface OwnedProcessExit {
   code: number | null;
+  /** Unix forced cleanup may synthesize SIGKILL at dispatch; that records supervisor action, not an OS-observed command status. */
   signal: NodeJS.Signals | null;
   error?: Error;
 }
@@ -17,7 +18,12 @@ export interface UnixOwnedProcessHandle {
   readonly child: ChildProcess;
   readonly commandExited: Promise<OwnedProcessExit>;
   readonly guardianExited: Promise<OwnedProcessExit>;
-  signalOwnedTree(force: boolean): "signaled" | "ownership-lost" | Promise<"signaled" | "ownership-lost">;
+  signalOwnedTree(
+    force: boolean,
+    onDispatched?: () => void,
+  ): "signaled" | "ownership-lost" | Promise<"signaled" | "ownership-lost">;
+  /** Read-only post-force liveness observation. Implementations must never signal from this method. */
+  ownedGroupExists(): boolean | Promise<boolean>;
   dispose?(): void | Promise<void>;
 }
 
@@ -79,14 +85,27 @@ export function spawnOwnedProcess(
 
 function ownedUnixProcess(handle: UnixOwnedProcessHandle, options: SpawnOwnedProcessOptions): OwnedProcess {
   const pid = requireSafeRootPid(handle.child.pid);
+  let exitSettled = false;
+  let settleExit!: (exit: OwnedProcessExit) => void;
+  const exited = new Promise<OwnedProcessExit>((resolve) => { settleExit = resolve; });
+  const settleOnce = (exit: OwnedProcessExit) => {
+    if (exitSettled) return;
+    exitSettled = true;
+    settleExit(exit);
+  };
+  void handle.commandExited.then(
+    settleOnce,
+    (error: unknown) => settleOnce({ code: null, signal: null, error: asError(error) }),
+  );
   let termination: Promise<void> | undefined;
   return {
     child: handle.child,
     pid,
-    exited: handle.commandExited,
+    exited,
     terminate() {
       termination ??= terminateUnixOwnedTree({
         ...handle,
+        onForceDispatched: () => settleOnce({ code: null, signal: "SIGKILL" }),
         gracefulTimeoutMs: options.gracefulTimeoutMs ?? DEFAULT_GRACEFUL_TIMEOUT_MS,
         forceTimeoutMs: options.forceTimeoutMs ?? DEFAULT_FORCE_TIMEOUT_MS,
         pid,
@@ -120,6 +139,7 @@ function ownedWindowsProcess(handle: WindowsOwnedProcessHandle, options: SpawnOw
 }
 
 export async function terminateUnixOwnedTree(options: UnixOwnedProcessHandle & {
+  onForceDispatched(): void;
   gracefulTimeoutMs: number;
   forceTimeoutMs: number;
   pid: number;
@@ -127,7 +147,10 @@ export async function terminateUnixOwnedTree(options: UnixOwnedProcessHandle & {
   try {
     await requestOwnedSignal(options, false, options.forceTimeoutMs);
     await gracePeriod(options.gracefulTimeoutMs);
-    await requestOwnedSignal(options, true, options.forceTimeoutMs);
+    await requestOwnedSignal(options, true, options.forceTimeoutMs, options.onForceDispatched);
+    if (!await waitUntil(() => options.ownedGroupExists(), false, options.forceTimeoutMs)) {
+      throw new OwnedProcessTreeExitUnconfirmedError(options.pid);
+    }
     await Promise.race([
       options.guardianExited,
       timeout(options.forceTimeoutMs, `Owned process guardian ${options.pid} was not reaped`),
@@ -141,9 +164,10 @@ async function requestOwnedSignal(
   options: Pick<UnixOwnedProcessHandle, "signalOwnedTree"> & { pid: number },
   force: boolean,
   timeoutMs: number,
+  onDispatched?: () => void,
 ): Promise<void> {
   const result = await Promise.race([
-    Promise.resolve(options.signalOwnedTree(force)),
+    Promise.resolve(options.signalOwnedTree(force, onDispatched)),
     timeout(timeoutMs, `Owned process guardian ${options.pid} did not accept ${force ? "SIGKILL" : "SIGTERM"}`),
   ]);
   if (result === "ownership-lost") {
@@ -158,13 +182,14 @@ const nodeUnixProcessTreeAdapter: UnixProcessTreeAdapter = {
       detached: true,
       stdio: guardianStdio(options.stdio),
     });
-    requireSafeRootPid(guardian.pid);
-    return superviseUnixGuardian(guardian, command, args, options.cwd);
+    const rootPid = requireSafeRootPid(guardian.pid);
+    return superviseUnixGuardian(guardian, rootPid, command, args, options.cwd);
   },
 };
 
 function superviseUnixGuardian(
   guardian: ChildProcess,
+  rootPid: number,
   command: string,
   args: readonly string[],
   cwd: string | URL | undefined,
@@ -220,15 +245,22 @@ function superviseUnixGuardian(
     child: guardian,
     commandExited,
     guardianExited,
-    signalOwnedTree(force) {
+    signalOwnedTree(force, onDispatched) {
       const id = ++requestId;
       return new Promise((resolve) => {
         signalRequests.set(id, resolve);
-        void sendGuardianMessage(guardian, { type: "signal", id, force }).catch(() => {
+        void sendGuardianMessage(
+          guardian,
+          { type: "signal", id, force },
+          force ? onDispatched : undefined,
+        ).catch(() => {
           if (!signalRequests.delete(id)) return;
           resolve("ownership-lost");
         });
       });
+    },
+    ownedGroupExists() {
+      return unixGroupExists(rootPid);
     },
     dispose() {
       guardian.off("message", onMessage);
@@ -250,14 +282,36 @@ function guardianStdio(stdio: StdioOptions | undefined): StdioOptions {
   throw new Error("Unix process guardian received unsupported stdio configuration");
 }
 
-function sendGuardianMessage(guardian: ChildProcess, message: Record<string, unknown>): Promise<void> {
+function sendGuardianMessage(
+  guardian: ChildProcess,
+  message: Record<string, unknown>,
+  onDispatched?: () => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!guardian.connected) {
       reject(new Error("Owned process guardian IPC is unavailable"));
       return;
     }
-    guardian.send(message, (error) => error ? reject(error) : resolve());
+    try {
+      guardian.send(message, (error) => error ? reject(error) : resolve());
+      onDispatched?.();
+    } catch (error) {
+      reject(error);
+    }
   });
+}
+
+function unixGroupExists(rootPid: number): boolean {
+  requireSafeRootPid(rootPid);
+  try {
+    process.kill(-rootPid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw error;
+  }
 }
 
 function requireSafeRootPid(pid: number | undefined): number {
@@ -281,6 +335,15 @@ function observeExit(child: ChildProcess): Promise<OwnedProcessExit> {
     child.once("exit", (code, signal) => finish({ code, signal }));
     child.once("error", (error) => finish({ code: null, signal: null, error }));
   });
+}
+
+export class OwnedProcessTreeExitUnconfirmedError extends Error {
+  readonly code = "owned_process_tree_exit_unconfirmed";
+
+  constructor(readonly pid: number) {
+    super(`Could not confirm that owned process group ${pid} disappeared after forced termination`);
+    this.name = "OwnedProcessTreeExitUnconfirmedError";
+  }
 }
 
 async function terminateWindowsOwnedTree(options: {
@@ -340,6 +403,10 @@ function gracePeriod(timeoutMs: number): Promise<void> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error("Owned command exit observation failed");
 }
 
 const UNIX_GUARDIAN_SOURCE = String.raw`
