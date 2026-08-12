@@ -168,6 +168,41 @@ describe("SourceConnection", () => {
     expect(native.showNotification).not.toHaveBeenCalled();
     await active.stop();
   });
+
+  it("does not advance an authoritative page after dispatch is aborted by a protocol failure", async () => {
+    const { id, store, native, socket, statuses, connection } = await fixture(10);
+    let releasePermission!: (state: "granted") => void;
+    native.permissionState.mockImplementationOnce(() => new Promise((resolve) => { releasePermission = resolve; }));
+    const fetch = vi.fn(async () => Response.json({ success: true, data: { items: [delivery(11)], nextSequence: 11, snapshotHighWater: 11, hasMore: false, omittedCount: 0 } })) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 11 } });
+    await waitFor(() => native.permissionState.mock.calls.length === 1);
+    socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 11 } });
+    releasePermission("granted");
+    await waitFor(() => statuses.some((status: any) => status.error?.code === "SOURCE_PROTOCOL_INVALID"));
+    expect((await store.readSource(id))?.cursor).toBe(10);
+    expect((await store.readSource(id))?.pending?.delivery.sequence).toBe(11);
+    expect(native.showNotification).not.toHaveBeenCalled();
+    await active.stop();
+  });
+
+  it("does not advance an omitted snapshot after summary dispatch is aborted", async () => {
+    const { id, store, native, socket, statuses, connection } = await fixture(10);
+    let releasePermission!: (state: "granted") => void;
+    native.permissionState.mockImplementationOnce(() => new Promise((resolve) => { releasePermission = resolve; }));
+    const fetch = vi.fn(async () => Response.json({ success: true, data: { items: [delivery(11)], nextSequence: 11, snapshotHighWater: 20, hasMore: true, omittedCount: 9 } })) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 20 } });
+    await waitFor(() => native.permissionState.mock.calls.length === 1);
+    socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 20 } });
+    releasePermission("granted");
+    await waitFor(() => statuses.some((status: any) => status.error?.code === "SOURCE_PROTOCOL_INVALID"));
+    expect((await store.readSource(id))?.cursor).toBe(10);
+    expect(native.showNotification).not.toHaveBeenCalled();
+    await active.stop();
+  });
 });
 
 class FakeSocket extends EventEmitter implements SourceSocket {

@@ -128,7 +128,7 @@ export class SourceConnection {
         if (current === null) {
           await this.options.store.baseline(this.source.id, ready!.latestSequence);
         } else {
-          if (current.pending !== null) await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: attemptSignal });
+          if (current.pending !== null) this.requireDispatch(await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: attemptSignal }), attemptSignal);
           await this.catchUp(attemptSignal);
         }
         for (const delivery of live.sort((a, b) => a.sequence - b.sequence)) await this.dispatch(delivery, attemptSignal, false);
@@ -155,7 +155,8 @@ export class SourceConnection {
     while (!signal.aborted) {
       const page = await this.fetchPage(source.cursor, since, signal);
       if (first && page.omittedCount > 0) {
-        await this.options.dispatcher.dispatchSummary({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, omittedCount: page.items.length + page.omittedCount, signal });
+        const summary = await this.options.dispatcher.dispatchSummary({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, omittedCount: page.items.length + page.omittedCount, signal });
+        if (summary.outcome === "aborted") throw signal.reason ?? new SourceConnectionError("SOURCE_ATTEMPT_ABORTED");
         await this.options.store.advanceCursor(this.source.id, source.cursor, page.snapshotHighWater);
         return;
       }
@@ -192,7 +193,11 @@ export class SourceConnection {
         if (delivery.sequence !== current.cursor + 1) throw new SourceConnectionError("SOURCE_DELIVERY_GAP");
       }
     }
-    await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, policy: "native", delivery, signal });
+    this.requireDispatch(await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, policy: "native", delivery, signal }), signal);
+  }
+
+  private requireDispatch(result: { outcome: string }, signal: AbortSignal): void {
+    if (result.outcome === "aborted") throw signal.reason ?? new SourceConnectionError("SOURCE_ATTEMPT_ABORTED");
   }
 
   private async liveLoop(socket: SourceSocket, live: DeliveryNotification[], getPong: () => number, connectionFailure: Promise<never>, getProtocolFailure: () => unknown, signal: AbortSignal): Promise<void> {
