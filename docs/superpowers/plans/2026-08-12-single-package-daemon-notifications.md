@@ -412,7 +412,7 @@ git commit -m "feat(cli): port application install and synchronization"
 - Produces: `spawnOwnedProcess(command, args, options): OwnedProcess` with bounded `terminate()`.
 - Consumes: Task 4 package builder and the existing canonical Server package builder.
 
-- [ ] **Step 1: Write failing packaged-dev and stubborn-descendant tests**
+- [x] **Step 1: Write failing packaged-dev and stubborn-descendant tests**
 
 ```ts
 it("keeps all dev state below the project tmp directory", async () => {
@@ -430,13 +430,13 @@ it("terminates a descendant that ignores SIGTERM", async () => {
 });
 ```
 
-- [ ] **Step 2: Run dev tests and verify RED**
+- [x] **Step 2: Run dev tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/dev.test.ts tests/process-tree.test.ts && pnpm test:local-dev-package`
 
 Expected: FAIL because the packaged TypeScript CLI cannot yet supervise canonical Server plus Vite.
 
-- [ ] **Step 3: Implement the Node development supervisor**
+- [x] **Step 3: Implement the Node development supervisor**
 
 Generate stable CSPRNG local credentials in private files, launch the packaged
 Server on strict `127.0.0.1:0` with dev tools, wait at most 15 seconds for its
@@ -449,13 +449,13 @@ unified package builder to embed the canonical Server `bin`, worker, Web assets,
 runner, and sql.js runtime under `runtime/server/`; the CLI launches that exact
 embedded worker and never resolves a separate `localapp-server` installation.
 
-- [ ] **Step 4: Run packaged development and proxy security suites**
+- [x] **Step 4: Run packaged development and proxy security suites**
 
 Run: `pnpm test:local-dev-package && pnpm -C packages/server exec vitest run tests/integration/dev-routes.test.ts tests/process-tree.test.ts`
 
 Expected: PASS; app, Server, proxy, reset/snapshot, CSRF, and descendant cleanup all succeed.
 
-- [ ] **Step 5: Commit TypeScript local development**
+- [x] **Step 5: Commit TypeScript local development**
 
 ```bash
 git add packages/localapp packages/server/scripts/localapp-dev-package.node-test.mjs package.json
