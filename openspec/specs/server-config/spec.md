@@ -6,19 +6,19 @@
 
 ### Requirement: 一套 Server 配置模型服务所有部署
 
-Node 包、可选托盘桥接器、局域网主机、容器和公网部署 SHALL 使用同一 `ServerConfig`。配置 SHALL 包含 data directory、listen host/port、public URL、workspace directory、JWT key file、master key file、存储 provider、外部工具与运行预算。部署形态只能改变配置值，不得选择另一套应用服务实现。
+`localapp` npm 包的个人 daemon、前台进程、局域网主机、容器和公网部署 SHALL 使用同一 `ServerConfig`。配置 SHALL 包含 data directory、listen host/port、public URL、workspace directory、JWT key file、master key file、存储 provider、外部工具与运行预算。部署形态只能改变配置值，不得选择另一套应用服务实现。
 
 #### Scenario: 新 Server 使用默认配置
 
-- **WHEN** `localapp-server start` 在新 data directory 启动且没有监听覆盖
+- **WHEN** `localapp server run` 在新 data directory 启动且没有监听覆盖
 - **THEN** Server SHALL 监听 `127.0.0.1`
 - **AND** SHALL 使用该 data directory 下的数据库、应用、内容和 workspace 根
 
-#### Scenario: 托盘启动 Server
+#### Scenario: daemon 启动 Server
 
-- **WHEN** 可选托盘桥接器启动其 bundled Server
-- **THEN** bundled Server SHALL 读取同一配置模型
-- **AND** 应用 API 和 Web control plane SHALL 与直接 Node 启动一致
+- **WHEN** `localapp server` 注册并启动当前用户 daemon
+- **THEN** daemon 中的 Server SHALL 读取同一配置模型
+- **AND** 应用 API 和 Web control plane SHALL 与前台运行一致
 
 ### Requirement: 配置来源与优先级
 

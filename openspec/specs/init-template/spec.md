@@ -77,7 +77,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 ### Requirement: SDK 源码预装
 
-模板的 `.localapp/runtime/sdk/{core,react,agent}/` 目录 SHALL 包含完整的 SDK 源码（runtime/sdk 是 CLI 领地的一部分，由 staging 流程从 packages/sdk-* 复制而来）。SDK 源码 SHALL 通过 build.rs 在编译期 staging 时从 `packages/sdk-*` 同步到 `init-repo/runtime/sdk/`，不在 init-repo 源码中维护。`agent/context.ts` SHALL 导出 `buildSystemPrompt` 函数，接受三个参数：`systemContext`（系统层上下文）、`schemaContext`（数据层上下文）、`hint`（应用层提示）。`client.ts` SHALL 导出 `detectBasePath` 函数。
+模板的 `.localapp/runtime/sdk/{core,react,agent}/` 目录 SHALL 包含完整的 SDK 源码（runtime/sdk 是 CLI 领地的一部分，由 npm package staging 流程从 packages/sdk-* 复制而来）。SDK 源码 SHALL 在 `localapp` 包构建阶段从 `packages/sdk-*` 同步到模板 staging，不在 init-repo 源码中维护。`agent/context.ts` SHALL 导出 `buildSystemPrompt` 函数，接受三个参数：`systemContext`（系统层上下文）、`schemaContext`（数据层上下文）、`hint`（应用层提示）。`client.ts` SHALL 导出 `detectBasePath` 函数。
 
 #### Scenario: SDK 源码可用
 - **WHEN** 在模板的 `App.tsx` 中 import `{ useList, useMe }` from `'@localapp/sdk-react'`
@@ -93,7 +93,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 #### Scenario: SDK 源码不在 init-repo 源码目录中
 - **WHEN** 查看 `init-repo/` 源码（未编译）
-- **THEN** `runtime/sdk/` 目录不存在（由 build.rs 编译期 staging 注入）
+- **THEN** `runtime/sdk/` 目录不存在（由 npm package build staging 注入）
 
 ### Requirement: 示例页面
 
@@ -379,7 +379,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 ### Requirement: CLI 内置模板包含 shadcn UI 文件
 
-CLI 编译时嵌入的内置模板 SHALL 包含 shadcn/ui 组件源码、配置文件和 UI 指引文件，且初始化项目时不得遗漏隐藏目录中的 skill 文件。CLI 领地的 skill 文件 SHALL 采用 `localapp-*/SKILL.md` 目录形态。
+`localapp` npm 包中的内置模板 SHALL 包含 shadcn/ui 组件源码、配置文件和 UI 指引文件，且初始化项目时不得遗漏隐藏目录中的 skill 文件。CLI 领地的 skill 文件 SHALL 采用 `localapp-*/SKILL.md` 目录形态。
 
 #### Scenario: 内置模板包含组件文件
 - **WHEN** 执行内置模板初始化流程
@@ -435,7 +435,7 @@ CLI 编译时嵌入的内置模板 SHALL 包含 shadcn/ui 组件源码、配置�
 
 ### Requirement: CLI 内置模板包含业务建模指引
 
-CLI 编译时嵌入的内置模板 SHALL 包含业务建模 skill、更新后的 `CLAUDE.md` 和示例代码。
+`localapp` npm 包中的内置模板 SHALL 包含业务建模 skill、更新后的 `CLAUDE.md` 和示例代码。
 
 #### Scenario: 使用 builtin 模板初始化项目
 - **WHEN** 使用 CLI 的 builtin init-repo 模板初始化应用
@@ -460,7 +460,7 @@ CLI 编译时嵌入的内置模板 SHALL 包含业务建模 skill、更新后的
 
 ### Requirement: 模板包含 runtime 子目录承载 CLI 领地代码
 
-`init-repo/runtime/` SHALL 作为 CLI 领地的源码根目录，包含所有「我们的」代码（不含 SDK 源码，SDK 由 build.rs staging 注入）。具体内容 SHALL 包括：
+`init-repo/runtime/` SHALL 作为 CLI 领地的源码根目录，包含所有「我们的」代码（不含 SDK 源码，SDK 由 npm package build staging 注入）。具体内容 SHALL 包括：
 
 - `vite-plugin.ts` — 现 `vite.config.ts` 中的 proxy 构建、API 重写等逻辑
 - `dev-shell.tsx` — 现 `src/dev-shell.tsx` 全量内容

@@ -1,6 +1,6 @@
 ## Purpose
 
-共享类型定义。在 @localapp/server 包中定义所有 API 请求响应类型和数据模型类型，供 server 路由引用。
+共享类型定义。在 npm 发行物内部的 Server workspace 包中定义所有 API 请求响应类型和数据模型类型，供 Server 路由引用；该 workspace 包不是独立用户发行物。
 
 ## Requirements
 

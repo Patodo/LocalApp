@@ -4,21 +4,18 @@ context: |
   LocalApp 是一个本地优先、可按需发布的 Agent 应用平台。应用保留 React / TypeScript 源码和业务模型，统一 LocalApp Server 提供身份、权限、Named SQL、文件、通知、Issue、AI Shell、版本发布、数据运维、对等同步和通用 Device Actions。开发机、局域网主机、NAS、容器和公网部署运行同一个 Server 包；监听地址、数据目录和存储提供者是配置差异，不存在另一套本地后端。
 
   项目采用 pnpm monorepo，主要目录：
-  - packages/server：可独立发布的 Node.js + Fastify Server，组合 Web、认证、应用安装、应用 API、上传、协作、数据管理、对等同步、任务和 Device Actions
+  - packages/localapp：唯一公开 npm 包；提供 TypeScript `localapp` CLI、统一 Server 的前台/daemon 启动、模板、应用发布以及 Scheme/通知 native adapter
+  - packages/server：npm 包内部使用的 Node.js + Fastify Server，组合 Web、认证、应用安装、应用 API、上传、协作、数据管理、对等同步、任务和 Device Actions
   - packages/server-core：Server 使用的应用 API 契约、Named SQL、migration、Issue 和运行时逻辑
   - packages/web：Next.js 静态导出的公开首页、个人工作台、应用设置和 Platform Shell
-  - packages/cli：Rust + clap CLI，负责 init、dev、check、build、Server profile、应用安装与对等同步
   - packages/sdk-core：零依赖 JavaScript SDK
   - packages/sdk-react：React hooks SDK
   - packages/sdk-agent：Agent、AI Shell 和应用工具注册 SDK
-  - packages/localapp-core：CLI 与发布流程共享的 Rust 核心
-  - packages/desktop：可选的无窗口 Tauri 托盘桥接器，只启动同一 Server 包、注册 localapp:// Scheme，并提供打开主页和退出本地服务
   - init-repo：Vite + React 应用模板，包含 DevShell、统一 Server 代理、SDK、migration、Named SQL 示例和 Agent skills
 
   当前技术栈：
   - TypeScript、Node.js、Fastify、Next.js、React、Vite、SQLite/sql.js、Vitest、Playwright
-  - Rust、clap、reqwest、tokio、rusqlite
-  - 可选 Tauri 2、Windows NSIS/WebView2
+  - Rust 或 Swift 仅用于 npm 包内按平台构建的极小 native adapter；不是 CLI、桌面应用或另一套运行时
 
   当前稳定应用模型：
   - 正式应用入口为 /{owner}/{app}/，由 Platform Shell 承载导航、Issue、在线用户、收藏和登录态
@@ -32,7 +29,8 @@ context: |
 
   开发、安装与同步主路径：
   - localapp init --name <name> 创建应用和 Agent 开发上下文
-  - localapp dev 在项目 tmp/ 下启动同一 Server 包、安装开发应用，并启动 Vite DevShell
+  - localapp server 注册并启动当前用户 daemon；localapp server run 以前台模式运行同一 Server
+  - localapp dev 在项目 tmp/ 下启动 npm 包内同一 Server、安装开发应用，并启动 Vite DevShell
   - localapp check 检查平台版本、migration、backend contract、测试、构建和 dist
   - localapp build --package 构建可移植 .localapp 包
   - localapp app install --target <profile> 把同一应用包安装到明确的 Server

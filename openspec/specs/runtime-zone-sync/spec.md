@@ -1,6 +1,6 @@
 ## Purpose
 
-This spec describes the runtime zone sync capability in LocalApp. CLI SHALL define explicit "CLI zones" in user projects and provide `sync`/`eject` subcommands to keep these zones aligned with the CLI binary version, or to permanently detach them into user territory.
+This spec describes the runtime zone sync capability in LocalApp. CLI SHALL define explicit "CLI zones" in user projects and provide `sync`/`eject` subcommands to keep these zones aligned with the installed npm package version, or to permanently detach them into user territory.
 ## Requirements
 ### Requirement: CLI 拥有的"原子领地"边界定义
 
@@ -31,12 +31,12 @@ CLI init SHALL 在用户项目根的 `CLAUDE.md` 写入硬约束：「禁止修�
 
 ### Requirement: localapp sync 命令——原子覆盖 CLI 领地
 
-CLI SHALL 提供 `localapp sync` 子命令，将 CLI 二进制内嵌的最新模板刷新到当前用户项目的 CLI 领地。算法 SHALL 为：
+CLI SHALL 提供 `localapp sync` 子命令，将当前 `localapp` npm package 内的最新模板刷新到当前用户项目的 CLI 领地。算法 SHALL 为：
 
 1. 校验当前目录是 localapp 项目（存在 `.localapp/dev-config.json`）
 2. 从 `.localapp/project-config.json` 校验项目未被 eject；若发现旧 `.localapp/dev-config.json` 中的 `autoSync`/`ejected` 标记，先以“持久配置原子写入、临时配置原子清理”的顺序完成可重复迁移
 3. 删除 CLI 领地：`rm -rf .localapp/runtime/`、遍历 `.claude/skills/` 删除 `localapp*` 和 `agent-tool-patterns` 子目录
-4. 从 CLI 二进制 `include_dir!` 重新抽出 runtime 和 skills
+4. 从当前 npm package 的模板 artifact 重新抽出 runtime 和 skills
 5. 写入新的 `.localapp/runtime/version.json`（包含 `cliVersion` 字段）
 6. 提示用户运行 `npm install` 刷新依赖（或在 `--quiet` 模式下自动调用）
 
@@ -47,7 +47,7 @@ sync SHALL 幂等：连续执行两次结果完全一致。sync SHALL NOT 触碰
 - **THEN** runtime 和 skills 被刷新到当前 CLI 版本，文件结构不变（幂等），输出 `{"success": true, "version": "<cli_version>"}`
 
 #### Scenario: CLI 升级后 sync 更新 runtime
-- **WHEN** 项目 `.localapp/runtime/version.json` 显示 `cliVersion: 0.4.0`，CLI 二进制版本为 0.5.0，执行 `localapp sync`
+- **WHEN** 项目 `.localapp/runtime/version.json` 显示 `cliVersion: 0.4.0`，已安装 npm package 版本为 0.5.0，执行 `localapp sync`
 - **THEN** runtime 被覆盖为 0.5.0 的内容，version.json 更新为 `cliVersion: 0.5.0`，输出 `{"success": true, "version": "0.5.0", "previousVersion": "0.4.0"}`
 
 #### Scenario: sync 在非项目目录执行
@@ -172,7 +172,7 @@ eject SHALL 不可逆——不提供 uneject 命令。eject SHALL 在执行前�
 
 ### Requirement: .localapp/runtime/version.json 版本标记
 
-CLI SHALL 在 `.localapp/runtime/version.json` 写入 CLI 二进制版本号，供 sync 比对。文件内容 SHALL 为 `{"cliVersion": "<version>"}` 单字段。
+CLI SHALL 在 `.localapp/runtime/version.json` 写入已安装 npm package 版本号，供 sync 比对。文件内容 SHALL 为 `{"cliVersion": "<version>"}` 单字段。
 
 init 时 SHALL 写入当前 CLI 版本。sync 时 SHALL 更新为新版本。eject 时 SHALL 删除此文件（runtime 已不在原位）。
 

@@ -6,23 +6,23 @@
 
 ### Requirement: dev 命令启动统一 Server 和 Vite
 
-`localapp dev` SHALL 校验项目，刷新过期的 CLI runtime 文件依赖，在项目 `tmp/` 下启动 `localapp-server`，初始化本地用户，构建并安装开发包，写入单 Server 配置，然后启动 `dev:vite`。Server 启动失败或应用安装失败时 Vite SHALL NOT 启动。
+`localapp dev` SHALL 校验项目，刷新过期的 CLI runtime 文件依赖，在项目 `tmp/` 下通过当前 npm 包启动同一 Server 的隔离前台实例，初始化本地用户，构建并安装开发包，写入单 Server 配置，然后启动 `dev:vite`。Server 启动失败或应用安装失败时 Vite SHALL NOT 启动。
 
 #### Scenario: 正常启动
 
 - **WHEN** 用户执行 `localapp dev`
-- **THEN** CLI SHALL 启动 `localapp-server start --data-dir <project>/tmp/localapp-dev/server --host 127.0.0.1 --port 0`
+- **THEN** CLI SHALL 使用内置 Server runner 等价执行 `localapp server run --data-dir <project>/tmp/localapp-dev/server --host 127.0.0.1 --port 0`
 - **AND** SHALL 等待 Server readiness JSON
 - **AND** SHALL 通过正式包安装端点安装当前应用
 - **AND** SHALL 写入 `.localapp/dev-config.json`
 - **AND** SHALL 启动 `npm run dev:vite` 或对应包管理器命令
 - **AND** 终端 SHALL 显示 Vite URL、Local Server URL 和 raw 应用 API URL
 
-#### Scenario: 使用打包的 mjs 启动器
+#### Scenario: 使用 npm 包内 Server runner
 
-- **WHEN** `LOCALAPP_SERVER_BIN` 指向 `localapp-server.mjs`
-- **THEN** CLI SHALL 使用 Node 执行该启动器
-- **AND** SHALL 传递相同的 Server 参数和开发工具环境开关
+- **WHEN** CLI 从已安装 npm tgz 执行
+- **THEN** SHALL 从同一 package release 解析 Server runner
+- **AND** SHALL 传递相同的 Server 参数和开发工具环境开关，不依赖外部 Server 包
 
 #### Scenario: Server 提前退出
 

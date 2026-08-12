@@ -8,12 +8,12 @@
 
 ### Requirement: 本地开发运行可发布的统一 Server
 
-`localapp dev` SHALL 启动与本地、局域网、容器和公网部署相同的 `localapp-server` 包。CLI SHALL 按 `LOCALAPP_SERVER_BIN`、项目 `node_modules/.bin`/`@localapp/server`、CLI 相邻分发文件、PATH 的顺序解析一次 Server launcher，并要求 Node.js 24 或更新版本；缺失时 SHALL 给出安装 `@localapp/server` 或配置 launcher 的可操作错误。CLI SHALL 将 Server 数据放在当前项目 `tmp/localapp-dev/server/` 下，在首次启动时初始化真实 Server 用户，并把当前应用作为唯一版本包通过正式安装端点安装。模板 SHALL NOT 携带或启动另一套 HTTP 应用服务。
+`localapp dev` SHALL 从当前 `localapp` npm package release 启动与个人 daemon、局域网、容器和公网部署相同的 Server runner。CLI SHALL 一次解析其包内 runner，并要求 Node.js 24 或更新版本；不得从 PATH、独立 Server package 或项目依赖切换到另一份实现。CLI SHALL 将 Server 数据放在当前项目 `tmp/localapp-dev/server/` 下，在首次启动时初始化真实 Server 用户，并把当前应用作为唯一版本包通过正式安装端点安装。模板 SHALL NOT 携带或启动另一套 HTTP 应用服务。
 
 #### Scenario: 首次启动开发应用
 
 - **WHEN** 用户在新建应用中执行 `localapp dev`
-- **THEN** CLI SHALL 在回环随机端口启动打包后的 `localapp-server`
+- **THEN** CLI SHALL 在回环随机端口启动 npm 包内的统一 Server runner
 - **AND** Server 数据 SHALL 位于项目 `tmp/localapp-dev/server/`
 - **AND** CLI SHALL 初始化 `dev-user` 并取得该用户 API Key
 - **AND** CLI SHALL 构建唯一开发版本并调用 `/api/me/apps/install`
@@ -26,17 +26,17 @@
 - **AND** Server SHALL 把该包视为同名应用版本更新而非 digest 冲突
 - **AND** 已有 Server 用户和应用数据 SHALL 保留
 
-#### Scenario: 项目安装 canonical Server
+#### Scenario: Server runner 与 CLI 同版本
 
-- **WHEN** 项目 `node_modules/.bin` 中存在 `localapp-server`
-- **THEN** `localapp dev` SHALL 优先使用该项目版本
-- **AND** SHALL NOT 因 PATH 上另有版本而改变本次运行
+- **WHEN** `localapp dev` 从某个 npm package version 执行
+- **THEN** SHALL 使用同一 package release 中的 Server runner
+- **AND** SHALL NOT 因 PATH 或项目依赖中存在其它 Server 实现而改变本次运行
 
 #### Scenario: Server 或 Node 前置条件缺失
 
-- **WHEN** CLI 无法解析 canonical Server launcher，或 Node.js 主版本小于 24
+- **WHEN** CLI 无法验证包内 Server runner，或 Node.js 主版本小于 24
 - **THEN** `localapp dev` SHALL 在创建子进程前失败
-- **AND** 错误 SHALL 指明 `@localapp/server`、`LOCALAPP_SERVER_BIN` 或 Node.js 24+ 的修复方式
+- **AND** 错误 SHALL 指明重新安装当前 `localapp` npm package 或安装 Node.js 24+
 
 #### Scenario: Vite 退出
 
@@ -99,7 +99,7 @@ Vite SHALL 只负责编译前端和转发请求。应用 API SHALL 改写到同�
 
 ### Requirement: Dev Toolkit 是显式且隔离的 Server 能力
 
-统一 Server SHALL 仅在 `LOCALAPP_DEV_TOOLS=1` 时注册经过认证的 `/api/dev/*`。普通 Node、托盘、局域网、容器和公网启动 SHALL 返回 404。即使开启，该路由集也 SHALL 只接受 loopback 请求、校验应用名，并证明解析后的应用目录仍位于当前 Server dataDir 下的认证所有者目录。开发上下文 SHALL 以 Server dataDir、用户和应用为键，并在该 Server 关闭时清除。诊断日志 SHALL 只返回当前模拟或认证用户的请求。
+统一 Server SHALL 仅在 `LOCALAPP_DEV_TOOLS=1` 时注册经过认证的 `/api/dev/*`。普通 daemon、前台、局域网、容器和公网启动 SHALL 返回 404。即使开启，该路由集也 SHALL 只接受 loopback 请求、校验应用名，并证明解析后的应用目录仍位于当前 Server dataDir 下的认证所有者目录。开发上下文 SHALL 以 Server dataDir、用户和应用为键，并在该 Server 关闭时清除。诊断日志 SHALL 只返回当前模拟或认证用户的请求。
 
 #### Scenario: 开发 Server 使用 Dev Toolkit
 

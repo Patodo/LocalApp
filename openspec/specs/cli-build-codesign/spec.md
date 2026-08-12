@@ -1,38 +1,43 @@
 ## Purpose
 
-This spec describes the expected behavior, acceptance criteria, and integration boundaries for the cli-build-codesign capability in LocalApp.
+定义单一 npm 发行物中 native adapter 的跨平台构建、签名、摘要校验和清单真实性，同时明确 TypeScript CLI 与统一 Server 不属于原生构建产物。
 
 ## Requirements
 
-### Requirement: Ad-hoc codesigning after build
-`npm run build:cli` 脚本 SHALL 在 `cargo build --release` 成功后自动执行 `codesign -s -` 对生成的二进制进行 ad-hoc 签名。
+### Requirement: CLI 与 Server 由 npm 包提供
 
-#### Scenario: CLI binary works after copying to new path
-- **WHEN** `npm run build:cli` 完成且二进制被 `cp` 到 `~/.local/bin/localapp`
-- **THEN** 运行 `~/.local/bin/localapp --version` 返回版本号，不产生 exit 137
+`localapp` CLI 和 Server SHALL 由 TypeScript/Node.js 构建，不得要求 Cargo 构建独立
+CLI。平台原生工具链仅可用于构建包内 Scheme/通知 native adapter。
 
-#### Scenario: Codesign verification passes
-- **WHEN** `npm run build:cli` 完成
-- **THEN** `codesign -v target/release/localapp` 返回成功（exit 0）
+#### Scenario: 从 tgz 使用 CLI
 
-### Requirement: GitHub workflow 构建跨平台 CLI
+- **WHEN** 在空目录安装 `localapp-<version>.tgz`
+- **THEN** `node_modules/.bin/localapp --version` SHALL 成功
+- **AND** SHALL NOT 依赖仓库源码或独立原生 CLI
 
-正式发行 SHALL 在 GitHub 托管的 Linux、macOS 和 Windows runner 上分别构建、测试和打包对应 CLI，不得以单平台伪装其他平台产物。
+### Requirement: 对应平台构建 native adapter
 
-#### Scenario: 跨平台构建完成
-- **WHEN** 版本 tag 触发 release workflow
-- **THEN** 每个受支持目标均由对应 runner 生成并通过 `--version` smoke test
+正式发行 SHALL 在 Linux、macOS 和 Windows 对应 runner 上构建、测试和打包该平台
+adapter，不得以单平台产物伪装其它目标。
 
-### Requirement: 发行资产记录签名状态
+#### Scenario: 跨平台包构建完成
 
-Release workflow MUST 对支持的产物执行配置的正式签名或现有 ad-hoc 签名验证，并在发行清单中记录真实签名状态。缺少正式证书时 MUST NOT 将产物标记为正式签名。
+- **WHEN** 版本 tag 触发发行 workflow
+- **THEN** 每个受支持目标的 adapter SHALL 由对应 runner 生成并通过协议 smoke test
+- **AND** 每个目标最终仍 SHALL 生成同名、同版本的 `localapp` npm 包
+
+### Requirement: 清单记录真实签名状态
+
+artifact manifest MUST 记录 native adapter 的平台、架构、SHA-256 和真实签名状态。
+缺少正式证书时 MUST NOT 把产物标记为正式签名。
 
 #### Scenario: macOS ad-hoc 签名
-- **WHEN** macOS runner 未配置正式 Developer ID 证书
-- **THEN** CLI 通过 ad-hoc codesign 验证
-- **AND** 清单将签名状态记录为 `adhoc`
+
+- **WHEN** macOS runner 未配置 Developer ID 证书
+- **THEN** adapter MAY 通过 ad-hoc codesign 验证
+- **AND** 清单 SHALL 将签名状态记录为 `adhoc`
 
 #### Scenario: 正式签名秘密缺失
+
 - **WHEN** workflow 未获得某平台正式签名凭据
-- **THEN** workflow 按发行策略生成明确的未正式签名产物或阻止正式发布
-- **AND** 不伪造签名成功状态
+- **THEN** workflow SHALL 按发行策略明确标记未正式签名或阻止公开发布

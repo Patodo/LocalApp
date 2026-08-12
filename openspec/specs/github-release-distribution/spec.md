@@ -1,40 +1,48 @@
 ## Purpose
 
-定义通过 GitHub Release 和 GHCR 发布可验证客户端资产与 Server 镜像的发行真源、清单完整性和下载校验要求。
+定义 npm registry 的单包发行真源、包内 artifact manifest 完整性、固定版本安装，以及从相同版本发布 GHCR Server 镜像的可验证构建要求。
 
 ## Requirements
 
-### Requirement: GitHub Release 是客户端发行真源
+### Requirement: npm tgz 是唯一用户发行物
 
-每个正式版本 SHALL 通过 GitHub Release 发布受支持平台的 CLI、可选原生托盘桥接器、`SHA256SUMS` 和 `release-manifest.json`。公开源码仓库 MUST NOT 跟踪这些发行二进制。
+每个正式版本 SHALL 发布一个名为 `localapp` 的 npm package version。不得另行发布独立
+CLI、桌面安装器、托盘程序或用户可安装的 Server artifact。
 
 #### Scenario: 发布正式版本
+
 - **WHEN** 维护者推送符合发行规则的版本 tag
-- **THEN** workflow 为受支持目标生成版本化资产、摘要文件和发行清单
-- **AND** 所有资产来自同一已通过 CI 的 commit
+- **THEN** workflow SHALL 从同一已通过 CI 的 commit 构建并验证 `localapp-<version>.tgz`
+- **AND** SHALL 将相同版本发布到 npm registry
 
-### Requirement: 发行清单描述可验证资产
+### Requirement: 包内 artifact manifest 可验证
 
-`release-manifest.json` MUST 为每个资产记录版本、目标平台、文件名、HTTPS 下载 URL、字节大小、SHA-256 和签名状态，并 MUST 通过发布前 schema 校验。
+npm tgz 的 artifact manifest MUST 记录 Server/Web/template 与各平台 native adapter 的
+版本、路径、字节大小、SHA-256 和适用平台，并在发布前通过 schema 与内容校验。
 
-#### Scenario: 清单覆盖发行资产
-- **WHEN** release workflow 准备发布资产
-- **THEN** 每个 CLI 和原生托盘桥接器资产在清单中恰有一个匹配条目
-- **AND** 文件大小和 SHA-256 与实际资产一致
+#### Scenario: 清单覆盖包内资产
+
+- **WHEN** release workflow 准备发布 tgz
+- **THEN** 每个声明资产 SHALL 恰有一个匹配条目
+- **AND** 文件大小与 SHA-256 SHALL 与 tgz 内容一致
 
 ### Requirement: Server 镜像发布到 GHCR
 
-正式 Server 镜像 SHALL 使用版本 tag 和不可变 commit SHA tag 推送到 GHCR。镜像 MUST NOT 包含 registration key 或跨平台 CLI/托盘发行二进制。
+正式容器镜像 SHALL 使用版本 tag 和不可变 commit SHA tag 推送到 GHCR，并从同一
+`localapp` 包的前台入口运行 Server。镜像 SHALL NOT 包含桌面 adapter 或注册秘密。
 
 #### Scenario: 构建正式镜像
+
 - **WHEN** release workflow 构建 Server 镜像
-- **THEN** GHCR 中存在版本 tag 和 commit SHA tag
-- **AND** 镜像检查未发现 registration key 或客户端发行二进制
+- **THEN** GHCR SHALL 存在版本 tag 与 commit SHA tag
+- **AND** 镜像 SHALL 运行 `localapp server run` 等价入口
 
-### Requirement: 下载方验证发行完整性
+### Requirement: 安装方使用 npm 完整性机制
 
-CLI 和安装说明 MUST 在使用下载资产前校验发行清单中的 SHA-256；校验失败 MUST 中止替换或安装。
+安装说明 SHALL 使用 npm 安装固定版本；包下载、integrity 校验和原子安装由 npm
+完成。daemon 另外 SHALL 校验包内 native adapter 的 artifact digest。
 
-#### Scenario: CLI 下载摘要不匹配
-- **WHEN** `localapp update` 下载的文件 SHA-256 与发行清单不一致
-- **THEN** CLI 删除临时文件、保留当前可执行文件并返回完整性错误
+#### Scenario: npm integrity 不匹配
+
+- **WHEN** registry 返回的 tgz 与 lock/integrity 元数据不一致
+- **THEN** npm SHALL 中止安装且现有 LocalApp 安装保持不变

@@ -27,7 +27,7 @@ API Key 鉴权与 CLI 版本强制更新机制。通过 X-API-Key header 验证�
 
 ### Requirement: CLI 版本校验
 
-Auth hook 在 API Key 验证通过后 SHALL 检查 `X-CLI-Version` header。若 header 缺失或版本号低于 `MIN_CLI_VERSION` 环境变量指定的值，MUST 返回 HTTP 403。`/api/cli/version` 和 `/api/cli/download` 路径 MUST 跳过版本检查。
+Auth hook 在 API Key 验证通过后 SHALL 检查 `X-CLI-Version` header。若 header 缺失或版本号低于 `MIN_CLI_VERSION` 环境变量指定的值，MUST 返回 HTTP 403。版本错误 SHALL 提示通过 npm 更新 `localapp` 包；Server SHALL NOT 提供独立 CLI 二进制下载端点。
 
 #### Scenario: 版本满足最低要求
 - **WHEN** 请求携带 `X-CLI-Version: 0.2.0` 且 `MIN_CLI_VERSION=0.1.0`
@@ -35,7 +35,7 @@ Auth hook 在 API Key 验证通过后 SHALL 检查 `X-CLI-Version` header。若 
 
 #### Scenario: 版本低于最低要求
 - **WHEN** 请求携带 `X-CLI-Version: 0.1.0` 且 `MIN_CLI_VERSION=0.2.0`
-- **THEN** 返回 HTTP 403，响应体包含错误信息提示执行 `localapp update`
+- **THEN** 返回 HTTP 403，响应体包含错误信息提示执行 `npm update --global localapp`
 
 #### Scenario: 缺失版本 header
 - **WHEN** 请求未携带 `X-CLI-Version` header 且 `MIN_CLI_VERSION` 已设置
@@ -44,10 +44,6 @@ Auth hook 在 API Key 验证通过后 SHALL 检查 `X-CLI-Version` header。若 
 #### Scenario: 未配置最低版本
 - **WHEN** `MIN_CLI_VERSION` 环境变量未设置或为空字符串
 - **THEN** 跳过版本检查，所有请求放行
-
-#### Scenario: Update 端点绕过
-- **WHEN** 请求路径为 `/api/cli/version` 或 `/api/cli/download`
-- **THEN** 跳过版本检查，仅做 API Key 验证
 
 ### Requirement: API Key 存储初始化
 

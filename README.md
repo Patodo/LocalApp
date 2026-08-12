@@ -22,20 +22,19 @@ LocalApp 默认采用 **Named SQL first**。稳定后端能力由 migration、�
 
 ### 1. 安装工具
 
-从平台公开首页或 GitHub Release 下载当前系统对应的 CLI。个人本地开发和运行
-不要求先部署或登录 LocalApp Server；需要 AI、团队协作或远端发布时，再绑定
-目标实例：
+LocalApp 只发布一个 npm 包；该包提供唯一的 `localapp` CLI、统一 Server、用户
+daemon 以及随包分发的按平台 native adapter。个人本地开发和运行不要求先部署
+远端 Server；需要 AI、团队协作或远端发布时，再绑定目标实例：
 
 ```bash
+npm install --global localapp
+localapp server
 localapp login --server-url http://localhost:3000
 ```
 
-首次安装前必须同时下载 Release 中的 `SHA256SUMS` 并校验 CLI 文件。Linux 使用
-`sha256sum --ignore-missing -c SHA256SUMS`，macOS 使用
-`grep "  <CLI_FILENAME>$" SHA256SUMS | shasum -a 256 -c -`（将占位符替换为
-下载的文件名）；Windows 使用
-`(Get-FileHash .\localapp-cli-*.exe -Algorithm SHA256).Hash`，并确认结果与
-`SHA256SUMS` 中对应文件的摘要一致。摘要不一致时不要运行该文件。
+固定版本安装可使用 `npm install --global localapp@<version>`。npm registry 中的
+`localapp-<version>.tgz` 是唯一用户发行物；Windows、macOS 和 Linux 的 native
+adapter 是包内受摘要约束的系统集成组件，不是第二个 CLI 或另一套运行时。
 
 CLI 会引导输入 API Key。浏览器用户使用服务端持久会话 Cookie，CLI 和程序化 API 使用 API Key。
 
@@ -208,13 +207,14 @@ localapp backend scaffold --table work_items --security-profile owner
 | `localapp db validate` | 用生产快照验证本地 migration |
 | `localapp pages list` | 查看当前账号的应用 |
 | `localapp groups list` | 查看用户组 |
-| `localapp update` | 更新 CLI |
+| `localapp update` | 查询 npm 更新并输出固定版本安装命令 |
 
 使用 `localapp <command> --help` 查看完整参数。
 
 ## 本地开发
 
-要求 Node.js、pnpm 和 Rust 工具链。
+要求 Node.js 24 和 pnpm 10。仅构建 npm 包内按平台分发的 native adapter 时需要
+对应平台的 Swift 或 Rust 工具链；CLI 与 Server 本身均由 TypeScript/Node.js 构建。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -230,7 +230,8 @@ pnpm dev
 
 ```bash
 pnpm build
-pnpm build:cli
+pnpm -C packages/localapp build
+pnpm -C packages/localapp build:package
 pnpm -C packages/server test
 pnpm -C packages/web test
 pnpm -C init-repo test
@@ -242,24 +243,24 @@ pnpm test:e2e-ui
 
 ```text
 packages/
-├── cli/          # Rust CLI
-├── server/       # 平台服务入口
+├── localapp/     # 唯一 npm 包、CLI、daemon 与 native adapter
+├── server/       # npm 包内部使用的平台服务入口
 ├── server-core/  # 平台核心运行时
 ├── web/          # 公开首页、个人工作台和平台设置
 ├── sdk-core/     # SDK 核心
 ├── sdk-react/    # React SDK
 ├── sdk-agent/    # Agent/AI SDK
-└── desktop/      # 可选的无窗口 Tauri Server 托盘桥接器
 init-repo/        # 应用内置模板、示例契约和 Agent skills
 openspec/specs/   # 平台行为规格
 ```
 
 ## Docker 部署
 
-生产镜像包含 Server、Web 静态产物和平台运行时，对外只需要一个 HTTP 端口。CLI 与可选托盘桥接器由 GitHub Release 独立分发，镜像不会内嵌这些发行二进制：
+生产镜像从同一 `localapp` npm 包启动前台 Server，对外只需要一个 HTTP 端口。
+容器不注册 Scheme、不弹系统通知，也不需要桌面 native adapter：
 
 ```bash
-docker build -t localapp-server:local .
+docker build -t localapp:local .
 cp deploy/production/.env.example deploy/production/.env
 ```
 
@@ -277,23 +278,22 @@ docker compose \
 离线传输镜像：
 
 ```bash
-docker save localapp-server:local -o localapp-server.tar
-docker load -i localapp-server.tar
+docker save localapp:local -o localapp-image.tar
+docker load -i localapp-image.tar
 ```
 
-## 可选托盘桥接器与 Windows 发行
+## Native adapter 与 Windows 发行
 
-Tauri 程序不维护应用库，也不实现另一套后端。它只负责启动当前机器上的同一个
-Node Server、注册 `localapp://` Scheme，并在托盘提供“打开主页”和“退出本地服务”。
-所有管理、认证、应用安装、对端配置和 Device Actions 都由 Server Web 页面与 API
-承载。
+LocalApp 没有托盘、Desktop 窗口或独立原生 CLI。npm 包启动同一 Node.js Server：
+`localapp server` 注册并启动当前用户 daemon，`localapp server run` 在前台运行。
+包内极小 native adapter 只负责注册和转发 `localapp://`、显示系统通知及回传点击；
+所有安全决策、应用管理和动作执行仍由 daemon 中的 Server 完成。
 
-Windows CLI 和 Tauri/NSIS 客户端必须在 Windows x64 环境构建。完整的环境准备、签名、校验、上传和干净虚拟机验收流程见：
+Windows 的用户发行物仍是标准 npm tgz。完整的 native adapter 构建、签名、打包
+检查和干净环境验收流程见：
 
-- [托盘桥接器说明](packages/desktop/README.md)
 - [本地运行与按需发布](docs/local-runtime.md)
 - [Windows 本地发行指南](docs/windows-local-release.md)
-- [Windows 构建脚本](scripts/build-windows-release.ps1)
 
 ## 设计与规格
 

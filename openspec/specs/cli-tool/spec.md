@@ -36,7 +36,7 @@ CLI SHALL 提供 `localapp server add/list/use/remove` 管理命名 Server URL �
 
 ### Requirement: dev 编排 canonical Server
 
-`localapp dev` SHALL 启动打包后的 `localapp-server`、在项目下初始化真实开发用户、构建并通过正式安装端点安装唯一版本，再启动 Vite。CLI SHALL 监督两个子进程并在 Vite 退出时停止本次 Server。
+`localapp dev` SHALL 从当前 npm package release 启动包内统一 Server runner、在项目下初始化真实开发用户、构建并通过正式安装端点安装唯一版本，再启动 Vite。CLI SHALL 监督两个子进程并在 Vite 退出时停止本次 Server。
 
 #### Scenario: 启动开发应用
 
@@ -208,7 +208,7 @@ CLI SHALL NOT 暴露旧的 loose-file 发布命令、旧原生客户端安装命
 #### Scenario: 调用已移除命令
 
 - **WHEN** 用户尝试调用旧发布或旧原生客户端本地安装命令
-- **THEN** clap SHALL 将其视为未知命令并返回非零退出码
+- **THEN** CLI parser SHALL 将其视为未知命令并返回非零退出码
 - **AND** 帮助 SHALL 指向 `localapp app install` 或 `localapp dev`
 
 ### Requirement: 命令输出与凭据边界

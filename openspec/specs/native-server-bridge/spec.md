@@ -1,79 +1,57 @@
-# native-server-bridge Specification
+# native-adapter Specification
 
 ## Purpose
 
-定义可选的无窗口 Tauri 分发如何仅作为 canonical Server 的系统托盘、进程和 Scheme 桥，而不成为第二套客户端后端。
+定义 `localapp` npm 包内极小 native adapter 与同一 Node.js daemon 的边界。
 
 ## Requirements
 
-### Requirement: 原生分发启动完全相同的 Server artifact
+### Requirement: adapter 不启动另一套运行时
 
-桌面分发 SHALL 捆绑并启动与独立 Node 分发相同、经过摘要校验的 `localapp-server` artifact 及其 Node 运行时。它 SHALL NOT 内嵌另一套应用托管、认证、权限、上传、同步或管理后端。
+adapter SHALL 只连接由 npm 包启动的当前用户 daemon。它 SHALL NOT 托管 Web、应用、
+认证、权限、上传、同步或管理后端，也 SHALL NOT 提供窗口或系统菜单界面。
 
-#### Scenario: 启动托盘分发
+#### Scenario: npm 包启动本地服务
 
-- **WHEN** 用户启动 LocalApp 原生分发
-- **THEN** bridge SHALL 启动捆绑的 canonical Server 并等待其 readiness
-- **AND** Web 管理主页和应用 SHALL 由该 Server 提供
+- **WHEN** 用户执行 `localapp server`
+- **THEN** TypeScript CLI SHALL 注册并启动运行同一 Server 的当前用户 daemon
+- **AND** Web 管理主页与应用 SHALL 由该 Server 提供
 
-### Requirement: 原生层只有托盘和生命周期职责
+### Requirement: adapter 只有系统集成职责
 
-原生层 SHALL 无窗口运行，并且产品级职责只包括打开 Server 主页、退出本地 Server、监督 Server 进程树和转发已注册的 `localapp://` 激活票据。应用业务逻辑、Device Action 信任/执行、数据库和权限 SHALL 由 Server 实现。
+adapter 的产品职责 SHALL 限于注册/转发 `localapp://`、显示系统通知、回传通知点击，
+以及 Windows 所需的当前用户协议/AUMID 注册。生命周期与进程监督由 TypeScript daemon
+负责。
 
-#### Scenario: 托盘菜单
+#### Scenario: Scheme 激活
 
-- **WHEN** 用户打开托盘菜单
-- **THEN** SHALL 提供“打开主页”和“退出本地服务”操作
-- **AND** SHALL NOT 提供独立的原生管理界面或应用运行时
+- **WHEN** 操作系统把 `localapp://action/...` 交给 adapter
+- **THEN** adapter SHALL 使用固定 IPC 协议把完整 URL 转交 daemon
+- **AND** 后续解析、确认、执行与审计 SHALL 在 daemon/Server 内完成
 
-#### Scenario: 退出本地服务
+#### Scenario: 显示系统通知
 
-- **WHEN** 用户选择退出
-- **THEN** bridge SHALL 优雅终止并等待 Server 进程树
-- **AND** SHALL 保留 Server 数据供下次启动使用
+- **WHEN** daemon 提交经过验证的通知 envelope
+- **THEN** adapter SHALL 显示通知并把点击作为短期 ticket 返回 daemon
+- **AND** SHALL NOT 保存来源 API Key 或自行读取应用数据
 
-### Requirement: Scheme 桥不承载动作内容
+### Requirement: Scheme 不承载动作内容
 
-Scheme handler SHALL 解析版本化激活票据并使用仅进程持有的 control token 将其提交到本机回环 Server。bridge SHALL NOT 获取动作脚本、授予信任、准备依赖或执行动作。
+daemon SHALL 严格解析版本化激活票据并拒绝未知/重复字段、userinfo、fragment、非规范
+编码，以及 `script`、`command`、`dependencies`、凭据和文件路径等可执行或敏感字段。
 
-#### Scenario: 收到 Device Action Scheme
+#### Scenario: 恶意 Scheme 夹带内容
 
-- **WHEN** 操作系统把 `localapp://action/...` 交给 bridge
-- **THEN** bridge SHALL 把票据转发到本机 Server control 端点
-- **AND** 后续确认、执行和结果 SHALL 在 Server Web/Server 内完成
+- **WHEN** Scheme 包含脚本、命令、路径、凭据或不规范字段
+- **THEN** 激活 SHALL 被拒绝且不 claim、不打开 URL、不执行动作
 
-### Requirement: Scheme 解析器只接受规范票据
+### Requirement: 默认回环且 LAN 显式启用
 
-bridge SHALL 对 `localapp://action/<canonical-action-id>` 执行严格解析，只接受恰好一个规范 action id 路径段，以及各出现一次的 `origin`、`nonce`、`protocolVersion` 字段。解析器 SHALL 拒绝未知或重复字段、userinfo、端口、fragment、非规范编码、过长或含控制字符的 URL，以及 `script`、`command`、`dependencies`、凭据、文件路径等任何可执行或敏感字段。嵌套来源 origin SHALL 同样拒绝 userinfo、路径、query 和 fragment。
-
-#### Scenario: 恶意 Scheme 夹带动作内容
-
-- **WHEN** Scheme 包含未知/重复字段、userinfo、fragment、额外路径段或脚本/命令/路径字段
-- **THEN** bridge SHALL 静默拒绝该激活
-- **AND** SHALL NOT 启动 claim、打开 URL 或执行任何动作
-
-### Requirement: bridge 只打开精确的本地确认 URL
-
-bridge SHALL 仅接受与本次 Server readiness 返回的 origin 完全相同、路径精确为 `/my/device-actions/`、且唯一 `requestId` query 等于 control 响应 request id 的确认 URL。它 SHALL 拒绝 userinfo、fragment、额外路径段、未知/重复 query、跨 origin 和降级 URL；bridge SHALL NOT 打开来源 Server 返回的任意 URL。
-
-#### Scenario: control 响应返回替代确认地址
-
-- **WHEN** control 响应的确认 URL 使用不同 origin、相似路径、额外路径段、未知 query 或不匹配 request id
-- **THEN** bridge SHALL 拒绝打开该 URL
-- **AND** 动作仍由本地 Server 保持为可审计状态
-
-### Requirement: 默认回环且 LAN 访问显式启用
-
-Server 默认 SHALL 只监听 `127.0.0.1`。用户只有在 Server Web 设置中显式开启局域网访问后才可绑定 LAN；回环和 LAN 模式 SHALL 都使用完整多用户登录、session/API Key 和权限检查，不得存在“本地免认证”模式。
+daemon 中的 Server 默认 SHALL 只监听 `127.0.0.1`。只有管理员在 Web 设置中显式确认
+后才能绑定 LAN；两种模式 SHALL 使用同一多用户认证、session/API Key 和权限检查。
 
 #### Scenario: 默认首次启动
 
 - **WHEN** 用户没有开启 LAN 访问
 - **THEN** Server SHALL 只接受本机回环连接
-- **AND** Web 管理主页仍 SHALL 要求正常登录和权限
-
-#### Scenario: 显式开启 LAN
-
-- **WHEN** 管理员在 Web 设置中确认开启局域网访问
-- **THEN** Server MAY 监听配置的 LAN 地址
-- **AND** 所有用户、应用和管理接口 SHALL 保持同一认证与授权行为
+- **AND** Web 管理主页 SHALL 要求正常初始化、登录和授权

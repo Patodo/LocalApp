@@ -1,27 +1,31 @@
 ## Purpose
 
-This spec describes the expected behavior, acceptance criteria, and integration boundaries for the cli-binary-slim capability in LocalApp.
+定义单一 `localapp` npm 包的体积、模板 staging、内容白名单、独立安装和可重复构建边界，确保发行物不携带 workspace 开发状态或用户数据。
 
 ## Requirements
 
-### Requirement: Exclude node_modules from compile-time embedding
-build.rs SHALL 在编译前将 init-repo 复制到 `target/init-repo-staging/` 目录，排除 `node_modules/`、`dist/`、`.next/` 子目录，并将 `INIT_REPO_DIR` 环境变量指向 staging 目录。
+### Requirement: npm 包不携带开发依赖
 
-#### Scenario: Binary size under 30MB
-- **WHEN** `cargo build --release` 完成
-- **THEN** 生成的 `target/release/localapp` 二进制文件小于 30MB
+打包流程 SHALL 在独立 staging 目录组装 CLI、统一 Server、Web、模板和 native adapter，
+并排除 `node_modules/`、源码构建缓存、测试、日志和本地数据。
 
-#### Scenario: Template extracts correctly without node_modules
-- **WHEN** 用户运行 `localapp init --name my-app`
-- **THEN** 模板正常提取到 my-app 目录，包含 src/、package.json、vendor/ 等文件
+#### Scenario: npm tgz 内容受控
 
-#### Scenario: Cargo clean removes staging directory
-- **WHEN** 执行 `cargo clean`
-- **THEN** `target/init-repo-staging/` 目录被完全移除
+- **WHEN** 执行 `pnpm -C packages/localapp build:package` 并生成 npm tgz
+- **THEN** tgz SHALL 只包含声明的 `bin/`、`runtime/`、`template/` 和 artifact manifest
+- **AND** SHALL NOT 包含 workspace `node_modules/` 或用户数据
 
-### Requirement: Staging dir tracks init-repo changes
-build.rs SHALL 设置 `cargo:rerun-if-changed` 指令指向 init-repo 的关键文件，确保模板变更时触发重编译。
+#### Scenario: 模板可独立提取
 
-#### Scenario: Template change triggers rebuild
-- **WHEN** init-repo/package.json 被修改后执行 `cargo build --release`
-- **THEN** cargo 检测到变更并重新编译（不使用缓存）
+- **WHEN** 用户从 tgz 安装后执行 `localapp init --name my-app`
+- **THEN** 模板 SHALL 正常提取并包含源码、`package.json`、migration、backend contract 和 Agent 指引
+
+### Requirement: 模板变化触发重新打包
+
+包构建 SHALL 从当前 `init-repo/` 生成 staging，并以内容摘要约束复制结果，不得复用无法
+证明与当前源码一致的旧 staging。
+
+#### Scenario: 模板变化进入新 tgz
+
+- **WHEN** `init-repo/` 的受管文件发生变化后重新构建
+- **THEN** artifact manifest 与 tgz SHALL 反映新内容

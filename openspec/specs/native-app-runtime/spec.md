@@ -63,10 +63,10 @@ LocalApp native 应用的用户体验验收 SHALL 在正式 Shell route `/{userI
 
 ### Requirement: 所有 Server 部署使用正式 native Shell
 
-canonical Server SHALL 在回环、本地网络、容器和公网部署中使用同一同页 native app host 契约。Platform Shell SHALL 拥有导航、确认弹窗和平台 overlay，应用 SHALL 只拥有 app container；托盘桥接器和用户 SHALL NOT 使用 raw asset route 作为正式入口。
+canonical Server SHALL 在回环、本地网络、容器和公网部署中使用同一同页 native app host 契约。Platform Shell SHALL 拥有导航、确认弹窗和平台 overlay，应用 SHALL 只拥有 app container；daemon 打开的浏览器和用户 SHALL NOT 使用 raw asset route 作为正式入口。
 
 #### Scenario: 本地正式入口包含 Shell
-- **WHEN** 用户从任一 Server 首页或可选托盘打开已安装应用
+- **WHEN** 用户从任一 Server 首页或 daemon 打开的主页访问已安装应用
 - **THEN** 浏览器 SHALL 渲染 Server Platform Shell 和 native app mount container
 - **AND** 页面 SHALL NOT 使用 iframe
 - **AND** 应用 SDK SHALL 无需判断回环、本地网络或公网部署模式
