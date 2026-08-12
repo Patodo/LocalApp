@@ -703,7 +703,7 @@ git commit -m "feat(notify): add durable delivery cursors"
 - Produces: one-time `localapp://notification/open?ticket=...` activation and read-on-click.
 - Consumes: Task 8 native adapter and Task 9 cursor protocol.
 
-- [ ] **Step 1: Write failing source, reconnect, and click tests**
+- [x] **Step 1: Write failing source, reconnect, and click tests**
 
 ```ts
 it("baselines a newly enabled source at its current sequence", async () => {
@@ -728,13 +728,13 @@ it("notification click validates the source path before marking read", async () 
 });
 ```
 
-- [ ] **Step 2: Run notification-client tests and verify RED**
+- [x] **Step 2: Run notification-client tests and verify RED**
 
 Run: `pnpm -C packages/localapp exec vitest run tests/connection-manager.test.ts tests/notification-dispatcher.test.ts tests/click-ticket-store.test.ts && pnpm -C packages/server exec vitest run tests/device-notification-source-store.test.ts tests/integration/device-notifications.test.ts`
 
 Expected: FAIL because the daemon has no notification-source state or native dispatcher.
 
-- [ ] **Step 3: Implement explicit sources and reliable delivery**
+- [x] **Step 3: Implement explicit sources and reliable delivery**
 
 Store source enablement, user/peer identity, encrypted credential reference,
 cursor, last success, and bounded error text in the local Server. Do not return
@@ -746,13 +746,13 @@ resolve the source notification on click, accept only its same-origin relative
 path, then mark read and open it. Credential removal opens the source login or
 inbox without marking read.
 
-- [ ] **Step 4: Run local/remote notification integration**
+- [x] **Step 4: Run local/remote notification integration**
 
 Run: `pnpm -C packages/localapp test && pnpm -C packages/server exec vitest run tests/integration/device-notifications.test.ts tests/integration/two-peer-sync.test.ts`
 
 Expected: PASS; one unavailable peer cannot stop local or other remote sources and no notification is duplicated.
 
-- [ ] **Step 5: Commit the daemon notification client**
+- [x] **Step 5: Commit the daemon notification client**
 
 ```bash
 git add packages/localapp packages/server
