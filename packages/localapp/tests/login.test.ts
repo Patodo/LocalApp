@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProfileStore } from "../src/config/profile-store.js";
 import { login } from "../src/commands/login.js";
+import { writeCredentialSafeJson } from "../src/commands/shared.js";
 import { LocalAppClient } from "../src/http/localapp-client.js";
 import { runLocalApp } from "../src/main.js";
 
@@ -200,5 +201,94 @@ describe("authentication commands", () => {
 
     expect(code).toBe(0);
     expect(observedTimeouts).toEqual([10_000]);
+  });
+
+  it("redacts a quote and backslash credential reflected by login before JSON serialization", async () => {
+    // Break caught: replacing the raw credential after JSON.stringify misses its escaped representation.
+    const configDir = await createConfigDirectory();
+    const apiKey = "a\"b\\c";
+    const escapedApiKey = "a\\\"b\\\\c";
+    const serverUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ success: true, data: { id: apiKey, name: "Alice", role: "user" } }));
+    }));
+    vi.stubEnv("LOCALAPP_CONFIG_DIR", configDir);
+    let stdout = "";
+    let stderr = "";
+
+    const code = await runLocalApp(["login", serverUrl, "--api-key", apiKey, "--profile", "quoted"], {
+      stdout: (value) => { stdout += value; },
+      stderr: (value) => { stderr += value; },
+    });
+
+    expect(code).toBe(0);
+    expect(stdout).not.toContain(apiKey);
+    expect(stdout).not.toContain(escapedApiKey);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      success: true,
+      user: { id: "[REDACTED]", name: "Alice", role: "user" },
+      profile: "quoted",
+      serverUrl,
+    });
+  });
+
+  it("redacts an escaped quote and backslash credential from nested whoami values and object keys before serialization", async () => {
+    // Break caught: escaped credentials in nested values or keys survive post-serialization raw replacement.
+    const configDir = await createConfigDirectory();
+    const apiKey = "a\"b\\c";
+    const escapedApiKey = "a\\\"b\\\\c";
+    const reflectedKey = `reply-${apiKey}`;
+    const serverUrl = await listen(createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        success: true,
+        data: {
+          id: "eve",
+          name: "Eve",
+          role: "user",
+          nested: [{ echo: apiKey }, { [reflectedKey]: "safe" }],
+        },
+      }));
+    }));
+    await new ProfileStore(configDir).upsert({ name: "quoted", serverUrl, apiKey });
+    vi.stubEnv("LOCALAPP_CONFIG_DIR", configDir);
+    let stdout = "";
+    let stderr = "";
+
+    const code = await runLocalApp(["whoami", "--profile", "quoted"], {
+      stdout: (value) => { stdout += value; },
+      stderr: (value) => { stderr += value; },
+    });
+
+    expect(code).toBe(0);
+    expect(stdout).not.toContain(apiKey);
+    expect(stdout).not.toContain(escapedApiKey);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      success: true,
+      data: {
+        id: "eve",
+        name: "Eve",
+        role: "user",
+        nested: [{ echo: "[REDACTED]" }, { "reply-[REDACTED]": "safe" }],
+      },
+    });
+  });
+
+  it("sanitizes a newline credential in nested object keys and array values before serialization without mutation", () => {
+    // Break caught: raw replacement after JSON.stringify misses escaped quote, backslash, and newline credentials.
+    const apiKey = "a\"b\\c\nline";
+    const escapedApiKey = "a\\\"b\\\\c\\nline";
+    const value = { [`reply-${apiKey}`]: [{ echo: apiKey }] };
+    const original = structuredClone(value);
+    let stdout = "";
+
+    writeCredentialSafeJson({ stdout: (output) => { stdout += output; }, stderr: () => undefined }, value, apiKey);
+
+    expect(stdout).not.toContain(apiKey);
+    expect(stdout).not.toContain(escapedApiKey);
+    expect(JSON.parse(stdout)).toEqual({ "reply-[REDACTED]": [{ echo: "[REDACTED]" }] });
+    expect(value).toEqual(original);
   });
 });

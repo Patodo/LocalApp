@@ -247,3 +247,71 @@ localapp 0.1.0
   on every POSIX run.
 - The temporary packed artifact was created only under the repository's
   `tmp/localapp-task-2-package/` for the self-contained runtime check.
+
+## Fix round 2: escaped credential serialization
+
+### Implementation
+
+Fixed the remaining Critical output-leak finding in
+`packages/localapp/src/commands/shared.ts`. `writeCredentialSafeJson` now
+recursively creates a sanitized copy before serialization: every string value
+and every object key replaces the exact credential with `[REDACTED]`; arrays
+and nested objects are traversed. It does not mutate the supplied response
+object. The resulting value is then serialized once with `JSON.stringify`, so
+the output remains valid JSON and cannot retain the credential only in escaped
+JSON form.
+
+### Covering tests
+
+`packages/localapp/tests/login.test.ts` now covers:
+
+- a real local `/api/me` login response reflecting a quote/backslash
+  credential in the user identity;
+- a real local `/api/me` whoami response reflecting that credential in a
+  nested array value and an object key; and
+- the newline-containing credential serialization boundary directly, because
+  Fetch correctly rejects newline characters in HTTP header values before a
+  request can reach any Server. This test uses the same production writer and
+  proves nested key/value redaction, raw and escaped-form absence, parseable
+  JSON, and lack of mutation.
+
+### RED
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 failed (1)
+Tests  3 failed | 7 passed (10)
+
+redacts a quote and backslash credential reflected by login before JSON serialization
+redacts an escaped quote and backslash credential from nested whoami values and object keys before serialization
+sanitizes a newline credential in nested object keys and array values before serialization without mutation
+
+AssertionError: expected serialized output not to contain the credential's
+JSON-escaped representation
+```
+
+The first attempt with a newline credential through the real HTTP command
+correctly failed at Fetch header validation, not at the serializer. The final
+RED uses quote/backslash through the real server and newline at the narrow
+serialization boundary, where it can be represented and verified safely.
+
+### GREEN
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 passed (1)
+Tests  10 passed (10)
+
+pnpm -C packages/localapp build
+tsc -p tsconfig.json (exit 0)
+
+pnpm -C packages/localapp test
+Test Files  5 passed (5)
+Tests  68 passed | 1 skipped (69)
+
+pnpm -C packages/server exec vitest run tests/integration/auth.test.ts tests/integration/global-auth.test.ts
+Test Files  2 passed (2)
+Tests  9 passed (9)
+```
+
+`git diff --check` also completed without errors.
