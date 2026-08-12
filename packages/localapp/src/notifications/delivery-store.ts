@@ -130,7 +130,7 @@ export class DeliveryStore {
       const delivery = validateDelivery(value);
       if (source.pending !== null) {
         if (source.pending.delivery.id === delivery.id && source.pending.delivery.sequence === delivery.sequence) {
-          return clonePending(source.pending);
+          return unchanged(clonePending(source.pending));
         }
         throw new Error("Notification source already has a pending delivery");
       }
@@ -340,8 +340,14 @@ export class DeliveryStore {
       const current = await optionalLstat(this.statePath);
       if (!optionalSameIdentity(existing, current)) throw unsafe("Notification delivery state was replaced");
       await this.fault?.("before-rename");
-      await renameInPinnedParent(parent, path.basename(temporary), path.basename(this.statePath), parentBefore);
-      renamed = true;
+      try {
+        await renameInPinnedParent(parent, path.basename(temporary), path.basename(this.statePath), parentBefore, tempIdentity);
+        renamed = true;
+      } catch (error) {
+        if (error instanceof PinnedRenamePreconditionError) throw error;
+        this.poisoned = true;
+        throw new Error("Notification delivery durability is uncertain during pinned rename", { cause: error });
+      }
       try {
         if (!sameIdentity(parentBefore, await privateDirectoryIdentity(parent))
           || !sameIdentity(parentBefore, await parentHandle.stat({ bigint: true }))) throw unsafe("Notification delivery parent was replaced");
@@ -556,14 +562,19 @@ async function optionalLstat(target: string): Promise<Awaited<ReturnType<typeof 
 
 const PINNED_RENAME_SCRIPT = String.raw`
 const fs = require("node:fs");
-const [source, destination, expectedDev, expectedIno] = process.argv.slice(1);
+const [source, destination, expectedDev, expectedIno, sourceDev, sourceIno] = process.argv.slice(1);
 if (!source || !destination || source.includes("/") || destination.includes("/")) process.exit(71);
 const parent = fs.lstatSync(".", { bigint: true });
 if (!parent.isDirectory() || parent.isSymbolicLink() || String(parent.dev) !== expectedDev || String(parent.ino) !== expectedIno) process.exit(72);
+const before = fs.lstatSync(source, { bigint: true });
+if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || String(before.dev) !== sourceDev || String(before.ino) !== sourceIno || (process.platform !== "win32" && (before.mode & 0o777n) !== 0o600n)) process.exit(74);
 fs.renameSync(source, destination);
 const after = fs.lstatSync(".", { bigint: true });
-if (String(after.dev) !== expectedDev || String(after.ino) !== expectedIno) process.exit(73);
+const published = fs.lstatSync(destination, { bigint: true });
+if (String(after.dev) !== expectedDev || String(after.ino) !== expectedIno || String(published.dev) !== sourceDev || String(published.ino) !== sourceIno) process.exit(73);
 `;
+
+class PinnedRenamePreconditionError extends Error {}
 
 /** The child pins cwd before checking identity, giving Node a renameat-like boundary. */
 async function renameInPinnedParent(
@@ -571,14 +582,18 @@ async function renameInPinnedParent(
   source: string,
   destination: string,
   identity: Awaited<ReturnType<typeof fs.lstat>>,
+  sourceIdentity: Awaited<ReturnType<typeof fs.lstat>>,
 ): Promise<void> {
   try {
-    await execFileAsync(process.execPath, ["-e", PINNED_RENAME_SCRIPT, source, destination, String(identity.dev), String(identity.ino)], {
+    await execFileAsync(process.execPath, ["-e", PINNED_RENAME_SCRIPT, source, destination, String(identity.dev), String(identity.ino), String(sourceIdentity.dev), String(sourceIdentity.ino)], {
       cwd: parent,
       timeout: 5_000,
       windowsHide: true,
     });
   } catch (error) {
+    if ([71, 72, 74].includes(Number((error as { code?: unknown }).code))) {
+      throw new PinnedRenamePreconditionError("Notification delivery pinned rename precondition failed", { cause: error });
+    }
     throw unsafe(`Notification delivery pinned rename failed: ${(error as Error).message}`);
   }
 }

@@ -43,6 +43,9 @@ describe("DeliveryStore", () => {
     await store.baseline("local", 0);
     const pending = await store.preparePending("local", notification());
     if (pending === null) throw new Error("expected pending delivery");
+    const pendingIdentity = await fs.stat(statePath, { bigint: true });
+    expect(await store.preparePending("local", notification())).toEqual(pending);
+    expect((await fs.stat(statePath, { bigint: true })).ino).toBe(pendingIdentity.ino);
     expect(await store.readSource("local")).toMatchObject({ cursor: 0, pending: { retryCount: 0 } });
     expect(await store.retryPending("local")).toEqual({ ...pending, retryCount: 1 });
     expect((await store.retryPending("local"))?.ticket).toBe(pending.ticket);
