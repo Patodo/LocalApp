@@ -1,4 +1,5 @@
 import type { ProfileStore } from "../config/profile-store.js";
+import { sanitizeCredential } from "./shared.js";
 import { LocalAppLifecycleError, lifecycleError } from "../errors.js";
 import { LocalAppClient } from "../http/localapp-client.js";
 import { loadAndValidateProjectManifest } from "../project/check.js";
@@ -50,7 +51,8 @@ export async function syncApplication(options: SyncApplicationOptions): Promise<
     if (job.status === "completed") return job;
     if (TERMINAL_FAILURES.has(job.status)) {
       const status = job.status as "rolled-back" | "failed" | "recovery-required";
-      throw new SyncJobFailure(status, job, safeJobMessage(job, target.apiKey));
+      const sanitizedJob = sanitizeCredential(job, target.apiKey) as SyncJob;
+      throw new SyncJobFailure(status, sanitizedJob, safeJobMessage(sanitizedJob, target.apiKey));
     }
     await wait(POLL_INTERVAL_MS);
     const polled = await client.getSyncJob(job.id);

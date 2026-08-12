@@ -19,7 +19,12 @@ export interface InstallResult {
   package: string;
   target: string;
   serverUrl: string;
-  data: unknown;
+  data: { app: InstallApplicationOutcome };
+}
+
+export interface InstallApplicationOutcome {
+  name: string;
+  [key: string]: unknown;
 }
 
 export async function installApplication(options: InstallApplicationOptions): Promise<InstallResult> {
@@ -32,7 +37,7 @@ export async function installApplication(options: InstallApplicationOptions): Pr
   if (!response.ok || !successfulEnvelope(response.body)) {
     throw lifecycleError("application_install_failed", safeResponseMessage(response, target.apiKey, "Application installation failed"));
   }
-  return { operation: "install", package: packagePath, target: target.name, serverUrl: target.serverUrl, data: response.body.data };
+  return { operation: "install", package: packagePath, target: target.name, serverUrl: target.serverUrl, data: { app: response.body.data } };
 }
 
 async function inspectExplicitPackage(input: string): Promise<string> {
@@ -53,8 +58,15 @@ async function inspectExplicitPackage(input: string): Promise<string> {
   }
 }
 
-function successfulEnvelope(value: unknown): value is { success: true; data: unknown } {
-  return typeof value === "object" && value !== null && (value as Record<string, unknown>).success === true && "data" in value;
+function successfulEnvelope(value: unknown): value is { success: true; data: InstallApplicationOutcome } {
+  return typeof value === "object" && value !== null
+    && (value as Record<string, unknown>).success === true
+    && isInstallApplicationOutcome((value as Record<string, unknown>).data);
+}
+
+function isInstallApplicationOutcome(value: unknown): value is InstallApplicationOutcome {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).name === "string";
 }
 
 function safeResponseMessage(response: { ok: false; error: string } | { ok: true; body: unknown }, credential: string, fallback: string): string {

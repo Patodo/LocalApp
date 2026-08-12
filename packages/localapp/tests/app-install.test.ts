@@ -40,8 +40,22 @@ describe("application installation", () => {
     const result = await installApplication({ projectDir, target: "local", profileStore: new ProfileStore(configDir) });
 
     expect(result.serverUrl).toBe(serverUrl);
-    expect(result.data).toMatchObject({ name: "install-fixture" });
+    expect(result.data.app.name).toBe("install-fixture");
     expect((await fetch(`${serverUrl}/localadmin/install-fixture/`)).status).toBe(200);
+  });
+
+  it("preserves the canonical outcome beneath data.app when a same-name version is updated", async () => {
+    // Break caught: flattening or replacing the Server outcome loses the new app version and upgrade semantics for a same-name install.
+    await fs.rm(path.join(projectDir, "install-fixture.localapp"));
+    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({
+      name: "install-fixture", version: "1.1.0", scripts: {
+        test: "node -e \"process.exit(0)\"", build: "node -e \"process.exit(0)\"",
+      },
+    }));
+
+    const result = await installApplication({ projectDir, target: "local", profileStore: new ProfileStore(configDir) });
+
+    expect(result.data.app).toMatchObject({ name: "install-fixture", appVersion: "1.1.0", upgraded: true });
   });
 
   it("validates an explicit package before uploading without rebuilding", async () => {

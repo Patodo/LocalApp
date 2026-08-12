@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApiKey } from "../../server/src/lib/meta-sqlite.js";
 import { createTestServer, registerUser } from "../../server/tests/integration/helpers.js";
 import { installApplication } from "../src/commands/app-install.js";
-import { syncApplication } from "../src/commands/app-sync.js";
+import { SyncJobFailure, syncApplication } from "../src/commands/app-sync.js";
 import { ProfileStore } from "../src/config/profile-store.js";
 
 const repositoryRoot = path.resolve(process.cwd(), "../..");
@@ -47,6 +47,10 @@ describe("application synchronization", () => {
       body: JSON.stringify({ name: "target", baseUrl: serverUrl, apiKey: targetKey, acceptInsecureHttp: true }),
     });
     expect(peer.status).toBe(201);
+    const peerBody = await peer.json() as { data: { id: string } };
+    expect((await fetch(`${serverUrl}/api/peers/${peerBody.data.id}/check`, {
+      method: "POST", headers: { cookie: login.headers.get("set-cookie")!.split(";", 1)[0] },
+    })).status).toBe(200);
     configDir = await fs.mkdtemp(path.join(testRoot, "profiles-"));
     await new ProfileStore(configDir).upsert({ name: "source", serverUrl, apiKey: sourceKey });
     await installApplication({ projectDir, target: "source", profileStore: new ProfileStore(configDir) });
@@ -81,6 +85,16 @@ describe("application synchronization", () => {
     })).status).toBe(200);
   });
 
+  it("completes data synchronization after local exact-name confirmation", async () => {
+    // Break caught: omitting withData or confirmation from the source request silently performs an application-only synchronization.
+    const job = await syncApplication({
+      projectDir, target: "source", peer: "target", withData: true, confirmation: "install-fixture",
+      profileStore: new ProfileStore(configDir),
+    });
+
+    expect(job).toMatchObject({ status: "completed", withData: true });
+  });
+
   it("waits exactly 250 ms before each non-terminal status poll", async () => {
     // Break caught: a tight loop or changed interval overloads the source Server while a synchronization job is running.
     let server: Server | undefined;
@@ -98,6 +112,41 @@ describe("application synchronization", () => {
         wait: async (milliseconds) => { waited.push(milliseconds); },
       })).resolves.toMatchObject({ id: "job-1", status: "completed" });
       expect(waited).toEqual([250]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it.each(["rolled-back", "failed", "recovery-required"] as const)("keeps %s as a structured credential-safe terminal failure", async (status) => {
+    // Break caught: treating terminal failures as success, collapsing their status, or retaining a raw job serializes Server credentials through error.job.
+    const apiKey = "source-key-must-not-leak";
+    const rawJob = {
+      id: "job-terminal", status,
+      error: `Server error ${apiKey} and source\\u002dkey\\u002dmust\\u002dnot\\u002dleak`,
+      nested: { [apiKey]: [apiKey, { message: apiKey }] },
+    };
+    let server: Server | undefined;
+    try {
+      const sourceUrl = await listen(createServer((request, response) => {
+        response.setHeader("content-type", "application/json");
+        if (request.method === "POST") response.end('{"success":true,"data":{"id":"job-terminal","status":"queued"}}');
+        else response.end(JSON.stringify({ success: true, data: rawJob }));
+      }), (value) => { server = value; });
+      const profileStore = { resolve: async () => ({ name: "source", serverUrl: sourceUrl, apiKey }) };
+      let thrown: unknown;
+      try {
+        await syncApplication({ projectDir, target: "source", peer: "target", withData: false, profileStore, wait: async () => undefined });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(SyncJobFailure);
+      expect(thrown).toMatchObject({ code: `application_sync_${status.replaceAll("-", "_")}`, status });
+      expect(JSON.stringify(thrown)).not.toContain(apiKey);
+      expect(JSON.stringify(thrown)).not.toContain("source\\u002dkey");
+      expect((thrown as SyncJobFailure).job).toMatchObject({
+        status, error: expect.stringContaining("[REDACTED]"), nested: { "[REDACTED]": ["[REDACTED]", { message: "[REDACTED]" }] },
+      });
     } finally {
       await close(server);
     }
