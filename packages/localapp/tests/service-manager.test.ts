@@ -67,6 +67,28 @@ describe("per-user service manager", () => {
     expect(commands.filter((command) => command.args[0] === "bootstrap")).toHaveLength(firstBootstrapCount);
   });
 
+  it("boots out on explicit macOS stop and bootstraps again on later start", async () => {
+    const fixture = await serviceFixture("mac explicit stop");
+    const commands: ServiceCommandInvocation[] = [];
+    let loaded = false;
+    const manager = createServiceManager({
+      platform: "darwin", layout: fixture.layout, nodePath: process.execPath, uid: 501, homeDir: fixture.root,
+      run: recordingRunner(commands, (invocation) => {
+        if (invocation.args[0] === "print") return { code: loaded ? 0 : 1, stdout: "", stderr: "Could not find service" };
+        if (invocation.args[0] === "bootstrap") { loaded = true; return { code: 0, stdout: "", stderr: "" }; }
+        if (invocation.args[0] === "bootout") { loaded = false; return { code: 0, stdout: "", stderr: "" }; }
+        return undefined;
+      }),
+    });
+    await manager.install();
+    await manager.stop();
+    expect(await manager.status()).toBe(false);
+    await manager.start();
+    expect(await manager.status()).toBe(true);
+    expect(commands.filter((command) => command.args[0] === "bootstrap")).toHaveLength(2);
+    await expect(fs.stat(manager.registrationPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+  });
+
   it("creates a LIMITED current-user Windows task with one safely quoted command", async () => {
     const fixture = await serviceFixture("windows & task (one)!");
     const commands: ServiceCommandInvocation[] = [];
@@ -141,6 +163,17 @@ describe("per-user service manager", () => {
       })).toThrow(expect.objectContaining({ code: "user_service_configuration_invalid" }));
     await expect(fs.stat(path.join(fixture.root, "Library/LaunchAgents/com.localapp.daemon.plist")))
       .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reads only a bounded tail from a multi-megabyte daemon log", async () => {
+    const fixture = await serviceFixture("bounded logs");
+    const manager = createServiceManager({ platform: "linux", layout: fixture.layout, nodePath: process.execPath, homeDir: fixture.root, run: recordingRunner([]) });
+    await fs.mkdir(path.dirname(fixture.layout.daemonLogPath), { recursive: true });
+    await fs.writeFile(fixture.layout.daemonLogPath, `BEGIN-OF-LOG\n${"old-line\n".repeat(400_000)}final-line\n`);
+    const logs = await manager.logs(2);
+    expect(logs).toContain("[truncated to 1048576 bytes]");
+    expect(logs).toContain("final-line");
+    expect(logs).not.toContain("BEGIN-OF-LOG");
   });
 });
 

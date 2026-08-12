@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { LocalAppDaemon } from "../src/daemon/daemon.js";
+import { acquireDaemonLock, LocalAppDaemon } from "../src/daemon/daemon.js";
 import { createIpcClient } from "../src/daemon/ipc-client.js";
 import { publishRelease } from "../src/daemon/release-store.js";
 import { createRuntimeLayout } from "../src/daemon/runtime-layout.js";
@@ -13,6 +13,9 @@ import type { OwnedProcess } from "../src/process/process-tree.js";
 const repositoryRoot = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(repositoryRoot, "tmp/task-7b-cleanup-failure-tests");
 const directories: string[] = [];
+// Intentionally failed cleanup retains the lock's FileHandle. Keep the daemon
+// strongly reachable for this test process so Node does not report a GC-close.
+const retainedDaemons: LocalAppDaemon[] = [];
 
 beforeAll(async () => { await fs.mkdir(testRoot, { recursive: true }); });
 afterEach(async () => {
@@ -21,6 +24,43 @@ afterEach(async () => {
 });
 
 describe("daemon cleanup failures", () => {
+  it.skipIf(process.platform === "win32")("retains the startup-owned Server and lock when readiness cleanup rejects", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "startup-"));
+    directories.push(root);
+    const artifact = path.join(root, "packed");
+    await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    const failure = new Error("startup tree cleanup failed");
+    const terminate = vi.fn(async () => { throw failure; });
+    const daemon = new LocalAppDaemon({ layout, readinessTimeoutMs: 20, spawnOwnedProcess: () => silentOwnedProcess(terminate) });
+
+    try {
+      await expect(daemon.start()).rejects.toBe(failure);
+      expect(terminate).toHaveBeenCalled();
+      await expect(fs.lstat(layout.lockPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(acquireDaemonLock({ layout, bootId: "second_boot_0123456789" })).rejects.toMatchObject({ code: "daemon_lock_busy" });
+    } finally { retainedDaemons.push(daemon); }
+  });
+
+  it.skipIf(process.platform === "win32")("reports unexpected post-ready Server exit only after owned cleanup", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "u-"));
+    directories.push(root);
+    const artifact = path.join(root, "packed");
+    await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    let exit!: () => void;
+    const terminate = vi.fn(async () => undefined);
+    const daemon = new LocalAppDaemon({ layout, spawnOwnedProcess: () => readyOwnedProcess(terminate, (resolve) => { exit = resolve; }) });
+    await daemon.start();
+    exit();
+    await expect(daemon.stopped).rejects.toMatchObject({ code: "server_exited" });
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(fs.lstat(layout.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.skipIf(process.platform === "win32")("keeps transient ownership and shares one terminal stop failure when Server cleanup rejects", async () => {
     const fixture = await startDaemonWithFailingServer();
     const unhandled: unknown[] = [];
@@ -40,15 +80,18 @@ describe("daemon cleanup failures", () => {
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
+      retainedDaemons.push(fixture.daemon);
     }
   });
 
   it.skipIf(process.platform === "win32")("returns an IPC error rather than restart success when Server cleanup rejects", async () => {
     const fixture = await startDaemonWithFailingServer();
-    await expect(createIpcClient({ endpoint: fixture.layout.controlEndpoint }).request({ type: "restart" }))
-      .resolves.toMatchObject({ ok: false, code: "IPC_HANDLER_FAILED" });
-    expect(fixture.terminate).toHaveBeenCalledTimes(1);
-    await expect(fs.lstat(fixture.layout.lockPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    try {
+      await expect(createIpcClient({ endpoint: fixture.layout.controlEndpoint }).request({ type: "restart" }))
+        .resolves.toMatchObject({ ok: false, code: "IPC_HANDLER_FAILED" });
+      expect(fixture.terminate).toHaveBeenCalledTimes(1);
+      await expect(fs.lstat(fixture.layout.lockPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    } finally { retainedDaemons.push(fixture.daemon); }
   });
 });
 
@@ -72,4 +115,19 @@ function failingOwnedProcess(terminate: () => Promise<never>): OwnedProcess {
   child.stdout = Readable.from(['{"type":"ready","listenUrl":"http://127.0.0.1:43127"}\n']);
   child.pid = 41_273;
   return { child: child as unknown as OwnedProcess["child"], pid: child.pid, exited: new Promise(() => undefined), terminate };
+}
+
+function silentOwnedProcess(terminate: () => Promise<never>): OwnedProcess {
+  const child = new EventEmitter() as EventEmitter & { stdout: Readable; pid: number };
+  child.stdout = new Readable({ read() {} });
+  child.pid = 41_274;
+  return { child: child as unknown as OwnedProcess["child"], pid: child.pid, exited: new Promise(() => undefined), terminate };
+}
+
+function readyOwnedProcess(terminate: () => Promise<void>, setExit: (resolve: () => void) => void): OwnedProcess {
+  const child = new EventEmitter() as EventEmitter & { stdout: Readable; pid: number };
+  child.stdout = Readable.from(['{"type":"ready","listenUrl":"http://127.0.0.1:43127"}\n']);
+  child.pid = 41_275;
+  const exited = new Promise<{ code: number }>((resolve) => setExit(() => resolve({ code: 1 })));
+  return { child: child as unknown as OwnedProcess["child"], pid: child.pid, exited, terminate };
 }

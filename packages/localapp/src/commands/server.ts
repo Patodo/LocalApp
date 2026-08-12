@@ -51,13 +51,14 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
   if (options.action === "logs") return { action: "logs", logs: await service().logs() };
   if (options.action === "uninstall") {
     const stopped = await stopViaIpcOrService(ipc(), service());
+    await waitForStopped(layout, ipc());
     await service().uninstall();
     await removeTransientRuntimeFiles(layout);
     return { action: "uninstall", stopped };
   }
   if (options.action === "stop") {
     const stopped = await stopViaIpcOrService(ipc(), service());
-    if (stopped.via === "ipc") await waitForStopped(layout, ipc());
+    await waitForStopped(layout, ipc());
     return { action: "stop", stopped };
   }
   const response = await requestControl(ipc(), { type: "restart" }, service(), "restart");
@@ -67,19 +68,39 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
 
 export async function runServerForeground(options: { dataDir?: string; host?: string; port?: number }, dependencies: {
   layout?: RuntimeLayout; artifactDirectory?: string;
+  spawnOwnedProcess?: typeof spawnOwnedProcess;
 } = {}): Promise<number> {
   const layout = dependencies.layout ?? createRuntimeLayout();
   const artifact = dependencies.artifactDirectory ?? defaultArtifactDirectory();
   const manifest = await verifyReleaseArtifact(artifact);
   if (typeof manifest.serverEntrypoint !== "string") throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable");
   const entrypoint = path.join(artifact, ...manifest.serverEntrypoint.split("/"));
-  const child = spawnOwnedProcess(process.execPath, [entrypoint, "start", "--data-dir", options.dataDir ?? layout.dataDir,
+  const child = (dependencies.spawnOwnedProcess ?? spawnOwnedProcess)(process.execPath, [entrypoint, "start", "--data-dir", options.dataDir ?? layout.dataDir,
     "--host", options.host ?? "127.0.0.1", "--port", String(options.port ?? 0)], { stdio: "inherit" });
   return await new Promise<number>((resolve, reject) => {
-    const stop = () => { void child.terminate().catch(reject); };
+    let termination: Promise<void> | undefined;
+    let settled = false;
+    const finish = (error?: unknown, code = 0) => {
+      if (settled) return;
+      settled = true;
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      error === undefined ? resolve(code) : reject(error);
+    };
+    const stop = () => {
+      termination ??= child.terminate();
+      void termination.then(() => finish(undefined, 0), (error) => finish(error));
+    };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
-    child.exited.then((exit) => exit.error ? reject(exit.error) : resolve(exit.code ?? 1));
+    child.exited.then(async (exit) => {
+      // A process exit only proves the supervisor exited. Always wait for the
+      // owned-tree terminator, which reaps its process group/descendants.
+      try {
+        await (termination ??= child.terminate());
+        finish(exit.error, exit.error === undefined ? (exit.code ?? 1) : 1);
+      } catch (error) { finish(error); }
+    }, finish);
   });
 }
 

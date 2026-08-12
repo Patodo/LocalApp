@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIpcClient } from "../src/daemon/ipc-client.js";
 import { createIpcServer } from "../src/daemon/ipc-server.js";
 
@@ -79,6 +80,29 @@ describe("private daemon IPC", () => {
     peer.write('{"type":"status"}\n');
     await expect(server.close()).resolves.toBeUndefined();
     peer.destroy();
+  });
+
+  it.skipIf(process.platform === "win32")("runs after-response cleanup exactly once after a flushed stop response", async () => {
+    const root = await fixtureRoot();
+    const afterResponse = vi.fn(async () => undefined);
+    const server = await createIpcServer({ endpoint: path.join(root, "control.sock"), afterResponse, async handle() { return { ok: true, type: "stop" }; } });
+    servers.push(server);
+    await expect(createIpcClient({ endpoint: path.join(root, "control.sock") }).request({ type: "stop" })).resolves.toMatchObject({ ok: true, type: "stop" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(afterResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for access-denied and unknown IPC transport errors", async () => {
+    for (const code of ["EACCES", "ECONNRESET", "EUNKNOWN"]) {
+      const socket = new EventEmitter() as EventEmitter & { destroy(): void; end(): void };
+      socket.destroy = () => undefined;
+      socket.end = () => undefined;
+      const client = createIpcClient({ endpoint: "ignored", createConnection: () => {
+        queueMicrotask(() => socket.emit("error", Object.assign(new Error(code), { code })));
+        return socket as unknown as net.Socket;
+      } });
+      await expect(client.request({ type: "status" })).rejects.toMatchObject({ code: "ipc_transport_failed" });
+    }
   });
 });
 

@@ -9,7 +9,7 @@ const layout = {
 } satisfies RuntimeLayout;
 
 describe("server lifecycle command", () => {
-  it("publishes on each start but installs the per-user service only once", async () => {
+  it("publishes on each start and idempotently checks the per-user service", async () => {
     const install = vi.fn(async () => ({ mode: "service" as const, installed: false }));
     const start = vi.fn(async () => undefined);
     const readyStatus = { ok: true as const, type: "status" as const, data: {
@@ -36,5 +36,39 @@ describe("server lifecycle command", () => {
       ipcClient: () => ({ request: vi.fn(async () => { throw Object.assign(new Error("missing"), { code: "ipc_unreachable" }); }) }),
       health: vi.fn(), publishRelease: vi.fn(),
     })).rejects.toMatchObject({ code: "daemon_unreachable" });
+  });
+
+  it("reports Linux foreground fallback without trying to start a missing user manager", async () => {
+    const start = vi.fn(async () => undefined);
+    const result = await runServerCommand({ action: "start" }, {
+      layout, artifactDirectory: "/artifact", verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/localapp-server.mjs" })),
+      publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/release", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
+      createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false, reason: "systemd user manager unavailable" })), start, stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
+    });
+    expect(result).toEqual({ action: "start", mode: "foreground", reason: "systemd user manager unavailable" });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("waits for proven terminal ownership after service fallback stop", async () => {
+    const stop = vi.fn(async () => undefined);
+    const request = vi.fn(async () => { throw Object.assign(new Error("missing"), { code: "ipc_unreachable" }); });
+    await expect(runServerCommand({ action: "stop" }, {
+      layout, ipcClient: () => ({ request }),
+      createServiceManager: () => ({ install: vi.fn(), start: vi.fn(), stop, restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
+    })).resolves.toMatchObject({ action: "stop", stopped: { via: "service" } });
+    expect(stop).toHaveBeenCalledTimes(1);
+    // One request selects fallback; the second proves endpoint absence after it.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for proven terminal ownership before fallback uninstall unregisters", async () => {
+    const uninstall = vi.fn(async () => undefined);
+    const request = vi.fn(async () => { throw Object.assign(new Error("missing"), { code: "ipc_unreachable" }); });
+    await expect(runServerCommand({ action: "uninstall" }, {
+      layout, ipcClient: () => ({ request }),
+      createServiceManager: () => ({ install: vi.fn(), start: vi.fn(), stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall, logs: vi.fn(), registrationPath: "/service" }),
+    })).resolves.toMatchObject({ action: "uninstall", stopped: { via: "service" } });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(uninstall).toHaveBeenCalledTimes(1);
   });
 });

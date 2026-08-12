@@ -8,17 +8,17 @@ import {
   type DaemonControlResponse,
 } from "./control-protocol.js";
 
-export interface IpcClientOptions { endpoint: string; timeoutMs?: number; }
+export interface IpcClientOptions { endpoint: string; timeoutMs?: number; createConnection?: (endpoint: string) => net.Socket; }
 export interface IpcClient { request(request: DaemonControlRequest): Promise<DaemonControlResponse>; }
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 export function createIpcClient(options: IpcClientOptions): IpcClient {
-  return { request: (request) => requestIpc(options.endpoint, request, options.timeoutMs ?? DEFAULT_TIMEOUT_MS) };
+  return { request: (request) => requestIpc(options.endpoint, request, options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.createConnection ?? net.createConnection) };
 }
 
-function requestIpc(endpoint: string, request: DaemonControlRequest, timeoutMs: number): Promise<DaemonControlResponse> {
+function requestIpc(endpoint: string, request: DaemonControlRequest, timeoutMs: number, connect: (endpoint: string) => net.Socket): Promise<DaemonControlResponse> {
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(endpoint);
+    const socket = connect(endpoint);
     let bytes = Buffer.alloc(0);
     let settled = false;
     const finish = (error?: Error, response?: DaemonControlResponse) => {

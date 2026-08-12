@@ -199,7 +199,10 @@ export class LocalAppDaemon {
       }, () => undefined);
     } catch (error) {
       this.serverStatus = "error";
-      await server.terminate().catch(() => undefined);
+      // Keep the ownership reference until process-tree cleanup is proven.  A
+      // failed terminate must reach the outer cleanup path, which then keeps
+      // the daemon lock rather than allowing another daemon to reclaim it.
+      await server.terminate();
       if (this.server === server) this.server = undefined;
       throw error;
     }

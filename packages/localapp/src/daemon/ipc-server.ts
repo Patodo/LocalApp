@@ -45,6 +45,16 @@ function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"],
     let requestEnded = false;
     let request: DaemonControlRequest | undefined;
     let response: DaemonControlResponse | undefined;
+    let responseTimer: NodeJS.Timeout | undefined;
+    let completed = false;
+    const complete = () => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(timer);
+      if (responseTimer !== undefined) clearTimeout(responseTimer);
+      if (request !== undefined && response !== undefined) void Promise.resolve(afterResponse?.(request, response)).catch(() => undefined);
+      resolve();
+    };
     const finish = (value: DaemonControlResponse) => {
       if (settled) return;
       settled = true;
@@ -52,13 +62,15 @@ function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"],
       clearTimeout(timer);
       let encoded: Buffer;
       try { encoded = encodeControlResponse(value); } catch { encoded = Buffer.from('{"ok":false,"code":"IPC_RESPONSE_INVALID","message":"IPC response failed"}\n'); }
+      // Completion of an IPC handler is not completion of its response. Keep a
+      // separate bounded write/final-close phase for peers that stop reading.
+      responseTimer = setTimeout(() => socket.destroy(), timeoutMs);
+      responseTimer.unref?.();
       socket.end(encoded);
     };
     const close = () => {
-      clearTimeout(timer);
       if (!settled) settled = true;
-      if (request !== undefined && response !== undefined) void Promise.resolve(afterResponse?.(request, response)).catch(() => undefined);
-      resolve();
+      complete();
     };
     const fail = (code: string) => finish({ ok: false, code, message: code });
     const timer = setTimeout(() => { fail("IPC_TIMEOUT"); socket.destroy(); }, timeoutMs);
