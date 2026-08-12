@@ -4,6 +4,10 @@ import path from "node:path";
 import { lifecycleError } from "../errors.js";
 import { ActivationBroker, type BrowserOpener } from "../activation/activation-broker.js";
 import { openValidatedExternalUrl } from "../native/native-adapter.js";
+import { createNativeAdapter } from "../native/native-adapter.js";
+import { DeliveryStore } from "../notifications/delivery-store.js";
+import { NotificationDispatcher } from "../notifications/notification-dispatcher.js";
+import { NotificationActivationResolver, NotificationConnectionManager } from "../notifications/notification-manager.js";
 import { spawnOwnedProcess, type OwnedProcess } from "../process/process-tree.js";
 import { waitForServerReady } from "../process/readiness.js";
 import { parseControlResponseFrame, type DaemonControlResponse, type DaemonServerStatus } from "./control-protocol.js";
@@ -98,6 +102,12 @@ export interface LocalAppDaemonOptions {
   /** Narrow, post-validation browser operation; never receives unparsed Scheme input. */
   openExternal?: BrowserOpener;
   fetch?: typeof globalThis.fetch;
+  createNotificationRuntime?: (options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }) => Promise<DaemonNotificationRuntime>;
+}
+
+export interface DaemonNotificationRuntime {
+  manager: Pick<NotificationConnectionManager, "start" | "stop" | "currentSource">;
+  resolver: { resolve(ticket: string): Promise<void> };
 }
 
 export class LocalAppDaemon {
@@ -109,6 +119,9 @@ export class LocalAppDaemon {
   private serverStatus: DaemonServerStatus = "stopped";
   private listenUrl: string | undefined;
   private deviceControlToken: string | undefined;
+  private notificationControlToken: string | undefined;
+  private notificationRuntime: DaemonNotificationRuntime | undefined;
+  private notificationResolver: DaemonNotificationRuntime["resolver"] | undefined;
   private readonly activationBroker: ActivationBroker;
   private stopPromise: Promise<void> | undefined;
   private restartPromise: Promise<void> | undefined;
@@ -124,6 +137,10 @@ export class LocalAppDaemon {
     this.activationBroker = new ActivationBroker({
       fetch: options.fetch,
       open: options.openExternal ?? openValidatedExternalUrl,
+      notificationResolver: { resolve: async (ticket) => {
+        if (this.notificationResolver === undefined) throw lifecycleError("notification_ticket_resolver_unavailable", "Notification activation is unavailable until notification sources are ready");
+        await this.notificationResolver.resolve(ticket);
+      } },
     });
     void this.stopped.catch(() => undefined);
   }
@@ -192,6 +209,8 @@ export class LocalAppDaemon {
     this.serverStatus = "starting";
     this.listenUrl = undefined;
     this.deviceControlToken = crypto.randomBytes(32).toString("base64url");
+    this.notificationControlToken = crypto.randomBytes(32).toString("base64url");
+    if (this.notificationControlToken === this.deviceControlToken) throw lifecycleError("notification_token_invalid", "Notification and device-control tokens must be distinct");
     const current = await readCurrentRelease(this.options.layout);
     const manifest = await verifyReleaseArtifact(current.releasePath);
     if (typeof manifest.serverEntrypoint !== "string") throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable");
@@ -199,7 +218,7 @@ export class LocalAppDaemon {
     const spawn = this.options.spawnOwnedProcess ?? spawnOwnedProcess;
     const server = spawn(process.execPath, [entrypoint, "start", "--data-dir", this.options.layout.dataDir, "--host", "127.0.0.1", "--port", "0"], {
       cwd: current.releasePath,
-      env: { ...process.env, LOCALAPP_DEVICE_CONTROL_TOKEN: this.deviceControlToken, LOCALAPP_DEV_TOOLS: undefined },
+      env: { ...process.env, LOCALAPP_DEVICE_CONTROL_TOKEN: this.deviceControlToken, LOCALAPP_NOTIFICATION_CONTROL_TOKEN: this.notificationControlToken, LOCALAPP_DEV_TOOLS: undefined },
       stdio: ["ignore", "pipe", "inherit"],
     });
     this.server = server;
@@ -207,6 +226,15 @@ export class LocalAppDaemon {
       const ready = await waitForServerReady(server, { timeoutMs: this.options.readinessTimeoutMs ?? 15_000 });
       await verifyHealth(ready.listenUrl, this.options.healthTimeoutMs ?? 5_000);
       this.listenUrl = ready.listenUrl;
+      const open = this.options.openExternal ?? openValidatedExternalUrl;
+      this.notificationRuntime = await (this.options.createNotificationRuntime ?? ((runtime) => this.createDefaultNotificationRuntime(runtime)))({
+        listenUrl: ready.listenUrl,
+        controlToken: this.notificationControlToken,
+        releasePath: current.releasePath,
+        open,
+      });
+      this.notificationResolver = this.notificationRuntime.resolver;
+      this.notificationRuntime.manager.start();
       this.serverStatus = "ready";
       void server.exited.then(() => {
         if (this.server === server && this.stopPromise === undefined && this.serverStatus !== "stopping") {
@@ -217,6 +245,10 @@ export class LocalAppDaemon {
       }, () => undefined);
     } catch (error) {
       this.serverStatus = "error";
+      const notificationRuntime = this.notificationRuntime;
+      this.notificationRuntime = undefined;
+      this.notificationResolver = undefined;
+      await notificationRuntime?.manager.stop().catch(() => undefined);
       // Keep the ownership reference until process-tree cleanup is proven.  A
       // failed terminate must reach the outer cleanup path, which then keeps
       // the daemon lock rather than allowing another daemon to reclaim it.
@@ -227,14 +259,37 @@ export class LocalAppDaemon {
   }
 
   private async stopServer(): Promise<void> {
+    if (this.server !== undefined || this.notificationRuntime !== undefined) this.serverStatus = "stopping";
+    const notificationRuntime = this.notificationRuntime;
+    this.notificationRuntime = undefined;
+    this.notificationResolver = undefined;
+    await notificationRuntime?.manager.stop();
     const server = this.server;
     if (server === undefined) return;
-    this.serverStatus = "stopping";
     await server.terminate();
     if (this.server === server) this.server = undefined;
     this.listenUrl = undefined;
     this.deviceControlToken = undefined;
+    this.notificationControlToken = undefined;
     this.serverStatus = "stopped";
+  }
+
+  private async createDefaultNotificationRuntime(options: { listenUrl: string; controlToken: string; releasePath: string; open: BrowserOpener }): Promise<DaemonNotificationRuntime> {
+    const store = new DeliveryStore({ statePath: path.join(this.options.layout.supportDir, "notifications", "delivery-state.json") });
+    const native = await createNativeAdapter(path.join(options.releasePath, "runtime", "native"), { supportDir: this.options.layout.supportDir });
+    const dispatcher = new NotificationDispatcher({
+      store,
+      adapter: native,
+      iconPath: path.join(options.releasePath, ".localapp-artifact.json"),
+    });
+    const manager = new NotificationConnectionManager({
+      localServerOrigin: options.listenUrl,
+      controlToken: options.controlToken,
+      store,
+      dispatcher,
+      fetch: this.options.fetch,
+    });
+    return { manager, resolver: new NotificationActivationResolver({ store, manager, open: options.open, fetch: this.options.fetch }) };
   }
 
   private async cleanup(): Promise<void> {

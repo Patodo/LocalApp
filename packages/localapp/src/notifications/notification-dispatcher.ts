@@ -91,7 +91,7 @@ export class NotificationDispatcher {
   async dispatchSummary(input: SummaryInput): Promise<{ outcome: "shown" | "inbox-only" | "aborted" }> {
     const sourceId = validateSource(input.sourceId);
     const sourceLabel = validateSourceLabel(input.sourceLabel);
-    if (!Number.isSafeInteger(input.omittedCount) || input.omittedCount < 1 || input.omittedCount > 1_000_000) {
+    if (!Number.isSafeInteger(input.omittedCount) || input.omittedCount < 1) {
       throw new Error("Notification summary count is invalid");
     }
     if (input.signal?.aborted) return { outcome: "aborted" };

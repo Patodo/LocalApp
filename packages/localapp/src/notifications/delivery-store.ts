@@ -246,6 +246,19 @@ export class DeliveryStore {
     });
   }
 
+  async advanceCursor(sourceId: string, expectedCursor: number, nextCursor: number): Promise<void> {
+    await this.mutate((state) => {
+      validateSequence(expectedCursor);
+      validateSequence(nextCursor);
+      const source = requiredSource(state, sourceId);
+      if (source.pending !== null || source.cursor !== expectedCursor || nextCursor < expectedCursor) {
+        throw new Error("Notification cursor advance is invalid");
+      }
+      if (nextCursor === expectedCursor) return unchanged(undefined);
+      source.cursor = nextCursor;
+    });
+  }
+
   async prune(): Promise<void> {
     await this.mutate((state) => this.pruneState(state));
   }

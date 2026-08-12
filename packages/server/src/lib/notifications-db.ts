@@ -215,7 +215,7 @@ export function markAllRead(userId: string): number {
 /**
  * 内部辅助：查询单条通知（含归属校验，软删除返回 null）。
  */
-function getInboxItem(userId: string, notificationId: string): InboxItem | null {
+export function getInboxItem(userId: string, notificationId: string): InboxItem | null {
   const db = getDb();
   const stmt = db.prepare(
     `SELECT ${INBOX_COLUMNS} FROM notifications WHERE id = ? AND user_id = ? AND deleted_at IS NULL`,

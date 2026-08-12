@@ -5,6 +5,7 @@ import {
   markRead,
   softDelete,
   markAllRead,
+  getInboxItem,
 } from "../lib/notifications-db.js";
 import { listDeliverableNotifications } from "../lib/notification-delivery.js";
 import { requireRequestUser } from "../plugins/auth.js";
@@ -88,6 +89,14 @@ export async function inboxRoutes(app: FastifyInstance) {
       unreadOnly: unreadOnly === "true",
     });
     return { success: true, data: page };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/inbox/:id", async (req, reply) => {
+    const userId = requireRequestUser(req, reply);
+    if (!userId) return;
+    const item = getInboxItem(userId, req.params.id);
+    if (!item) return reply.status(404).send({ success: false, error: "Notification not found" });
+    return { success: true, data: item };
   });
 
   // GET /api/inbox/unread-count — 未读计数

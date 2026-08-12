@@ -173,6 +173,14 @@ describe("收件箱 API（spec: 收件箱 API）", () => {
     expect(titles.some((t: string) => t.startsWith("Inbox "))).toBe(false);
   });
 
+  it("GET /api/inbox/:id returns only the authenticated user's exact row", async () => {
+    const own = await fetch(`${baseUrl}/api/inbox/bob-11`, { headers: { "Cookie": bobCookie } });
+    expect(own.status).toBe(200);
+    expect((await own.json()).data).toMatchObject({ id: "bob-11", user_id: "bob", app_name: pageName });
+    expect((await fetch(`${baseUrl}/api/inbox/bob-11`, { headers: { "Cookie": aliceCookie } })).status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/inbox/bob-deleted`, { headers: { "Cookie": bobCookie } })).status).toBe(404);
+  });
+
   it("PATCH /api/inbox/:id 标记已读", async () => {
     const res = await fetch(`${baseUrl}/api/inbox/bob-10`, {
       method: "PATCH",

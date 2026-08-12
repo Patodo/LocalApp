@@ -24,6 +24,36 @@ afterEach(async () => {
 });
 
 describe("daemon cleanup failures", () => {
+  it.skipIf(process.platform === "win32")("uses a distinct per-boot notification token and owns manager cleanup", async () => {
+    const root = await fs.mkdtemp(path.join(testRoot, "n-"));
+    directories.push(root);
+    const artifact = path.join(root, "packed");
+    await buildLocalAppPackage({ outputDirectory: artifact });
+    const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
+    await publishRelease({ sourceDirectory: artifact, layout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
+    let environment: NodeJS.ProcessEnv | undefined;
+    const terminate = vi.fn(async () => undefined);
+    const start = vi.fn();
+    const stop = vi.fn(async () => undefined);
+    let runtimeToken = "";
+    const daemon = new LocalAppDaemon({
+      layout,
+      spawnOwnedProcess: (_command, _args, options) => { environment = options.env; return readyOwnedProcess(terminate, () => undefined); },
+      createNotificationRuntime: async (options) => {
+        runtimeToken = options.controlToken;
+        return { manager: { start, stop, currentSource: () => undefined }, resolver: { resolve: vi.fn(async () => undefined) } };
+      },
+    });
+    await daemon.start();
+    expect(environment?.LOCALAPP_NOTIFICATION_CONTROL_TOKEN).toBe(runtimeToken);
+    expect(runtimeToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(runtimeToken).not.toBe(environment?.LOCALAPP_DEVICE_CONTROL_TOKEN);
+    expect(start).toHaveBeenCalledTimes(1);
+    await daemon.stop();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it.skipIf(process.platform === "win32")("retains the startup-owned Server and lock when readiness cleanup rejects", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "startup-"));
     directories.push(root);
