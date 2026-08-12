@@ -62,6 +62,8 @@ import { AppSyncSource } from "./lib/app-sync-source.js";
 import { reconcileAppInstallTransactions } from "./lib/app-installer.js";
 import { syncSourceRoutes, syncTargetRoutes } from "./routes/sync.js";
 import { devRoutes, installDevRequestContext } from "./routes/dev.js";
+import { DeviceNotificationSourceStore } from "./lib/device-notification-source-store.js";
+import { deviceNotificationsRoutes, parseDeviceNotificationJson } from "./routes/device-notifications.js";
 
 export interface BuildServerOptions {
   env?: NodeJS.ProcessEnv;
@@ -128,7 +130,9 @@ async function registerServerPluginsAndRoutes(
     taskDir: path.join(app.config.dataDir, "tasks"),
   });
   const agentRunner = new AgentRunner({ taskRunner });
-  const peerStore = new PeerStore(new SecretBox(app.config.masterKeyFile));
+  const secretBox = new SecretBox(app.config.masterKeyFile);
+  const peerStore = new PeerStore(secretBox);
+  const deviceNotificationSourceStore = new DeviceNotificationSourceStore(secretBox);
   const syncSessions = new SyncSessionStore({ dataDir: app.config.dataDir });
   syncSessions.prune();
   const syncJobs = new SyncJobStore();
@@ -170,6 +174,17 @@ async function registerServerPluginsAndRoutes(
   app.register(desktopActionsRoutes);
   app.register(deviceActionsRoutes);
   app.register(deviceControlRoutes);
+  app.register(async (notificationScope) => {
+    notificationScope.removeContentTypeParser("application/json");
+    notificationScope.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+      try {
+        done(null, parseDeviceNotificationJson(String(body)));
+      } catch {
+        done(null, { __invalidJson: true });
+      }
+    });
+    await deviceNotificationsRoutes(notificationScope, deviceNotificationSourceStore);
+  });
   app.register(myServeRoutes, { webRoot });
   app.register(async (peerScope) => peersRoutes(peerScope, peerStore));
   app.register(serveRoutes, { webRoot });

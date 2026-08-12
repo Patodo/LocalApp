@@ -31,6 +31,7 @@ export interface ServerConfig {
   appDataExpandedMaxBytes: number;
   appDataArchiveMaxFiles: number;
   deviceControlToken?: string;
+  notificationControlToken?: string;
 }
 
 const DEFAULTS: ServerConfig = {
@@ -62,6 +63,7 @@ const DEFAULTS: ServerConfig = {
   appDataExpandedMaxBytes: 4 * 1024 * 1024 * 1024,
   appDataArchiveMaxFiles: 10_000,
   deviceControlToken: "",
+  notificationControlToken: "",
 };
 
 interface TomlConfigResult {
@@ -405,7 +407,12 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     appDataExpandedMaxBytes: pickPositiveInteger(env, "APP_DATA_EXPANDED_MAX_BYTES", toml.appDataExpandedMaxBytes, DEFAULTS.appDataExpandedMaxBytes),
     appDataArchiveMaxFiles: pickPositiveInteger(env, "APP_DATA_ARCHIVE_MAX_FILES", toml.appDataArchiveMaxFiles, DEFAULTS.appDataArchiveMaxFiles),
     deviceControlToken: env.LOCALAPP_DEVICE_CONTROL_TOKEN ?? DEFAULTS.deviceControlToken,
+    notificationControlToken: env.LOCALAPP_NOTIFICATION_CONTROL_TOKEN ?? DEFAULTS.notificationControlToken,
   };
+
+  if (config.notificationControlToken && Buffer.byteLength(config.notificationControlToken, "utf8") < 16) {
+    throw new Error("LOCALAPP_NOTIFICATION_CONTROL_TOKEN must contain at least 128 bits");
+  }
 
   // TEMPLATE_REPO_URL is no longer mandatory at startup.
   // It is checked at point of use (template download handler) when remote cloning is requested.

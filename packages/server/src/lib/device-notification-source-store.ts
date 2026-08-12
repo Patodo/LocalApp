@@ -1,0 +1,402 @@
+import { randomBytes, randomUUID } from "node:crypto";
+import type { Database as SqlJsDatabase } from "sql.js";
+import {
+  apiKeyStorageValue,
+  findUserById,
+  getDb,
+  getPeerRecord,
+  mutateMetaDbAtomically,
+  type PeerRow,
+} from "./meta-sqlite.js";
+import { SecretBox } from "./secret-box.js";
+
+export type DeviceNotificationSourceKind = "local" | "peer";
+export type DeviceNotificationConnectionState = "disabled" | "pending" | "connecting" | "connected" | "error";
+
+export interface DeviceNotificationPublicSource {
+  id: string;
+  kind: DeviceNotificationSourceKind;
+  sourceLabel: string;
+  accountLabel: string;
+  desiredEnabled: boolean;
+  capability: { available: boolean; reason: string | null };
+  connectionState: DeviceNotificationConnectionState;
+  cursor: number | null;
+  lastEventAt: string | null;
+  error: { code: string; message: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceNotificationInternalSource {
+  id: string;
+  kind: DeviceNotificationSourceKind;
+  generation: number;
+  sourceOrigin: string;
+  targetUserId: string;
+  accountLabel: string;
+  sourceLabel: string;
+  enabled: boolean;
+  capability: { available: boolean; reason: string | null };
+  credential?: string;
+}
+
+type SourceRow = {
+  id: string;
+  ownerUserId: string;
+  kind: DeviceNotificationSourceKind;
+  targetUserId: string;
+  peerId: string | null;
+  peerConnectionVersion: number | null;
+  sourceOrigin: string;
+  sourceLabel: string;
+  accountLabel: string;
+  desiredEnabled: boolean;
+  encryptedCredential: string | null;
+  revocationKey: string | null;
+  configGeneration: number;
+  statusGeneration: number | null;
+  statusState: DeviceNotificationConnectionState;
+  statusCursor: number | null;
+  statusLastEventAt: string | null;
+  statusErrorCode: string | null;
+  statusErrorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export class DeviceNotificationSourceError extends Error {
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
+export class DeviceNotificationSourceStore {
+  constructor(
+    private readonly secretBox: SecretBox,
+    private readonly keyFactory: () => string = () => randomBytes(24).toString("hex"),
+  ) {}
+
+  generation(): number {
+    const values = getDb().exec("SELECT generation FROM device_notification_state WHERE singleton = 1")[0]?.values;
+    const generation = Number(values?.[0]?.[0]);
+    if (!Number.isSafeInteger(generation) || generation < 0) throw new Error("DEVICE_NOTIFICATION_STATE_CORRUPT");
+    return generation;
+  }
+
+  listPublic(ownerUserId: string): DeviceNotificationPublicSource[] {
+    return this.listRows("WHERE owner_user_id = ?", [ownerUserId]).map((row) => this.publicSource(row));
+  }
+
+  getPublic(ownerUserId: string, sourceId: string): DeviceNotificationPublicSource | null {
+    const row = this.findRow("owner_user_id = ? AND id = ?", [ownerUserId, sourceId]);
+    return row ? this.publicSource(row) : null;
+  }
+
+  enableLocal(input: { ownerUserId: string; sourceOrigin: string; sourceLabel: string; expectedGeneration: number }) {
+    const user = findUserById(input.ownerUserId);
+    if (!user) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_ACCOUNT_NOT_FOUND");
+    const existing = this.findRow("owner_user_id = ? AND kind = 'local' AND target_user_id = ?", [input.ownerUserId, input.ownerUserId]);
+    if (existing?.desiredEnabled && existing.sourceLabel === input.sourceLabel && existing.sourceOrigin === input.sourceOrigin) {
+      return { generation: this.generation(), source: this.publicSource(existing) };
+    }
+    this.assertGeneration(input.expectedGeneration);
+
+    const id = existing?.id ?? randomUUID();
+    const now = new Date().toISOString();
+    let key: string | null = null;
+    let encryptedCredential = existing?.encryptedCredential ?? null;
+    let revocationKey = existing?.revocationKey ?? null;
+    if (!existing?.desiredEnabled) {
+      key = this.keyFactory();
+      revocationKey = apiKeyStorageValue(key);
+      encryptedCredential = this.secretBox.seal(key, localCredentialAad(id));
+    }
+
+    mutateMetaDbAtomically((database) => {
+      const generation = incrementGeneration(database);
+      if (key && revocationKey) {
+        database.run("INSERT INTO api_keys (key, user_id, created_at) VALUES (?, ?, ?)", [revocationKey, input.ownerUserId, now]);
+      }
+      database.run(`
+        INSERT INTO device_notification_sources (
+          id, owner_user_id, kind, target_user_id, peer_id, peer_connection_version,
+          source_origin, source_label, account_label, desired_enabled, encrypted_credential,
+          revocation_key, config_generation, status_generation, status_state, status_cursor,
+          status_last_event_at, status_error_code, status_error_message, created_at, updated_at
+        ) VALUES (?, ?, 'local', ?, NULL, NULL, ?, ?, ?, 1, ?, ?, ?, NULL, 'pending', NULL, NULL, NULL, NULL, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          source_origin = excluded.source_origin,
+          source_label = excluded.source_label,
+          account_label = excluded.account_label,
+          desired_enabled = 1,
+          encrypted_credential = excluded.encrypted_credential,
+          revocation_key = excluded.revocation_key,
+          config_generation = excluded.config_generation,
+          status_generation = NULL,
+          status_state = 'pending',
+          status_cursor = NULL,
+          status_last_event_at = NULL,
+          status_error_code = NULL,
+          status_error_message = NULL,
+          updated_at = excluded.updated_at
+      `, [id, input.ownerUserId, input.ownerUserId, input.sourceOrigin, input.sourceLabel, user.displayName ?? user.name, encryptedCredential, revocationKey, generation, existing?.createdAt ?? now, now]);
+    });
+    return { generation: this.generation(), source: this.publicSource(this.requiredRow(id)) };
+  }
+
+  enablePeer(input: { ownerUserId: string; peerId: string; sourceLabel: string; expectedGeneration: number }) {
+    const peer = getPeerRecord(input.peerId);
+    if (!isVerifiedPeer(peer)) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_PEER_NOT_VERIFIED");
+    const existing = this.findRow("owner_user_id = ? AND kind = 'peer' AND target_user_id = ?", [input.ownerUserId, peer.verifiedUserId]);
+    if (existing?.desiredEnabled && existing.peerConnectionVersion === peer.connectionVersion
+      && existing.targetUserId === peer.verifiedUserId && existing.sourceLabel === input.sourceLabel) {
+      return { generation: this.generation(), source: this.publicSource(existing) };
+    }
+    this.assertGeneration(input.expectedGeneration);
+    const id = existing?.id ?? randomUUID();
+    const now = new Date().toISOString();
+    mutateMetaDbAtomically((database) => {
+      const generation = incrementGeneration(database);
+      database.run(`
+        INSERT INTO device_notification_sources (
+          id, owner_user_id, kind, target_user_id, peer_id, peer_connection_version,
+          source_origin, source_label, account_label, desired_enabled, encrypted_credential,
+          revocation_key, config_generation, status_generation, status_state, status_cursor,
+          status_last_event_at, status_error_code, status_error_message, created_at, updated_at
+        ) VALUES (?, ?, 'peer', ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, NULL, 'pending', NULL, NULL, NULL, NULL, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          target_user_id = excluded.target_user_id,
+          peer_connection_version = excluded.peer_connection_version,
+          source_origin = excluded.source_origin,
+          source_label = excluded.source_label,
+          account_label = excluded.account_label,
+          desired_enabled = 1,
+          encrypted_credential = NULL,
+          revocation_key = NULL,
+          config_generation = excluded.config_generation,
+          status_generation = NULL,
+          status_state = 'pending',
+          status_cursor = NULL,
+          status_last_event_at = NULL,
+          status_error_code = NULL,
+          status_error_message = NULL,
+          updated_at = excluded.updated_at
+      `, [id, input.ownerUserId, peer.verifiedUserId, peer.id, peer.connectionVersion, peer.baseUrl, input.sourceLabel, peer.verifiedUserDisplayName ?? peer.verifiedUserName, generation, existing?.createdAt ?? now, now]);
+    });
+    return { generation: this.generation(), source: this.publicSource(this.requiredRow(id)) };
+  }
+
+  disable(input: { ownerUserId: string; sourceId: string; expectedGeneration: number }) {
+    const existing = this.findRow("owner_user_id = ? AND id = ?", [input.ownerUserId, input.sourceId]);
+    if (!existing) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_SOURCE_NOT_FOUND");
+    if (!existing.desiredEnabled) return { generation: this.generation(), source: this.publicSource(existing) };
+    this.assertGeneration(input.expectedGeneration);
+    const now = new Date().toISOString();
+    mutateMetaDbAtomically((database) => {
+      const generation = incrementGeneration(database);
+      if (existing.revocationKey) database.run("DELETE FROM api_keys WHERE key = ?", [existing.revocationKey]);
+      database.run(`
+        UPDATE device_notification_sources SET
+          desired_enabled = 0, encrypted_credential = NULL, revocation_key = NULL,
+          config_generation = ?, status_generation = NULL, status_state = 'disabled',
+          status_cursor = NULL, status_last_event_at = NULL,
+          status_error_code = NULL, status_error_message = NULL, updated_at = ?
+        WHERE id = ? AND owner_user_id = ?
+      `, [generation, now, input.sourceId, input.ownerUserId]);
+    });
+    return { generation: this.generation(), source: this.publicSource(this.requiredRow(input.sourceId)) };
+  }
+
+  snapshot(): { generation: number; sources: DeviceNotificationInternalSource[] } {
+    return { generation: this.generation(), sources: this.listRows().map((row) => this.internalSource(row)) };
+  }
+
+  reportStatus(sourceId: string, input: {
+    generation: number;
+    state: Exclude<DeviceNotificationConnectionState, "disabled">;
+    cursor: number | null;
+    lastEventAt: string | null;
+    error: { code: string; message: string } | null;
+  }): DeviceNotificationPublicSource {
+    const row = this.findRow("id = ?", [sourceId]);
+    if (!row) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_SOURCE_NOT_FOUND");
+    if (!row.desiredEnabled || row.configGeneration !== input.generation) {
+      throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_STALE_STATUS");
+    }
+    const now = new Date().toISOString();
+    mutateMetaDbAtomically((database) => {
+      database.run(`
+        UPDATE device_notification_sources SET status_generation = ?, status_state = ?, status_cursor = ?,
+          status_last_event_at = ?, status_error_code = ?, status_error_message = ?, updated_at = ?
+        WHERE id = ? AND desired_enabled = 1 AND config_generation = ?
+      `, [input.generation, input.state, input.cursor, input.lastEventAt, input.error?.code ?? null, input.error ? "Notification source reported an error" : null, now, sourceId, input.generation]);
+      if (database.getRowsModified() !== 1) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_STALE_STATUS");
+    });
+    return this.publicSource(this.requiredRow(sourceId));
+  }
+
+  async waitForGeneration(current: number, timeoutMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted || this.generation() !== current || timeoutMs === 0) return;
+    await new Promise<void>((resolve) => {
+      let interval: ReturnType<typeof setInterval> | undefined;
+      const finish = () => {
+        if (interval) clearInterval(interval);
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timeout = setTimeout(finish, timeoutMs);
+      interval = setInterval(() => { if (this.generation() !== current) finish(); }, Math.min(50, timeoutMs));
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  }
+
+  private assertGeneration(expected: number): void {
+    if (this.generation() !== expected) throw new DeviceNotificationSourceError("DEVICE_NOTIFICATION_GENERATION_CONFLICT");
+  }
+
+  private publicSource(row: SourceRow): DeviceNotificationPublicSource {
+    const capability = this.capability(row);
+    return {
+      id: row.id,
+      kind: row.kind,
+      sourceLabel: row.sourceLabel,
+      accountLabel: row.accountLabel,
+      desiredEnabled: row.desiredEnabled,
+      capability,
+      connectionState: row.statusState,
+      cursor: row.statusCursor,
+      lastEventAt: row.statusLastEventAt,
+      error: row.statusErrorCode && row.statusErrorMessage
+        ? { code: bounded(row.statusErrorCode, 64), message: bounded(row.statusErrorMessage, 240) }
+        : null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private internalSource(row: SourceRow): DeviceNotificationInternalSource {
+    const base = {
+      id: row.id,
+      kind: row.kind,
+      generation: row.configGeneration,
+      sourceOrigin: row.sourceOrigin,
+      targetUserId: row.targetUserId,
+      accountLabel: row.accountLabel,
+      sourceLabel: row.sourceLabel,
+    };
+    if (!row.desiredEnabled) return { ...base, enabled: false, capability: this.capability(row) };
+    try {
+      if (row.kind === "local") {
+        if (!row.encryptedCredential || !row.revocationKey) throw new Error("invalid local source");
+        return {
+          ...base,
+          enabled: true,
+          capability: { available: true, reason: null },
+          credential: this.secretBox.open(row.encryptedCredential, localCredentialAad(row.id)),
+        };
+      }
+      const peer = row.peerId ? getPeerRecord(row.peerId) : null;
+      if (!isVerifiedPeer(peer) || peer.connectionVersion !== row.peerConnectionVersion || peer.verifiedUserId !== row.targetUserId) {
+        return { ...base, enabled: false, capability: { available: false, reason: "PEER_CONFIGURATION_CHANGED" } };
+      }
+      return {
+        ...base,
+        sourceOrigin: peer.baseUrl,
+        enabled: true,
+        capability: { available: true, reason: null },
+        credential: this.secretBox.open(peer.credential, peer.id),
+      };
+    } catch {
+      return {
+        ...base,
+        enabled: false,
+        capability: { available: false, reason: row.kind === "local" ? "SOURCE_CREDENTIAL_INVALID" : "PEER_CREDENTIAL_INVALID" },
+      };
+    }
+  }
+
+  private capability(row: SourceRow): { available: boolean; reason: string | null } {
+    if (row.statusErrorCode === "PEER_CONFIGURATION_CHANGED" || row.statusErrorCode === "PEER_DELETED") {
+      return { available: false, reason: row.statusErrorCode };
+    }
+    if (row.kind === "peer" && row.desiredEnabled) {
+      const peer = row.peerId ? getPeerRecord(row.peerId) : null;
+      if (!isVerifiedPeer(peer) || peer.connectionVersion !== row.peerConnectionVersion || peer.verifiedUserId !== row.targetUserId) {
+        return { available: false, reason: "PEER_CONFIGURATION_CHANGED" };
+      }
+    }
+    if (row.kind === "local" && row.desiredEnabled) {
+      try {
+        if (!row.encryptedCredential || !row.revocationKey) throw new Error("invalid local source");
+        this.secretBox.open(row.encryptedCredential, localCredentialAad(row.id));
+      } catch {
+        return { available: false, reason: "SOURCE_CREDENTIAL_INVALID" };
+      }
+    }
+    return { available: true, reason: null };
+  }
+
+  private requiredRow(id: string): SourceRow {
+    const row = this.findRow("id = ?", [id]);
+    if (!row) throw new Error("DEVICE_NOTIFICATION_SOURCE_NOT_FOUND");
+    return row;
+  }
+
+  private findRow(condition: string, parameters: Array<string | number>): SourceRow | null {
+    return this.listRows(`WHERE ${condition}`, parameters)[0] ?? null;
+  }
+
+  private listRows(clause = "", parameters: Array<string | number> = []): SourceRow[] {
+    const statement = getDb().prepare(`SELECT * FROM device_notification_sources ${clause} ORDER BY created_at, id`);
+    statement.bind(parameters);
+    const rows: SourceRow[] = [];
+    while (statement.step()) rows.push(sourceRow(statement.getAsObject()));
+    statement.free();
+    return rows;
+  }
+}
+
+function incrementGeneration(database: SqlJsDatabase): number {
+  database.run("UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1");
+  return Number(database.exec("SELECT generation FROM device_notification_state WHERE singleton = 1")[0]?.values[0]?.[0]);
+}
+
+function isVerifiedPeer(peer: PeerRow | null): peer is PeerRow & { verifiedUserId: string; verifiedUserName: string; verifiedAt: string } {
+  return Boolean(peer?.verifiedUserId && peer.verifiedUserName && peer.verifiedAt && Number.isSafeInteger(peer.connectionVersion) && peer.connectionVersion > 0);
+}
+
+function localCredentialAad(id: string): string {
+  return `device-notification-source:${id}:local-credential:v1`;
+}
+
+function bounded(value: string, maximum: number): string {
+  return value.length <= maximum ? value : value.slice(0, maximum);
+}
+
+function sourceRow(row: Record<string, unknown>): SourceRow {
+  return {
+    id: String(row.id),
+    ownerUserId: String(row.owner_user_id),
+    kind: String(row.kind) as DeviceNotificationSourceKind,
+    targetUserId: String(row.target_user_id),
+    peerId: row.peer_id == null ? null : String(row.peer_id),
+    peerConnectionVersion: row.peer_connection_version == null ? null : Number(row.peer_connection_version),
+    sourceOrigin: String(row.source_origin),
+    sourceLabel: String(row.source_label),
+    accountLabel: String(row.account_label),
+    desiredEnabled: Number(row.desired_enabled) === 1,
+    encryptedCredential: row.encrypted_credential == null ? null : String(row.encrypted_credential),
+    revocationKey: row.revocation_key == null ? null : String(row.revocation_key),
+    configGeneration: Number(row.config_generation),
+    statusGeneration: row.status_generation == null ? null : Number(row.status_generation),
+    statusState: String(row.status_state) as DeviceNotificationConnectionState,
+    statusCursor: row.status_cursor == null ? null : Number(row.status_cursor),
+    statusLastEventAt: row.status_last_event_at == null ? null : String(row.status_last_event_at),
+    statusErrorCode: row.status_error_code == null ? null : String(row.status_error_code),
+    statusErrorMessage: row.status_error_message == null ? null : String(row.status_error_message),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}

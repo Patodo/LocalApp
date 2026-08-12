@@ -2,14 +2,18 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createTestServer, getAppUrl, getTestApiKey } from "./helpers.js";
 import { createTestUser } from "../helpers/createUser.js";
 import { BOOTSTRAP_USER_ID } from "../../src/lib/meta-sqlite.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 describe("API Key management", () => {
   let baseUrl: string;
   let stop: () => Promise<void>;
   const apiKey = getTestApiKey();
+  const fixtureRoot = path.resolve(process.cwd(), "../../tmp/task-10a-keys");
 
   beforeAll(async () => {
-    const server = await createTestServer();
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const server = await createTestServer({ dataRoot: fixtureRoot });
     baseUrl = getAppUrl(server.app);
     stop = server.stop;
 
@@ -19,6 +23,7 @@ describe("API Key management", () => {
 
   afterAll(async () => {
     await stop();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   describe("POST /api/keys", () => {
@@ -47,6 +52,37 @@ describe("API Key management", () => {
       expect(data.success).toBe(true);
       expect(data.data.key).toBeDefined();
       expect(data.data.userId).toBe(BOOTSTRAP_USER_ID);
+    });
+
+    it("rejects an ordinary user's attempt to mint a key for another account", async () => {
+      const ordinary = await createTestUser(baseUrl, "key-owner-user", "password123");
+      const res = await fetch(`${baseUrl}/api/keys`, {
+        method: "POST",
+        headers: { "X-API-Key": ordinary.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: BOOTSTRAP_USER_ID }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({
+        success: false,
+        code: "API_KEY_USER_MISMATCH",
+        error: "A user may only create an API key for their own account",
+      });
+    });
+
+    it("rejects an explicitly supplied invalid userId instead of silently using the current account", async () => {
+      for (const userId of ["", 17]) {
+        const res = await fetch(`${baseUrl}/api/keys`, {
+          method: "POST",
+          headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ userId }),
+        });
+        expect(res.status, String(userId)).toBe(400);
+        expect(await res.json()).toEqual({
+          success: false,
+          code: "API_KEY_INVALID_USER_ID",
+          error: "userId must be a non-empty string",
+        });
+      }
     });
 
     it("should require authentication", async () => {

@@ -38,7 +38,7 @@ export interface PeerRow {
 
 const API_KEY_HASH_PREFIX = "sha256:";
 
-function apiKeyStorageValue(key: string): string {
+export function apiKeyStorageValue(key: string): string {
   const digest = createHash("sha256").update(key).digest("hex");
   return `${API_KEY_HASH_PREFIX}${digest}:${key.slice(-8)}`;
 }
@@ -264,6 +264,20 @@ export function flushMetaDb(): void {
   saveDb();
 }
 
+export function mutateMetaDbAtomically<T>(mutation: (database: SqlJsDatabase) => T): T {
+  const database = getDb();
+  database.run("BEGIN IMMEDIATE");
+  try {
+    const result = mutation(database);
+    database.run("COMMIT");
+    saveDb();
+    return result;
+  } catch (error) {
+    try { database.run("ROLLBACK"); } catch { /* publication failure reloads the visible database */ }
+    throw error;
+  }
+}
+
 function migrateNotificationDeliverySchema(database: SqlJsDatabase): void {
   const columns = new Set(
     (database.exec("PRAGMA table_info(notifications)")[0]?.values ?? []).map((row) => String(row[1])),
@@ -400,6 +414,66 @@ export async function initMetaDb(
     columns.free();
     if (!names.includes("connection_version")) db.run("ALTER TABLE peers ADD COLUMN connection_version INTEGER NOT NULL DEFAULT 1");
   }
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS device_notification_state (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      generation INTEGER NOT NULL CHECK (generation >= 0 AND generation <= ${Number.MAX_SAFE_INTEGER})
+    )
+  `);
+  db.run("INSERT OR IGNORE INTO device_notification_state (singleton, generation) VALUES (1, 0)");
+  db.run(`
+    CREATE TABLE IF NOT EXISTS device_notification_sources (
+      id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('local', 'peer')),
+      target_user_id TEXT NOT NULL,
+      peer_id TEXT,
+      peer_connection_version INTEGER,
+      source_origin TEXT NOT NULL,
+      source_label TEXT NOT NULL CHECK (length(source_label) BETWEEN 1 AND 80),
+      account_label TEXT NOT NULL CHECK (length(account_label) BETWEEN 1 AND 80),
+      desired_enabled INTEGER NOT NULL CHECK (desired_enabled IN (0, 1)),
+      encrypted_credential TEXT,
+      revocation_key TEXT,
+      config_generation INTEGER NOT NULL CHECK (config_generation > 0),
+      status_generation INTEGER,
+      status_state TEXT NOT NULL CHECK (status_state IN ('disabled', 'pending', 'connecting', 'connected', 'error')),
+      status_cursor INTEGER CHECK (status_cursor IS NULL OR (status_cursor >= 0 AND status_cursor <= ${Number.MAX_SAFE_INTEGER})),
+      status_last_event_at TEXT,
+      status_error_code TEXT,
+      status_error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (kind = 'local' AND peer_id IS NULL AND peer_connection_version IS NULL)
+        OR (kind = 'peer' AND peer_id IS NOT NULL AND peer_connection_version IS NOT NULL)
+      )
+    )
+  `);
+  db.run("DROP INDEX IF EXISTS idx_device_notification_source_singleton");
+  db.run(`
+    DELETE FROM device_notification_sources AS duplicate
+    WHERE EXISTS (
+      SELECT 1 FROM device_notification_sources AS canonical
+      WHERE canonical.owner_user_id = duplicate.owner_user_id
+        AND canonical.kind = duplicate.kind
+        AND canonical.target_user_id = duplicate.target_user_id
+        AND (
+          canonical.desired_enabled > duplicate.desired_enabled
+          OR (canonical.desired_enabled = duplicate.desired_enabled AND canonical.created_at < duplicate.created_at)
+          OR (canonical.desired_enabled = duplicate.desired_enabled AND canonical.created_at = duplicate.created_at AND canonical.id < duplicate.id)
+        )
+    )
+  `);
+  if (db.getRowsModified() > 0) {
+    db.run("UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1");
+  }
+  db.run(`
+    CREATE UNIQUE INDEX idx_device_notification_source_singleton
+    ON device_notification_sources(owner_user_id, kind, target_user_id)
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_device_notification_sources_owner ON device_notification_sources(owner_user_id, created_at, id)");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS request_logs (
@@ -652,6 +726,59 @@ export async function initMetaDb(
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)");
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS invalidate_device_notification_peer_update
+    AFTER UPDATE OF base_url, credential, accept_insecure_http, connection_version, verified_user_id, verified_at ON peers
+    WHEN EXISTS (
+      SELECT 1 FROM device_notification_sources
+      WHERE peer_id = OLD.id AND desired_enabled = 1
+        AND (peer_connection_version != NEW.connection_version OR NEW.verified_user_id IS NULL OR target_user_id != NEW.verified_user_id)
+    )
+    BEGIN
+      UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1;
+      UPDATE device_notification_sources
+      SET desired_enabled = 0,
+          config_generation = (SELECT generation FROM device_notification_state WHERE singleton = 1),
+          status_generation = NULL,
+          status_state = 'disabled',
+          status_cursor = NULL,
+          status_last_event_at = NULL,
+          status_error_code = 'PEER_CONFIGURATION_CHANGED',
+          status_error_message = 'Peer configuration changed',
+          updated_at = NEW.updated_at
+      WHERE peer_id = OLD.id AND desired_enabled = 1
+        AND (peer_connection_version != NEW.connection_version OR NEW.verified_user_id IS NULL OR target_user_id != NEW.verified_user_id);
+    END
+  `);
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS invalidate_device_notification_peer_delete
+    BEFORE DELETE ON peers
+    WHEN EXISTS (SELECT 1 FROM device_notification_sources WHERE peer_id = OLD.id)
+    BEGIN
+      UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1;
+      UPDATE device_notification_sources
+      SET desired_enabled = 0,
+          config_generation = (SELECT generation FROM device_notification_state WHERE singleton = 1),
+          status_generation = NULL,
+          status_state = 'disabled',
+          status_cursor = NULL,
+          status_last_event_at = NULL,
+          status_error_code = 'PEER_DELETED',
+          status_error_message = 'Peer was deleted',
+          updated_at = datetime('now')
+      WHERE peer_id = OLD.id;
+    END
+  `);
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS delete_device_notification_sources_with_user
+    BEFORE DELETE ON users
+    WHEN EXISTS (SELECT 1 FROM device_notification_sources WHERE owner_user_id = OLD.id)
+    BEGIN
+      UPDATE device_notification_state SET generation = generation + 1 WHERE singleton = 1;
+      DELETE FROM device_notification_sources WHERE owner_user_id = OLD.id;
+    END
+  `);
 
   // Add role column if missing (migrate existing databases)
   {
@@ -1381,11 +1508,12 @@ export function deleteUserById(id: string): boolean {
   stmt.free();
   if (!exists) return false;
 
-  d.run("DELETE FROM api_keys WHERE user_id = ?", [id]);
-  d.run("DELETE FROM auth_sessions WHERE user_id = ?", [id]);
-  d.run("DELETE FROM group_members WHERE user_id = ?", [id]);
-  d.run("DELETE FROM users WHERE id = ?", [id]);
-  saveDb();
+  mutateMetaDbAtomically((database) => {
+    database.run("DELETE FROM api_keys WHERE user_id = ?", [id]);
+    database.run("DELETE FROM auth_sessions WHERE user_id = ?", [id]);
+    database.run("DELETE FROM group_members WHERE user_id = ?", [id]);
+    database.run("DELETE FROM users WHERE id = ?", [id]);
+  });
   return true;
 }
 
