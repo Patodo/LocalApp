@@ -21,8 +21,10 @@
     "export:public-source": "node scripts/export-public-source.mjs",
     "build": "pnpm -r build",
     "clean": "pnpm -r clean",
-    "build:real-apps": "VITE_LOCALAPP_ACCEPTANCE_ROOT=\"$PWD/tmp/unified-acceptance/installed-skills\" pnpm -C examples/skill-market build && pnpm -C examples/resume-manager build",
+    "build:real-apps": "VITE_LOCALAPP_ACCEPTANCE_ROOT=\"$PWD/tmp/single-package-acceptance/installed-skills\" pnpm -C examples/skill-market build && pnpm -C examples/resume-manager build",
     "test:real-apps": "pnpm run build:real-apps && pnpm -C packages/server exec vitest run tests/e2e-unified/real-apps.spec.ts",
+    "acceptance:local:start": "node scripts/single-package-acceptance.mjs start",
+    "acceptance:local:stop": "node scripts/single-package-acceptance.mjs stop",
     "test:e2e-ui": "npx playwright test"
   },
   "devDependencies": {

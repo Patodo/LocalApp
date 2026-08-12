@@ -54,7 +54,7 @@ describe("LocalApp skill documentation consistency", () => {
 
   it("documents formal PlatformShell route as the uploaded app validation entry", () => {
     const claudeGuide = fs.readFileSync(path.resolve(process.cwd(), "CLAUDE.md"), "utf8");
-    expect(claudeGuide).toContain("http://localhost:3000/<userId>/<pageName>/");
+    expect(claudeGuide).toContain("http://<server-origin>/<userId>/<pageName>/");
     expect(claudeGuide).toContain("raw app resource/API base");
     expect(claudeGuide).toContain("不作为应用功能验收入口");
 

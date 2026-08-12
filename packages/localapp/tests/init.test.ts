@@ -55,16 +55,18 @@ describe("builtin project initialization", () => {
     expect(JSON.stringify(packageJson)).not.toContain("workspace:");
   });
 
-  it("fails explicitly before creating a project when deployment support is unavailable", async () => {
-    // Break caught: a non-skip-deploy init reporting success without Task 4 packaging/install support misleads users.
-    await expect(initializeProject({
+  it("creates a project by default and leaves publication to app install", async () => {
+    const io = { stdout: vi.fn(), stderr: vi.fn() };
+    const result = await initializeProject({
       cwd: directory,
       name: "remote-app",
       skipInstall: true,
       skipDeploy: false,
-      io: { stdout: () => undefined, stderr: () => undefined },
-    })).rejects.toThrow("not available yet");
-    expect(await exists(path.join(directory, "remote-app"))).toBe(false);
+      io,
+    });
+    expect(result.projectDir).toBe(path.join(directory, "remote-app"));
+    expect(await exists(path.join(directory, "remote-app", "manifest.json"))).toBe(true);
+    expect(io.stderr).toHaveBeenCalledWith(expect.stringContaining("localapp app install"));
   });
 });
 

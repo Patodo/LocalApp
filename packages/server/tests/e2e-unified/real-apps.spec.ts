@@ -13,7 +13,7 @@ import {
 } from "../../../../examples/skill-market/src/device-action";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
-const ACCEPTANCE_ROOT = path.join(REPO_ROOT, "tmp", "unified-acceptance");
+const ACCEPTANCE_ROOT = path.join(REPO_ROOT, "tmp", "single-package-acceptance", "deterministic-real-apps");
 const API_KEY = "real-apps-local-admin-key-1234567890";
 const CONTROL_TOKEN = "real-apps-device-control-token";
 

@@ -119,6 +119,7 @@ export class LocalAppDaemon {
   private server: OwnedProcess | undefined;
   private serverStatus: DaemonServerStatus = "stopped";
   private listenUrl: string | undefined;
+  private setupUrl: string | undefined;
   private deviceControlToken: string | undefined;
   private notificationControlToken: string | undefined;
   private notificationRuntime: DaemonNotificationRuntime | undefined;
@@ -192,7 +193,8 @@ export class LocalAppDaemon {
     if (type === "status") return {
       ok: true, type: "status", data: {
         bootId: this.bootId, pid: process.pid, server: this.serverStatus === "ready" && this.listenUrl !== undefined
-          ? { status: "ready", listenUrl: this.listenUrl } : { status: this.serverStatus },
+          ? { status: "ready", listenUrl: this.listenUrl, ...(this.setupUrl === undefined ? {} : { setupUrl: this.setupUrl }) }
+          : { status: this.serverStatus },
       },
     };
     if (type === "activation") {
@@ -209,6 +211,7 @@ export class LocalAppDaemon {
   private async startServer(): Promise<void> {
     this.serverStatus = "starting";
     this.listenUrl = undefined;
+    this.setupUrl = undefined;
     this.deviceControlToken = crypto.randomBytes(32).toString("base64url");
     this.notificationControlToken = crypto.randomBytes(32).toString("base64url");
     if (this.notificationControlToken === this.deviceControlToken) throw lifecycleError("notification_token_invalid", "Notification and device-control tokens must be distinct");
@@ -227,6 +230,7 @@ export class LocalAppDaemon {
       const ready = await waitForServerReady(server, { timeoutMs: this.options.readinessTimeoutMs ?? 15_000 });
       await verifyHealth(ready.listenUrl, this.options.healthTimeoutMs ?? 5_000);
       this.listenUrl = ready.listenUrl;
+      this.setupUrl = ready.setupUrl;
       const open = this.options.openExternal ?? openValidatedExternalUrl;
       this.notificationRuntime = await (this.options.createNotificationRuntime ?? ((runtime) => this.createDefaultNotificationRuntime(runtime)))({
         listenUrl: ready.listenUrl,
@@ -275,6 +279,7 @@ export class LocalAppDaemon {
     try { await server?.terminate(); } catch (error) { failure ??= error; }
     if (this.server === server) this.server = undefined;
     this.listenUrl = undefined;
+    this.setupUrl = undefined;
     this.deviceControlToken = undefined;
     this.notificationControlToken = undefined;
     this.serverStatus = "stopped";

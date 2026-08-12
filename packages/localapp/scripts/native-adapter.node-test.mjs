@@ -87,17 +87,26 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   // Force a fresh short-lived bridge instance. A prior interrupted acceptance
   // may leave a background-only process alive, and LaunchServices otherwise
   // reuses that process with its stale in-memory registration state.
-  const opened = await run("/usr/bin/open", ["-n", "-b", bundleIdentifier, activationUrl]);
-  assert.equal(opened.code, 0, opened.stderr);
-  await waitFor(() => received.length === 2, "one LaunchServices bridge IPC activation");
+  let launchServicesDelivered = false;
+  await t.test("LaunchServices dispatches the registered localapp Scheme", {
+    skip: repositoryRoot.startsWith("/Volumes/")
+      ? "LaunchServices does not dispatch ad-hoc test bundles located on external volumes; manual Scheme acceptance is required"
+      : false,
+  }, async () => {
+    const opened = await run("/usr/bin/open", ["-n", "-b", bundleIdentifier, activationUrl]);
+    assert.equal(opened.code, 0, opened.stderr);
+    await waitFor(() => received.length === 2, "one LaunchServices bridge IPC activation");
+    launchServicesDelivered = true;
+  });
   const notificationTicket = "notification_ticket_0123456789";
   assert.equal((await run(built.executable, ["--notification-activation-ticket", notificationTicket])).code, 0);
-  await waitFor(() => received.length === 3, "one notification click bridge IPC activation");
-  assert.deepEqual(received, [
+  const expected = [
     { type: "activation", url: activationUrl },
-    { type: "activation", url: activationUrl },
+    ...(launchServicesDelivered ? [{ type: "activation", url: activationUrl }] : []),
     { type: "activation", url: `localapp://notification/open?ticket=${notificationTicket}` },
-  ]);
+  ];
+  await waitFor(() => received.length === expected.length, "one notification click bridge IPC activation");
+  assert.deepEqual(received, expected);
 
   const markerPath = path.join(testRoot, "unexpected-native-spawn");
   const markerClient = path.join(testRoot, "marker-client.mjs");
@@ -149,6 +158,13 @@ test("Linux and Windows exact-target adapter builds can be injected without muta
     buildNativeAdapter({ platform: "darwin", arch: otherMacArchitecture, outputDirectory: path.join(crossRoot, "wrong-mac-arch") }),
     /cannot build darwin-.* on this host/i,
   );
+});
+
+test("macOS notifications stage attachments without consuming immutable release assets", async () => {
+  const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/macos/LocalAppBridge.swift"), "utf8");
+  assert.match(source, /copyItem\(at: sourceURL, to: stagedURL\)/);
+  assert.match(source, /removeItem\(at: stagedDirectory\)/);
+  assert.doesNotMatch(source, /UNNotificationAttachment\(identifier: "localapp-icon", url: URL\(fileURLWithPath: envelope\.iconPath\)\)/);
 });
 
 test("Windows helper preserves argv, has an explicit application path, and keeps browser opening outside Job ownership", async () => {

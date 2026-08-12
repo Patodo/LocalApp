@@ -12,7 +12,12 @@ export function createWindowsUserTask(options: PlatformServiceOptions): Omit<Ser
   const systemRoot = options.env?.SystemRoot ?? options.env?.SYSTEMROOT ?? "C:\\Windows";
   const scheduler = path.win32.join(systemRoot, "System32", "schtasks.exe");
   const taskCommand = `${quoteWindowsArgument(options.nodePath)} ${quoteWindowsArgument(options.layout.launcherPath)}`;
-  const metadata = `${JSON.stringify({ schemaVersion: 1, taskName: TASK_NAME, command: taskCommand }, null, 2)}\n`;
+  const metadata = `${JSON.stringify({
+    schemaVersion: 1,
+    taskName: TASK_NAME,
+    command: taskCommand,
+    environment: options.serviceEnvironment,
+  }, null, 2)}\n`;
   return {
     registrationPath,
     async install(): Promise<ServiceInstallResult> {

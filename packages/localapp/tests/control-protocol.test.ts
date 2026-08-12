@@ -24,7 +24,11 @@ describe("daemon control protocol", () => {
       data: {
         bootId: "boot_0123456789abcdef",
         pid: 42,
-        server: { status: "ready" as const, listenUrl: "http://127.0.0.1:43127" },
+        server: {
+          status: "ready" as const,
+          listenUrl: "http://127.0.0.1:43127",
+          setupUrl: "http://127.0.0.1:43127/setup?token=setup-token-0123456789",
+        },
       },
     };
     expect(parseControlResponseFrame(encodeControlResponse(response))).toEqual(response);
@@ -87,6 +91,10 @@ describe("daemon control protocol", () => {
     );
     expectProtocolCode(
       () => parseControlResponseFrame(Buffer.from('{"ok":true,"type":"stop","apiKey":"secret"}\n')),
+      "IPC_RESPONSE_INVALID",
+    );
+    expectProtocolCode(
+      () => parseControlResponseFrame(Buffer.from('{"ok":true,"type":"status","data":{"bootId":"boot_0123456789abcdef","pid":1,"server":{"status":"ready","listenUrl":"http://127.0.0.1:43127","setupUrl":"http://evil.example/setup?token=stolen"}}}\n')),
       "IPC_RESPONSE_INVALID",
     );
   });

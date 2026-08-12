@@ -23,9 +23,6 @@ export interface InitResult {
 }
 
 export async function initializeProject(options: InitializeProjectOptions): Promise<InitResult> {
-  if (!options.skipDeploy) {
-    throw lifecycleError("deployment_unavailable", "Project deployment is not available yet. Re-run with --skip-deploy.");
-  }
   if (!isValidProjectName(options.name)) {
     throw lifecycleError("invalid_project_name", "Invalid name. Use 3-63 lowercase letters, digits, or hyphens; start with a letter and do not end with or repeat hyphens.");
   }
@@ -47,7 +44,7 @@ export async function initializeProject(options: InitializeProjectOptions): Prom
     if (!options.skipInstall) await installDependencies(projectDir, options.io);
     options.io.stdout(`${JSON.stringify({ created: options.name })}\n`);
     if (options.skipInstall) options.io.stderr("Skipping dependency installation. Run npm install manually.\n");
-    options.io.stderr("Skipping deployment. Run localapp app install when package support is available.\n");
+    options.io.stderr("Project created locally. Run localapp app install --target <profile> when it is ready to publish.\n");
     return { projectDir, manifest };
   } catch (error) {
     if (!useCurrentDirectory) await fs.rm(projectDir, { recursive: true, force: true });

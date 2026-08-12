@@ -10,3 +10,5 @@
 4. 记录列表、元数据和删除操作经过 named SQL；另一用户不能读取或删除当前用户的记录。
 
 正式入口必须是 `/<owner>/resume-manager/`；`/serve/` 仅作 API 诊断。
+
+浏览器验收必须使用 `browser:control-in-app-browser` 的 file chooser 上传两份 fixture，分别观察图片 lightbox 和 PDF 页内容，再将浏览器下载移入仓库 `tmp/single-package-acceptance/downloads/` 并逐字节比较。

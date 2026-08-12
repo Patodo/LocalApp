@@ -254,19 +254,47 @@ private func parseNotificationEnvelope(_ rawEnvelope: String) -> NotificationEnv
   )
 }
 
+private func stageNotificationAttachment(_ iconPath: String) -> (directory: URL, file: URL)? {
+  let sourceURL = URL(fileURLWithPath: iconPath)
+  let stagedDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("localapp-notification-\(UUID().uuidString)", isDirectory: true)
+  let extensionSuffix = sourceURL.pathExtension.isEmpty ? "" : ".\(sourceURL.pathExtension)"
+  let stagedURL = stagedDirectory.appendingPathComponent("icon\(extensionSuffix)")
+  do {
+    try FileManager.default.createDirectory(at: stagedDirectory, withIntermediateDirectories: false)
+    try FileManager.default.copyItem(at: sourceURL, to: stagedURL)
+    return (stagedDirectory, stagedURL)
+  } catch let error as NSError {
+    reportFailure("could not stage the notification attachment [\(error.domain):\(error.code)]")
+    try? FileManager.default.removeItem(at: stagedDirectory)
+    return nil
+  }
+}
+
 private func showNotification(_ rawEnvelope: String) -> Bool {
-  guard let envelope = parseNotificationEnvelope(rawEnvelope) else { return false }
+  guard let envelope = parseNotificationEnvelope(rawEnvelope),
+        let stagedAttachment = stageNotificationAttachment(envelope.iconPath)
+  else { return false }
+  let stagedDirectory = stagedAttachment.directory
+  let stagedURL = stagedAttachment.file
+  defer { try? FileManager.default.removeItem(at: stagedDirectory) }
 
   let content = UNMutableNotificationContent()
   content.title = envelope.title
   content.subtitle = "\(envelope.applicationLabel) · \(envelope.sourceLabel)"
   content.body = envelope.body
   content.userInfo = ["localappTicket": envelope.ticket]
-  guard let attachment = try? UNNotificationAttachment(identifier: "localapp-icon", url: URL(fileURLWithPath: envelope.iconPath)) else { return false }
+  guard let attachment = try? UNNotificationAttachment(identifier: "localapp-icon", url: stagedURL) else {
+    reportFailure("could not create the notification attachment")
+    return false
+  }
   content.attachments = [attachment]
   let completed = DispatchSemaphore(value: 0)
   var accepted = false
   UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: envelope.identifier, content: content, trigger: nil)) { error in
+    if let error = error as NSError? {
+      reportFailure("notification center rejected the request [\(error.domain):\(error.code)]")
+    }
     accepted = error == nil
     completed.signal()
   }

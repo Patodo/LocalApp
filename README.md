@@ -29,7 +29,8 @@ daemon 以及随包分发的按平台 native adapter。个人本地开发和运�
 ```bash
 npm install --global localapp
 localapp server
-localapp login --server-url http://localhost:3000
+localapp server status
+localapp login http://127.0.0.1:<port> --profile local
 ```
 
 固定版本安装可使用 `npm install --global localapp@<version>`。npm registry 中的
@@ -41,17 +42,11 @@ CLI 会引导输入 API Key。浏览器用户使用服务端持久会话 Cookie�
 ### 2. 创建应用
 
 ```bash
-localapp init --name my-app
+localapp init my-app
 cd my-app
 ```
 
-`init` 会创建可直接开发的 React 项目，并写入 LocalApp SDK、本地开发 Shell、示例 migration、Named SQL 契约及 Agent skills。无需外部模板仓库时可使用：
-
-```bash
-localapp init --name my-app --builtin-repo
-```
-
-已有项目在 CLI 升级后可运行 `localapp sync`，更新由 CLI 管理的 runtime 和 `.claude/skills/localapp*/` 内容；`localapp eject` 可将这些内容一次性转为应用自行维护。
+`init` 使用 npm 包内置模板创建可直接开发的 React 项目，并写入 LocalApp SDK、本地开发 Shell、示例 migration、Named SQL 契约及 Agent skills。已有项目在 CLI 升级后可运行 `localapp sync-template` 更新由 CLI 管理的 runtime 和 `.claude/skills/localapp*/`；`localapp eject-template` 可将这些内容一次性转为应用自行维护。
 
 ### 3. 开发与检查
 
@@ -62,19 +57,7 @@ localapp check
 
 `localapp dev` 启动应用开发环境并接入派生的 Dev Shell。`localapp check` 在应用包构建或安装前检查平台兼容性、migration、backend contract、测试、构建结果和发布目录。
 
-数据库常用命令：
-
-```bash
-localapp db reset
-localapp db migrate
-localapp db status
-localapp db validate
-localapp db types --output src/lib/database.types.ts
-```
-
-这些命令只维护项目 `tmp/localapp-schema/schema.db` 下的离线 schema 工作库，用于
-migration 校验、seed 检查和类型生成，不是应用运行时后端。运行中应用的数据重置、
-快照和恢复由 Dev Toolkit 调用当前统一 Server 完成。
+migration 和 backend contract 由 `localapp check` 验证；运行中应用的数据重置、快照和恢复由 Dev Toolkit 调用当前统一 Server 完成。
 
 ### 4. 安装、发布与对等同步
 
@@ -89,10 +72,10 @@ localapp app install --target local
 本地与远程都运行同一份 Server 包，并使用同一套应用、认证、权限、数据库和文件实现；
 两者只在监听地址、数据目录和存储配置上不同。
 
-配置目标 Server 后显式选择 profile：
+为远端 Server 保存一个 profile 后显式选择目标：
 
 ```bash
-localapp server add company --server-url https://localapp.example.com --api-key "$LOCALAPP_API_KEY"
+localapp login https://localapp.example.com --api-key "$LOCALAPP_API_KEY" --profile company
 localapp app install --target company
 ```
 
@@ -103,13 +86,7 @@ localapp app sync --target local --peer company
 localapp app sync --target local --peer company --with-data --confirm-app my-app
 ```
 
-默认只同步应用包、manifest、migration 和 backend contract；显式 `--with-data`
-才会整体替换目标端应用数据库与文件，并在目标端失败时回滚。需要单独复验时可运行：
-
-```bash
-localapp verify --as owner
-localapp verify --as member
-```
+默认只同步应用包、manifest、migration 和 backend contract；显式 `--with-data` 才会整体替换目标端应用数据库与文件，并在目标端失败时回滚。功能验收统一使用 Server 返回的正式应用 URL 和应用内 Browser。
 
 ## 运行模型
 
@@ -147,14 +124,7 @@ backend/
 - Transaction mutation 用于需要原子提交的多步业务操作。
 - 权限和参数约束写入契约，由平台在应用包安装和运行时统一验证。
 
-可以从 migration 生成标准 CRUD 契约：
-
-```bash
-localapp backend scaffold
-localapp backend scaffold --table work_items --security-profile owner
-```
-
-旧的 `localapp schemas` 命令已废弃，不再写入平台 schema。
+应用直接维护这些契约文件；`localapp check` 会在安装前验证 migration 与 contract 的一致性。
 
 ### 双 Manifest
 
@@ -191,25 +161,22 @@ localapp backend scaffold --table work_items --security-profile owner
 
 | 命令 | 说明 |
 | --- | --- |
-| `localapp init --name <name>` | 创建并初始化应用 |
+| `localapp server [start]` | 注册系统集成并启动当前用户 daemon |
+| `localapp server run` | 以前台模式运行同一 Server，适合容器和服务管理器 |
+| `localapp server stop/restart/status/logs/uninstall` | 管理当前用户 daemon |
+| `localapp init <name>` | 从 npm 包内置模板创建应用 |
 | `localapp build --package` | 构建并生成不含本地数据的 `.localapp` |
 | `localapp app install --target <name>` | 将当前项目或显式 `.localapp` 包安装到目标 Server |
 | `localapp app sync --peer <name>` | 从当前 Server 向已配置对端同步应用版本 |
 | `localapp app sync --with-data --confirm-app <name>` | 在精确确认后同步应用数据库和文件 |
-| `localapp server add/list/use/remove` | 管理 CLI 使用的 Server 连接 |
-| `localapp login --profile <name>` | 登录并保存指定 Server 的 API Key |
+| `localapp login <url> --profile <name>` | 保存指定 Server 的 API Key profile |
+| `localapp logout/whoami --profile <name>` | 清除或检查 profile 身份 |
 | `localapp dev` | 启动带 Dev Shell 的本地开发环境 |
 | `localapp check` | 执行安装前完整检查 |
-| `localapp verify --as owner\|member` | 使用隔离身份复验已发布应用 |
-| `localapp sync` | 更新 CLI 管理的 runtime 和 Agent skills |
-| `localapp platform version` | 查看平台版本与兼容状态 |
-| `localapp backend scaffold` | 从 migration 生成 Named SQL 契约 |
-| `localapp db validate` | 用生产快照验证本地 migration |
-| `localapp pages list` | 查看当前账号的应用 |
-| `localapp groups list` | 查看用户组 |
-| `localapp update` | 查询 npm 更新并输出固定版本安装命令 |
+| `localapp sync-template [--quiet]` | 更新 CLI 管理的 runtime 和 Agent skills |
+| `localapp eject-template` | 将托管模板转为应用自行维护（不可逆） |
 
-使用 `localapp <command> --help` 查看完整参数。
+当前仅支持顶层 `localapp --help`；子命令参数以本表和已安装包文档为准。
 
 ## 本地开发
 

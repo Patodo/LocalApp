@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lifecycleError } from "../errors.js";
@@ -23,7 +24,7 @@ export interface ServerCommandDependencies {
 }
 
 export async function runServerCommand(options: RunServerCommandOptions, dependencies: ServerCommandDependencies = {}): Promise<unknown> {
-  const layout = dependencies.layout ?? createRuntimeLayout();
+  const layout = dependencies.layout ?? runtimeLayoutFromEnvironment();
   const ipc = dependencies.ipcClient ?? (() => createIpcClient({ endpoint: layout.controlEndpoint }));
   const health = dependencies.health ?? verifyHealth;
   const service = dependencies.createServiceManager ?? (() => defaultServiceManager(layout));
@@ -73,7 +74,7 @@ export async function runServerForeground(options: { dataDir?: string; host?: st
   layout?: RuntimeLayout; artifactDirectory?: string;
   spawnOwnedProcess?: typeof spawnOwnedProcess;
 } = {}): Promise<number> {
-  const layout = dependencies.layout ?? createRuntimeLayout();
+  const layout = dependencies.layout ?? runtimeLayoutFromEnvironment();
   const artifact = dependencies.artifactDirectory ?? defaultArtifactDirectory();
   const manifest = await verifyReleaseArtifact(artifact);
   if (typeof manifest.serverEntrypoint !== "string") throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable");
@@ -185,9 +186,23 @@ function defaultServiceManager(layout: RuntimeLayout): ServiceManager {
 }
 
 function defaultArtifactDirectory(): string {
-  const fromEntry = process.argv[1] === undefined ? undefined : path.resolve(path.dirname(process.argv[1]), "..");
+  const fromEntry = process.argv[1] === undefined ? undefined : artifactDirectoryFromEntrypoint(process.argv[1]);
   if (fromEntry !== undefined) return fromEntry;
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
+export function artifactDirectoryFromEntrypoint(entrypoint: string): string {
+  const canonical = realpathSync(entrypoint);
+  return path.resolve(path.dirname(canonical), "..");
+}
+
+export function runtimeLayoutFromEnvironment(environment: NodeJS.ProcessEnv = process.env): RuntimeLayout {
+  return createRuntimeLayout({
+    env: environment,
+    supportDir: environment.LOCALAPP_SUPPORT_DIR,
+    runtimeDir: environment.LOCALAPP_RUNTIME_DIR,
+    dataDir: environment.LOCALAPP_DATA_DIR,
+  });
 }
 
 function publicRelease(release: CurrentRelease) {

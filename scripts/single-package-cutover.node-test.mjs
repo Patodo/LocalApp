@@ -21,6 +21,7 @@ test("the repository exposes only the localapp npm product", async () => {
 
   const rootManifest = await readJson("package.json");
   assert.equal(rootManifest.scripts["package:localapp"], "node scripts/package-localapp.mjs");
+  assert.equal(rootManifest.scripts["acceptance:local:start"], "node scripts/single-package-acceptance.mjs start");
   assert.equal(rootManifest.scripts["test:localapp-package"], "node --test --test-concurrency=1 packages/localapp/scripts/pack-package.node-test.mjs packages/localapp/scripts/build-package.node-test.mjs packages/localapp/scripts/merge-native-adapters.node-test.mjs scripts/single-package-cutover.node-test.mjs");
   for (const obsolete of ["package:server", "test:server-package", "build:cli", "build:cli:debug", "build:cli:only"]) {
     assert.equal(rootManifest.scripts[obsolete], undefined, `${obsolete} must not remain public`);
@@ -41,6 +42,50 @@ test("the repository exposes only the localapp npm product", async () => {
 
   const workspace = await fs.readFile(path.join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
   assert.doesNotMatch(workspace, /packages\/(?:desktop|cli|localapp-core|localapp-template)/);
+});
+
+test("developer guidance documents only the supported TypeScript CLI", async () => {
+  const guidance = await Promise.all([
+    "README.md",
+    "init-repo/AGENTS.md",
+    "init-repo/CLAUDE.md",
+    "init-repo/.claude/skills/localapp/SKILL.md",
+  ].map(async (relative) => fs.readFile(path.join(repositoryRoot, relative), "utf8")));
+  const combined = guidance.join("\n");
+  for (const obsolete of [
+    "localapp server add",
+    "localapp server list",
+    "localapp server use",
+    "localapp server login",
+    "localapp server remove",
+    "localapp verify",
+    "localapp db ",
+    "localapp backend scaffold",
+    "localapp pages ",
+    "localapp groups ",
+    "localapp update",
+    "localapp sync --",
+    "localapp eject`",
+  ]) {
+    assert.equal(combined.includes(obsolete), false, `obsolete CLI guidance remains: ${obsolete}`);
+  }
+  assert.match(combined, /localapp server(?:\s|`)/);
+  assert.match(combined, /localapp sync-template/);
+  assert.match(combined, /localapp eject-template/);
+});
+
+test("acceptance tooling redacts credentials and cannot reference block-scoped lifecycle output", async () => {
+  const source = await fs.readFile(path.join(repositoryRoot, "scripts/single-package-acceptance.mjs"), "utf8");
+  assert.doesNotMatch(source, /args\.join\(["'] ["']\)/);
+  assert.match(source, /redactCommandArguments/);
+  assert.doesNotMatch(source, /\$\{started\.stdout\}/);
+});
+
+test("runtime acceptance directories are ignored without hiding source fixtures", async () => {
+  const ignore = await fs.readFile(path.join(repositoryRoot, ".gitignore"), "utf8");
+  assert.match(ignore, /^\/tmp\/$/m);
+  assert.match(ignore, /^\/examples\/\*\/tmp\/$/m);
+  assert.doesNotMatch(ignore, /^\/examples\/$/m);
 });
 
 async function readJson(relative) {

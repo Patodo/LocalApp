@@ -925,7 +925,7 @@ git commit -m "refactor: cut over to the single localapp npm package"
 - Produces: reproducible commands and evidence for package install, daemon, Scheme, native notification, SKILL install, and resume media.
 - Consumes: the packed npm artifact only; source-tree launchers and Rust/Tauri binaries are forbidden in acceptance.
 
-- [ ] **Step 1: Add failing packaged-product acceptance gates**
+- [x] **Step 1: Add failing packaged-product acceptance gates**
 
 Extend the real-app suite so it installs the generated npm tarball into
 `tmp/single-package-acceptance/npm-prefix`, invokes only that `localapp`, starts
@@ -933,13 +933,13 @@ clean Server data below `tmp/single-package-acceptance/server`, installs both
 applications, and asserts formal URLs. Add deterministic assertions for the
 notification inbox row, native adapter envelope, click ticket, and read state.
 
-- [ ] **Step 2: Run acceptance gates and verify RED**
+- [x] **Step 2: Run acceptance gates and verify RED**
 
 Run: `pnpm test:localapp-package && pnpm test:real-apps`
 
 Expected: FAIL if any path resolves a source-tree launcher, old binary, Tauri bridge, raw `/serve` acceptance URL, or system temporary directory.
 
-- [ ] **Step 3: Rewrite guidance around the final product**
+- [x] **Step 3: Rewrite guidance around the final product**
 
 Document only `npm install localapp`, `localapp server`, the supported
 TypeScript CLI commands, explicit remote notification sources, formal routes,
@@ -947,7 +947,7 @@ Device Actions through `localapp://`, content upload/preview/download, and
 in-app Browser validation. Remove tray, Tauri, Rust CLI, `localapp-server`,
 MiniServer, Local Runtime, legacy upload, and `<app>.localhost` instructions.
 
-- [ ] **Step 4: Run automated verification from clean local state**
+- [x] **Step 4: Run automated verification from clean local state**
 
 Run:
 
@@ -968,6 +968,12 @@ Expected: every command exits 0 with all generated state below repository `tmp/`
 
 - [ ] **Step 5: Verify SKILL marketplace through the in-app Browser**
 
+Implementation note: the formal Browser journey reaches `等待本机激活`, but the
+in-app Browser security policy blocks automated external-Scheme navigation. Do
+not bypass this with shell activation or a direct API. The deterministic suite
+covers ticket/trust/execution; the final Browser-to-LaunchServices observation
+requires one user click on this computer.
+
 Read and use `browser:control-in-app-browser`. Open the formal packaged Server
 SKILL marketplace URL, log in, select the fixture SKILL, click install, follow
 the real `localapp://` activation on this computer, approve first-publisher
@@ -976,7 +982,7 @@ trust in the local Web page, and observe source-page success. Verify
 Repeat identical permissions without a prompt and expanded permissions with a
 new prompt. Capture DOM and console state after each transition.
 
-- [ ] **Step 6: Verify resume media through the in-app Browser**
+- [x] **Step 6: Verify resume media through the in-app Browser**
 
 Open the formal resume-manager URL, upload the deterministic PNG and PDF, show
 the image lightbox and PDF page preview, download both originals below
@@ -992,7 +998,7 @@ popup, click it, verify the validated formal application route opens, and
 confirm the source inbox row becomes read. Stop/restart the daemon, create two
 offline notifications, and verify ordered, duplicate-free catch-up.
 
-- [ ] **Step 8: Request review and repair every actionable finding**
+- [x] **Step 8: Request review and repair every actionable finding**
 
 Review the complete diff for package leakage, credential exposure, unsafe
 Scheme parsing, notification mute bypass, process lifecycle gaps, release

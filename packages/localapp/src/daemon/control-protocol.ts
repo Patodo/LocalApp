@@ -19,7 +19,7 @@ export type DaemonControlResponse =
     data: {
       bootId: string;
       pid: number;
-      server: { status: DaemonServerStatus; listenUrl?: string };
+      server: { status: DaemonServerStatus; listenUrl?: string; setupUrl?: string };
     };
   }
   | { ok: true; type: "stop" | "restart" | "activation" }
@@ -117,21 +117,41 @@ function validateControlResponse(value: unknown): DaemonControlResponse {
   return { ok: true, type: "status", data: { bootId: data.bootId, pid: data.pid, server } };
 }
 
-function validateServerStatus(value: Record<string, unknown>): { status: DaemonServerStatus; listenUrl?: string } {
+function validateServerStatus(value: Record<string, unknown>): { status: DaemonServerStatus; listenUrl?: string; setupUrl?: string } {
   const statuses = new Set<DaemonServerStatus>(["starting", "ready", "stopping", "stopped", "error"]);
   if (typeof value.status !== "string" || !statuses.has(value.status as DaemonServerStatus)) {
     throw protocolError("IPC_RESPONSE_INVALID");
   }
-  const expectedKeys = value.listenUrl === undefined ? ["status"] : ["status", "listenUrl"];
+  const expectedKeys = value.listenUrl === undefined ? ["status"]
+    : value.setupUrl === undefined ? ["status", "listenUrl"] : ["status", "listenUrl", "setupUrl"];
   if (!hasExactKeys(value, expectedKeys)) throw protocolError("IPC_RESPONSE_INVALID");
   if (value.listenUrl !== undefined) {
     if (value.status !== "ready" || typeof value.listenUrl !== "string" || !isLoopbackHttpOrigin(value.listenUrl)) {
       throw protocolError("IPC_RESPONSE_INVALID");
     }
-    return { status: value.status as DaemonServerStatus, listenUrl: value.listenUrl };
+    if (value.setupUrl !== undefined && (typeof value.setupUrl !== "string" || !isSetupUrl(value.setupUrl, value.listenUrl))) {
+      throw protocolError("IPC_RESPONSE_INVALID");
+    }
+    return {
+      status: value.status as DaemonServerStatus,
+      listenUrl: value.listenUrl,
+      ...(typeof value.setupUrl === "string" ? { setupUrl: value.setupUrl } : {}),
+    };
   }
   if (value.status === "ready") throw protocolError("IPC_RESPONSE_INVALID");
   return { status: value.status as DaemonServerStatus };
+}
+
+function isSetupUrl(value: string, listenUrl: string): boolean {
+  try {
+    const url = new URL(value);
+    const token = url.searchParams.get("token");
+    return url.origin === listenUrl && url.pathname === "/setup" && url.hash === ""
+      && [...url.searchParams.keys()].length === 1 && typeof token === "string"
+      && token.length >= 16 && token.length <= 512;
+  } catch {
+    return false;
+  }
 }
 
 function isLoopbackHttpOrigin(value: string): boolean {

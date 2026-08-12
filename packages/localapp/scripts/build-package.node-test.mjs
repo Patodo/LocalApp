@@ -46,6 +46,10 @@ test("packed product exposes one localapp binary without workspace references", 
   assert.equal(artifact.bootstrapEntrypoint, "runtime/bootstrap/localapp-daemon-bootstrap.mjs");
   assert.equal(artifact.files.some((entry) => entry.path === artifact.entrypoint), true);
   assert.equal(artifact.files.some((entry) => entry.path === artifact.bootstrapEntrypoint), true);
+  const daemonBootstrap = await fs.readFile(path.join(result.outputDirectory, artifact.bootstrapEntrypoint), "utf8");
+  assert.match(daemonBootstrap, /windows-user-task\.json/);
+  assert.match(daemonBootstrap, /LOCALAPP_RUNTIME_DIR/);
+  assert.match(daemonBootstrap, /Object\.assign\(process\.env, service\.environment\)/);
   const nativeManifest = JSON.parse(await fs.readFile(path.join(result.outputDirectory, "runtime/native/adapter-manifest.json"), "utf8"));
   assert.equal(nativeManifest.target, `${process.platform}-${process.arch}`);
   assert.equal(nativeManifest.assets.every((entry) => entry.path.startsWith(`${nativeManifest.target}/`)), true);

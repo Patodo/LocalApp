@@ -284,6 +284,25 @@ try {
   fail();
 }
 if (executable && expectedRelease) {
+  if (process.platform === "win32") {
+    try {
+      const service = JSON.parse(regularBytes(path.join(support, "service", "windows-user-task.json")).toString("utf8"));
+      const allowedEnvironment = ["LOCALAPP_SUPPORT_DIR", "LOCALAPP_RUNTIME_DIR", "LOCALAPP_DATA_DIR"];
+      if (!service || typeof service !== "object" || Array.isArray(service)
+        || !exactKeys(service, ["schemaVersion", "taskName", "command", "environment"])
+        || service.schemaVersion !== 1 || service.taskName !== "LocalApp User Daemon"
+        || !service.environment || typeof service.environment !== "object" || Array.isArray(service.environment)
+        || !exactKeys(service.environment, allowedEnvironment)
+        || allowedEnvironment.some((key) => typeof service.environment[key] !== "string"
+          || !path.win32.isAbsolute(service.environment[key]) || service.environment[key].includes("\0"))
+        || path.win32.resolve(service.environment.LOCALAPP_SUPPORT_DIR) !== path.win32.resolve(support)) {
+        throw new Error("invalid Windows service environment");
+      }
+      Object.assign(process.env, service.environment);
+    } catch {
+      fail();
+    }
+  }
   const child = spawn(process.execPath, [executable, "_daemon"], {
     cwd: expectedRelease,
     env: { ...process.env, LOCALAPP_RELEASE_PATH: expectedRelease },

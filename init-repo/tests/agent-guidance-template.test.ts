@@ -19,7 +19,8 @@ describe("generated application agent guidance", () => {
   it("separates runtime reset from offline seeds and documents PDF upload", () => {
     const guidance = fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8");
     expect(guidance).toContain("运行时 reset 只重新应用当前已安装版本的 migrations");
-    expect(guidance).toContain("db/seeds/dev.sql` 仅由离线 `localapp db reset` 应用");
+    expect(guidance).toContain("db/seeds/dev.sql` 仅供应用自己的离线测试工具显式使用");
+    expect(guidance).toContain("当前 `localapp` CLI 不提供数据库 reset 命令");
     expect(guidance).toContain("png/jpg/jpeg/gif/webp/svg/pdf");
     expect(guidance).toContain("应用包安装前拉取生产快照");
   });

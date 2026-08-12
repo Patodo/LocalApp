@@ -37,6 +37,7 @@ describe("packed daemon integration", () => {
     const first = await waitForStatus(client);
     const serverDescendants = new Set(await observeServerDescendants(daemon.pid!));
     expect(first.data.server.listenUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(first.data.server.setupUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/setup\?token=/);
     await expect(fetch(`${first.data.server.listenUrl}/health`)).resolves.toMatchObject({ status: 200 });
     await expect(client.request({ type: "restart" })).resolves.toEqual({ ok: true, type: "restart" });
     const second = await waitForStatus(client);

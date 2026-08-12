@@ -74,8 +74,17 @@ export function createCurrentUserServiceManager(layout: RuntimeLayout): ServiceM
     layout,
     nodePath: process.execPath,
     homeDir: process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(),
+    serviceEnvironment: runtimeLayoutServiceEnvironment(layout),
     run: createSpawnServiceCommandRunner(),
   });
+}
+
+export function runtimeLayoutServiceEnvironment(layout: RuntimeLayout): Record<string, string> {
+  return {
+    LOCALAPP_SUPPORT_DIR: layout.supportDir,
+    LOCALAPP_RUNTIME_DIR: layout.runtimeDir,
+    LOCALAPP_DATA_DIR: layout.dataDir,
+  };
 }
 
 /**

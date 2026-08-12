@@ -58,12 +58,13 @@ describe("template lifecycle CLI errors", () => {
     expect(collision.stderr).toBe('{"error":{"code":"template_eject_collision","message":"Eject destination already exists: src/_localapp_runtime. Move or remove it before retrying."}}\n');
   });
 
-  it("reports unavailable non-skipDeploy init before creating a directory", async () => {
-    // Break caught: Task 4 deployment deferral is reported as a generic command failure instead of a safe next action.
+  it("initializes without a legacy skip-deploy flag", async () => {
     const result = await runIn(directory, ["init", "remote-app", "--skip-install"]);
 
-    expect(result.stderr).toBe('{"error":{"code":"deployment_unavailable","message":"Project deployment is not available yet. Re-run with --skip-deploy."}}\n');
-    await expect(fs.access(path.join(directory, "remote-app"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('{"created":"remote-app"}\n');
+    expect(result.stderr).toContain("localapp app install");
+    await expect(fs.access(path.join(directory, "remote-app", "manifest.json"))).resolves.toBeUndefined();
   });
 });
 

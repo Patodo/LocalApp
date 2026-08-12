@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runServerCommand } from "../src/commands/server.js";
+import { artifactDirectoryFromEntrypoint, runServerCommand, runtimeLayoutFromEnvironment } from "../src/commands/server.js";
 import type { RuntimeLayout } from "../src/daemon/runtime-layout.js";
 
 const layout = {
@@ -9,6 +11,35 @@ const layout = {
 } satisfies RuntimeLayout;
 
 describe("server lifecycle command", () => {
+  it("uses the same explicit repository-local layout for every public server command", () => {
+    expect(runtimeLayoutFromEnvironment({
+      LOCALAPP_SUPPORT_DIR: "/repo/tmp/support",
+      LOCALAPP_RUNTIME_DIR: "/repo/tmp/runtime",
+      LOCALAPP_DATA_DIR: "/repo/tmp/data",
+    })).toMatchObject({
+      supportDir: "/repo/tmp/support",
+      runtimeDir: "/repo/tmp/runtime",
+      dataDir: "/repo/tmp/data",
+      controlEndpoint: "/repo/tmp/runtime/control.sock",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("resolves an npm bin symlink to the installed package artifact", async () => {
+    const root = await fs.mkdtemp(path.join(process.cwd(), "../../tmp/task-13-entrypoint-"));
+    try {
+      const packageRoot = path.join(root, "node_modules/localapp");
+      const binary = path.join(packageRoot, "bin/localapp.mjs");
+      const shim = path.join(root, "node_modules/.bin/localapp");
+      await fs.mkdir(path.dirname(binary), { recursive: true });
+      await fs.mkdir(path.dirname(shim), { recursive: true });
+      await fs.writeFile(binary, "#!/usr/bin/env node\n");
+      await fs.symlink(path.relative(path.dirname(shim), binary), shim);
+      expect(artifactDirectoryFromEntrypoint(shim)).toBe(packageRoot);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("installs the selected native Scheme handler after artifact verification", async () => {
     const installScheme = vi.fn(async () => undefined);
     const createNativeAdapter = vi.fn(async () => ({ installScheme }));

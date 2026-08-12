@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createRuntimeLayout } from "../src/daemon/runtime-layout.js";
 import {
   createServiceManager,
+  runtimeLayoutServiceEnvironment,
   type ServiceCommandInvocation,
   type ServiceCommandResult,
 } from "../src/service/service-manager.js";
@@ -17,6 +18,15 @@ afterEach(async () => {
 });
 
 describe("per-user service manager", () => {
+  it("persists only the explicit runtime layout needed by a user service", async () => {
+    const fixture = await serviceFixture("runtime environment");
+    expect(runtimeLayoutServiceEnvironment(fixture.layout)).toEqual({
+      LOCALAPP_SUPPORT_DIR: fixture.layout.supportDir,
+      LOCALAPP_RUNTIME_DIR: fixture.layout.runtimeDir,
+      LOCALAPP_DATA_DIR: fixture.layout.dataDir,
+    });
+  });
+
   it("writes an escaped LaunchAgent and registers only the current GUI user", async () => {
     const fixture = await serviceFixture("mac & user <one>");
     const commands: ServiceCommandInvocation[] = [];
@@ -97,6 +107,7 @@ describe("per-user service manager", () => {
       layout: fixture.layout,
       nodePath: "C:\\Program Files\\Node & Runtime\\node.exe",
       homeDir: fixture.root,
+      serviceEnvironment: runtimeLayoutServiceEnvironment(fixture.layout),
       run: recordingRunner(commands),
     });
 
@@ -109,6 +120,12 @@ describe("per-user service manager", () => {
     expect(taskCommand).toContain('"C:\\Program Files\\Node & Runtime\\node.exe"');
     expect(taskCommand).toContain('"' + fixture.layout.launcherPath + '"');
     expect(taskCommand).not.toMatch(/api.?key|password|secret/i);
+    const metadata = JSON.parse(await fs.readFile(manager.registrationPath, "utf8"));
+    expect(metadata.environment).toEqual({
+      LOCALAPP_SUPPORT_DIR: fixture.layout.supportDir,
+      LOCALAPP_RUNTIME_DIR: fixture.layout.runtimeDir,
+      LOCALAPP_DATA_DIR: fixture.layout.dataDir,
+    });
   });
 
   it("writes a systemd --user unit and reports an explicit foreground fallback", async () => {

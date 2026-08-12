@@ -8,6 +8,8 @@ packages/server/static/admin/
 # Runtime data
 data/
 packages/server/data/
+/tmp/
+/examples/*/tmp/
 
 # Test artifacts
 test-results/
