@@ -80,6 +80,16 @@ describe("native adapter boundary", () => {
       .toEqual({ command: executable, args: ["--register", "--config", configPath] });
   });
 
+  it("rejects a multibyte Scheme URL over 4096 UTF-8 bytes before Windows forwarding", () => {
+    const executable = "C:\\Program Files\\Local App\\localapp-native.exe";
+    const configPath = "C:\\Users\\Pat\\AppData\\Local\\LocalApp\\native-bridge.json";
+    const oversizedUrl = `localapp://notification/open?ticket=${"界".repeat(1_400)}`;
+    expect(Buffer.byteLength(oversizedUrl, "utf8")).toBeGreaterThan(4_096);
+
+    expect(() => createWindowsSchemeForwardInvocation(executable, configPath, oversizedUrl))
+      .toThrow(/activation.*invalid|Scheme forwarding arguments are invalid/i);
+  });
+
   it("creates suspended, assigns a kill-on-close Job Object, then resumes in order", () => {
     const steps: string[] = [];
     const process = { terminate: () => steps.push("terminate") };

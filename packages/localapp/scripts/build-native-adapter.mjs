@@ -22,6 +22,9 @@ export async function buildNativeAdapter(options = {}) {
   const signing = options.signing ?? process.env.LOCALAPP_NATIVE_SIGNING ?? "adhoc";
   if (signing !== "adhoc" && signing !== "release") throw new Error("LOCALAPP_NATIVE_SIGNING must be adhoc or release");
   if (signing === "release" && platform !== "darwin") throw new Error("release native signing is currently available only for macOS");
+  if (platform === "darwin" && (process.platform !== "darwin" || arch !== process.arch)) {
+    throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${target} on this host`);
+  }
 
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(outputDirectory, { recursive: true, mode: 0o755 });
@@ -67,12 +70,8 @@ async function buildMacAdapter(options) {
 async function buildLinuxAdapter({ targetDirectory }) {
   const ipcClient = path.join(targetDirectory, "localapp-native-ipc-client.mjs");
   await bundleIpcClient(ipcClient);
-  // The installed entry is rewritten by installLinuxScheme with the released
-  // asset path. This packaged copy remains a valid exact-target build artifact.
-  const desktop = (await fs.readFile(path.join(packageDirectory, "native/linux/localapp-handler.desktop"), "utf8"))
-    .replace("@LOCALAPP_NODE@", desktopExecQuote(process.execPath))
-    .replace("@LOCALAPP_NATIVE_IPC_CLIENT@", desktopExecQuote(ipcClient));
-  await fs.writeFile(path.join(targetDirectory, "localapp-handler.desktop"), desktop, { mode: 0o644 });
+  // The per-user desktop file is generated only by installLinuxScheme, once
+  // the immutable release path and current Node executable are known.
   return { executable: ipcClient, ipcClient };
 }
 
@@ -138,10 +137,6 @@ async function copyCachedBridge({ target, executable, cacheDirectory }) {
   }
   await fs.copyFile(cached, executable);
   await fs.chmod(executable, 0o755);
-}
-
-function desktopExecQuote(value) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/%/g, "%%")}"`;
 }
 
 function supportedTarget(platform, arch) {

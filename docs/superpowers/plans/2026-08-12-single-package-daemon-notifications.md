@@ -585,12 +585,15 @@ Expected: FAIL because the strict broker and non-Tauri adapters do not exist.
 
 The macOS app is windowless, registers `CFBundleURLTypes`, forwards
 `application:openURLs:` to private IPC, and uses UserNotifications. The Windows
-helper registers the current-user URI handler and App Notification activator;
-its existing Rust usage is restricted to this tiny native boundary and never
-contains CLI/Server business code. Linux installs the per-user `.desktop`
-handler and invokes the Node IPC client. The daemon accepts only parsed tickets,
-calls the authenticated loopback activation route, and opens only the exact
-loopback confirmation path returned by the ready Server.
+helper registers and forwards only the current-user URI Scheme handler in this
+task; Windows App Notification display, activation registration, and callback
+handling are explicitly deferred to Task 11. Its Rust usage is restricted to
+this tiny native boundary and never contains CLI/Server business code. Linux
+installs the per-user `.desktop` Scheme handler and invokes the Node IPC client;
+Linux notification display remains unsupported until Task 11. The daemon
+accepts only parsed tickets, calls the authenticated loopback activation route,
+and opens only the exact loopback confirmation path returned by the ready
+Server.
 
 - [ ] **Step 4: Build and activate the current-platform adapter**
 
@@ -804,10 +807,12 @@ Expected: FAIL because neither the Web surface nor explicit permission flow exis
 Add a Lucide-based Device Notifications page showing daemon/adapter version,
 permission, explicit local/remote sources, connection state, cursor, quiet
 hours, preview visibility, last error, and a test control. macOS uses
-`UNUserNotificationCenter`; Windows uses App Notifications; Linux uses the
-freedesktop interface and reports missing action support. Send only plain text,
-safe local icon, application/source labels, priority, and the opaque click URL.
-Denied permission is inbox-only and is never re-prompted automatically.
+`UNUserNotificationCenter`; Windows implements App Notification display plus
+the current-user activation registration and callback path deferred from Task
+8; Linux implements the freedesktop interface and reports missing action
+support. Send only plain text, safe local icon, application/source labels,
+priority, and the opaque click URL. Denied permission is inbox-only and is
+never re-prompted automatically.
 
 - [ ] **Step 4: Run Web, Server, and current-platform native tests**
 

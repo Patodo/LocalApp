@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { WindowsOwnedProcessHandle, WindowsProcessTreeAdapter } from "../process/process-tree.js";
 import { lifecycleError } from "../errors.js";
+import { ACTIVATION_URL_LIMIT_BYTES } from "../activation/activation-url.js";
 import { selectNativeAdapter } from "./adapter-selection.js";
 
 export const NATIVE_NOTIFICATION_ENVELOPE_LIMIT_BYTES = 8 * 1024;
@@ -159,7 +160,8 @@ export function createWindowsSchemeRegistrationInvocation(executable: string, co
 }
 
 export function createWindowsSchemeForwardInvocation(executable: string, configPath: string, url: string): { command: string; args: string[] } {
-  if (!safeAbsoluteLocalPath(executable, "win32") || !safeAbsoluteLocalPath(configPath, "win32") || typeof url !== "string" || url.length === 0 || url.includes("\0")) {
+  if (!safeAbsoluteLocalPath(executable, "win32") || !safeAbsoluteLocalPath(configPath, "win32") || typeof url !== "string" || url.length === 0
+    || url.includes("\0") || Buffer.byteLength(url, "utf8") > ACTIVATION_URL_LIMIT_BYTES) {
     throw lifecycleError("native_adapter_invalid", "The Windows Scheme forwarding arguments are invalid");
   }
   return { command: executable, args: ["--scheme", "--config", configPath, url] };

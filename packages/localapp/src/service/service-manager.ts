@@ -9,6 +9,7 @@ import { createWindowsUserTask } from "./windows-user-task.js";
 export interface ServiceCommandInvocation {
   command: string;
   args: string[];
+  signal?: AbortSignal;
 }
 
 export interface ServiceCommandResult {
@@ -28,7 +29,7 @@ export interface ServiceInstallResult {
 export interface ServiceManager {
   readonly registrationPath: string;
   install(): Promise<ServiceInstallResult>;
-  start(): Promise<void>;
+  start(signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
   restart(): Promise<void>;
   status(): Promise<boolean>;
@@ -68,14 +69,35 @@ export function createCurrentUserServiceManager(layout: RuntimeLayout): ServiceM
     layout,
     nodePath: process.execPath,
     homeDir: process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(),
-    run: async ({ command, args }) => await new Promise((resolve) => {
-      const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = ""; let stderr = "";
-      child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-      child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-      child.once("error", () => resolve({ code: 1, stdout, stderr }));
-      child.once("exit", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-    }),
+    run: createSpawnServiceCommandRunner(),
+  });
+}
+
+/** The runtime command runner binds the broker deadline signal directly to spawn. */
+export function createSpawnServiceCommandRunner(): ServiceCommandRunner {
+  return async ({ command, args, signal }) => await new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: 1, stdout: "", stderr: "aborted" }); return; }
+    const child = spawn(command, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      // A service command that traps SIGTERM must not outlive the one broker
+      // deadline. Node maps this to forced process termination on Windows too.
+      ...(signal === undefined ? {} : { signal, killSignal: "SIGKILL" }),
+    });
+    let stdout = ""; let stderr = ""; let settled = false;
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolve({ code, stdout, stderr });
+    };
+    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("error", (error) => {
+      stderr += error.message;
+      if (child.pid === undefined) finish(1);
+    });
+    child.once("close", (code) => finish(code ?? 1));
   });
 }
 
@@ -94,6 +116,10 @@ export async function runServiceCommand(
     throw lifecycleError("user_service_command_failed", "The current-user service manager command failed");
   }
   return result;
+}
+
+export function withAbortSignal(invocation: ServiceCommandInvocation, signal: AbortSignal | undefined): ServiceCommandInvocation {
+  return signal === undefined ? invocation : { ...invocation, signal };
 }
 
 function validateServiceEnvironment(value: Record<string, string>): Record<string, string> {

@@ -19,6 +19,7 @@ mod platform {
 
     const WAIT_FAILED: u32 = 0xFFFF_FFFF;
     const MAX_BRIDGE_CONFIGURATION_BYTES: u64 = 8 * 1024;
+    const MAX_ACTIVATION_URL_BYTES: usize = 4096;
 
     #[derive(Deserialize)]
     struct BridgeConfiguration {
@@ -111,7 +112,9 @@ mod platform {
     }
 
     pub fn forward_scheme(config_path: &str, url: &str) -> Result<(), String> {
-        if !safe_absolute_path(config_path) || !url.starts_with("localapp://") || url.contains('\0') { return Err("invalid Scheme activation".into()); }
+        if !safe_absolute_path(config_path) || !url.starts_with("localapp://") || url.contains('\0') || url.as_bytes().len() > MAX_ACTIVATION_URL_BYTES {
+            return Err("invalid Scheme activation".into());
+        }
         let metadata = fs::metadata(config_path).map_err(|_| "bridge configuration is unavailable")?;
         if metadata.len() > MAX_BRIDGE_CONFIGURATION_BYTES { return Err("bridge configuration is too large".into()); }
         let configuration: BridgeConfiguration = serde_json::from_slice(&fs::read(config_path).map_err(|_| "bridge configuration is unavailable")?)

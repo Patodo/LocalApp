@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
 import type { PlatformServiceOptions, ServiceInstallResult, ServiceManager } from "./service-manager.js";
-import { runServiceCommand } from "./service-manager.js";
+import { runServiceCommand, withAbortSignal } from "./service-manager.js";
 import { writeServiceFile } from "./service-files.js";
 
 const UNIT_NAME = "localapp.service";
@@ -24,8 +24,8 @@ export function createLinuxSystemdUserService(options: PlatformServiceOptions): 
       await runServiceCommand(options.run, { command: systemctl, args: ["--user", "enable", "--now", UNIT_NAME] });
       return { mode: "service", installed };
     },
-    async start(): Promise<void> {
-      await runServiceCommand(options.run, { command: systemctl, args: ["--user", "start", UNIT_NAME] });
+    async start(signal?: AbortSignal): Promise<void> {
+      await runServiceCommand(options.run, withAbortSignal({ command: systemctl, args: ["--user", "start", UNIT_NAME] }, signal));
     },
     async stop(): Promise<void> {
       const result = await options.run({ command: systemctl, args: ["--user", "stop", UNIT_NAME] });

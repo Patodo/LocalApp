@@ -53,14 +53,30 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
     ipcClientPath: built.ipcClient,
     environment: { LOCALAPP_RUNTIME_DIR: runtimeDir },
   })}\n`, { mode: 0o600 });
+  // The test owns this identifier, so clear a stale registration left by an
+  // interrupted previous acceptance before asserting the new bundle mapping.
+  await run(built.executable, ["--unregister"]);
   assert.equal((await run(built.executable, ["--register", bridgeConfigPath])).code, 0);
   t.after(async () => { await run(built.executable, ["--unregister"]); });
   t.after(async () => { await fs.rm(testRoot, { recursive: true, force: true }); });
   const activationUrl = "localapp://action/11111111-1111-4111-8111-111111111111?origin=https%3A%2F%2Fserver.example.test&nonce=nonce_abcdefghijklmnopqrstuvwxyz-0123456789&protocolVersion=2";
+  const direct = await run(built.executable, [activationUrl]);
+  assert.equal(direct.code, 0, direct.stderr);
+  await waitFor(() => received.length === 1, "one direct bridge IPC activation");
   const opened = await run("/usr/bin/open", ["-b", "dev.localapp.bridge.task8", activationUrl]);
   assert.equal(opened.code, 0, opened.stderr);
-  await waitFor(() => received.length === 1, "one bridge IPC activation");
-  assert.deepEqual(received, [{ type: "activation", url: activationUrl }]);
+  await waitFor(() => received.length === 2, "one LaunchServices bridge IPC activation");
+  assert.deepEqual(received, [{ type: "activation", url: activationUrl }, { type: "activation", url: activationUrl }]);
+
+  const markerPath = path.join(testRoot, "unexpected-native-spawn");
+  const markerClient = path.join(testRoot, "marker-client.mjs");
+  await fs.writeFile(markerClient, `import fs from "node:fs/promises"; await fs.writeFile(${JSON.stringify(markerPath)}, "spawned");\n`);
+  await fs.writeFile(bridgeConfigPath, `${JSON.stringify({ nodePath: process.execPath, ipcClientPath: markerClient })}\n`, { mode: 0o600 });
+  const oversizedActivation = `localapp://notification/open?ticket=${"界".repeat(1_400)}`;
+  assert.ok(Buffer.byteLength(oversizedActivation, "utf8") > 4_096);
+  assert.equal((await run(built.executable, [oversizedActivation])).code, 0);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await assert.rejects(fs.access(markerPath));
 });
 
 test("Linux and Windows exact-target adapter builds can be injected without mutating this host", async (t) => {
@@ -73,9 +89,11 @@ test("Linux and Windows exact-target adapter builds can be injected without muta
     arch: "x64",
     outputDirectory: path.join(crossRoot, "linux"),
   });
-  const linuxDesktop = await fs.readFile(path.join(linux.outputDirectory, "linux-x64", "localapp-handler.desktop"), "utf8");
-  assert.match(linuxDesktop, /^\[Desktop Entry\]\n/m);
-  assert.match(linuxDesktop, /MimeType=x-scheme-handler\/localapp;/);
+  const linuxTarget = path.join(linux.outputDirectory, "linux-x64");
+  assert.deepEqual(await fs.readdir(linuxTarget), ["localapp-native-ipc-client.mjs"]);
+  const linuxClient = await fs.readFile(path.join(linuxTarget, "localapp-native-ipc-client.mjs"), "utf8");
+  assert.equal(linuxClient.includes(process.execPath), false);
+  assert.equal(linuxClient.includes(linux.outputDirectory), false);
 
   const windows = await buildNativeAdapter({
     platform: "win32",
@@ -91,6 +109,12 @@ test("Linux and Windows exact-target adapter builds can be injected without muta
   assert.deepEqual((await fs.readdir(windows.outputDirectory)).sort(), ["adapter-manifest.json", "win32-x64"]);
   assert.equal(manifest.assets.some((asset) => asset.path === "win32-x64/localapp-native.exe"), true);
   assert.equal(manifest.assets.some((asset) => asset.path.includes("tauri") || asset.path.includes("electron")), false);
+
+  const otherMacArchitecture = process.arch === "arm64" ? "x64" : "arm64";
+  await assert.rejects(
+    buildNativeAdapter({ platform: "darwin", arch: otherMacArchitecture, outputDirectory: path.join(crossRoot, "wrong-mac-arch") }),
+    /cannot build darwin-.* on this host/i,
+  );
 });
 
 test("Windows helper preserves argv, has an explicit application path, and keeps browser opening outside Job ownership", async () => {
@@ -98,6 +122,8 @@ test("Windows helper preserves argv, has an explicit application path, and keeps
   assert.doesNotMatch(source, /collect::<Vec<_>>\(\)\.join\(" "\)/);
   assert.match(source, /CreateProcessW\(application_name\.as_ptr\(\)/);
   assert.match(source, /RegCreateKeyExW\(HKEY_CURRENT_USER/);
+  assert.match(source, /url\.as_bytes\(\)\.len\(\) > MAX_ACTIVATION_URL_BYTES/);
+  assert.ok(source.indexOf("url.as_bytes().len() > MAX_ACTIVATION_URL_BYTES") < source.indexOf("Command::new"));
   assert.match(source, /--scheme/);
   assert.match(source, /ShellExecuteW/);
 });

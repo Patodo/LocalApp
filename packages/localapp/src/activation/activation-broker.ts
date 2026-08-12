@@ -12,7 +12,7 @@ export interface ForwardActivationOptions {
   ipcClient: ActivationIpcClient;
   service: Pick<ServiceManager, "start">;
   deadlineMs?: number;
-  delay?: (milliseconds: number) => Promise<void>;
+  delay?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface BrowserOpener { (url: string): Promise<void>; }
@@ -36,6 +36,7 @@ const DEVICE_ACTION_STATUSES = new Set([
   "pending", "claimed", "awaiting_trust", "preparing", "running", "succeeded", "failed", "cancelled", "expired", "interrupted",
 ]);
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SERVICE_ABORT_DRAIN_LIMIT_MS = 100;
 
 /** Adapter-side, bounded private-IPC delivery. It never launches a path itself. */
 export async function forwardActivationToDaemon(options: ForwardActivationOptions): Promise<void> {
@@ -45,7 +46,7 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
   let lastError: unknown;
   while (Date.now() <= deadline) {
     try {
-      const response = await beforeDeadline(options.ipcClient.request({ type: "activation", url: options.url }), deadline);
+      const response = await beforeDeadline(() => options.ipcClient.request({ type: "activation", url: options.url }), deadline);
       if (response.ok && response.type === "activation") return;
       throw lifecycleError("activation_ipc_rejected", "The LocalApp daemon rejected the Scheme activation");
     } catch (error) {
@@ -54,7 +55,7 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
       if (!started) {
         started = true;
         try {
-          await beforeDeadline(options.service.start(), deadline);
+          await beforeDeadline((signal) => options.service.start(signal), deadline, { drainAfterAbort: true });
         } catch (startError) {
           if (!isDeadlineElapsed(startError)) throw startError;
           break;
@@ -62,7 +63,10 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
       }
       if (Date.now() >= deadline) break;
       try {
-        await beforeDeadline((options.delay ?? delay)(Math.min(100, Math.max(1, deadline - Date.now()))), deadline);
+        await beforeDeadline(
+          (signal) => (options.delay ?? delay)(Math.min(100, Math.max(1, deadline - Date.now())), signal),
+          deadline,
+        );
       } catch (delayError) {
         if (!isDeadlineElapsed(delayError)) throw delayError;
         break;
@@ -170,15 +174,51 @@ function isDeadlineElapsed(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "activation_deadline_elapsed";
 }
 
-async function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+async function beforeDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  deadline: number,
+  options: { drainAfterAbort?: boolean } = {},
+): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed");
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  let work: Promise<T> | undefined;
+  try {
+    work = Promise.resolve().then(() => operation(controller.signal));
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed"));
+        }, remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    if (timedOut && options.drainAfterAbort && work !== undefined) await drainAbortedService(work);
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (timedOut && !controller.signal.aborted) controller.abort();
+  }
+}
+
+/**
+ * The runtime service runner settles only after child_process `close`, so this
+ * reaps an aborted launch before preserving the original deadline failure.
+ * A non-cooperative injected test double cannot extend the activation forever.
+ */
+async function drainAbortedService(work: Promise<unknown>): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed")), remaining);
+    await Promise.race([
+      work.then(() => undefined, () => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, SERVICE_ABORT_DRAIN_LIMIT_MS);
         timer.unref?.();
       }),
     ]);
@@ -187,6 +227,20 @@ async function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise
   }
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const timer = setTimeout(cleanupAndResolve, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal?.reason);
+    };
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    function cleanupAndResolve() {
+      cleanup();
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }

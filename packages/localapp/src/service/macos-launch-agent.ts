@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
 import type { PlatformServiceOptions, ServiceInstallResult, ServiceManager } from "./service-manager.js";
-import { runServiceCommand } from "./service-manager.js";
+import { runServiceCommand, withAbortSignal } from "./service-manager.js";
 import { writeServiceFile, xmlEscape } from "./service-files.js";
 
 const LABEL = "com.localapp.daemon";
@@ -40,13 +40,13 @@ export function createMacosLaunchAgent(options: PlatformServiceOptions): Omit<Se
       await writeServiceFile(receiptPath, `${plistDigest}\n`);
       return { mode: "service", installed };
     },
-    async start(): Promise<void> {
-      const loaded = await options.run({ command: "/bin/launchctl", args: ["print", target] });
+    async start(signal?: AbortSignal): Promise<void> {
+      const loaded = await options.run(withAbortSignal({ command: "/bin/launchctl", args: ["print", target] }, signal));
       if (loaded.code !== 0) {
-        const result = await options.run({ command: "/bin/launchctl", args: ["bootstrap", domain, registrationPath] });
+        const result = await options.run(withAbortSignal({ command: "/bin/launchctl", args: ["bootstrap", domain, registrationPath] }, signal));
         if (result.code !== 0) throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent could not be registered");
       }
-      await runServiceCommand(options.run, { command: "/bin/launchctl", args: ["kickstart", "-k", target] });
+      await runServiceCommand(options.run, withAbortSignal({ command: "/bin/launchctl", args: ["kickstart", "-k", target] }, signal));
     },
     async stop(): Promise<void> {
       const result = await options.run({ command: "/bin/launchctl", args: ["bootout", domain, registrationPath] });

@@ -5,6 +5,7 @@ import UserNotifications
 
 private let bridgeConfigPreference = "LocalAppBridgeConfigPath"
 private let notificationEnvelopeLimit = 8 * 1024
+private let activationURLLimit = 4096
 
 private struct BridgeConfiguration: Decodable {
   let nodePath: String
@@ -61,7 +62,8 @@ final class LocalAppBridge: NSObject, NSApplicationDelegate, UNUserNotificationC
   }
 
   private func forward(_ url: String) -> Bool {
-    guard url.hasPrefix("localapp://"), let configuration = loadBridgeConfiguration() else {
+    guard url.hasPrefix("localapp://"), url.lengthOfBytes(using: .utf8) <= activationURLLimit,
+          let configuration = loadBridgeConfiguration() else {
       reportFailure("Scheme bridge configuration is unavailable")
       return false
     }

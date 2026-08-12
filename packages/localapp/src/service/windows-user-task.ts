@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
 import type { PlatformServiceOptions, ServiceInstallResult, ServiceManager } from "./service-manager.js";
-import { runServiceCommand } from "./service-manager.js";
+import { runServiceCommand, withAbortSignal } from "./service-manager.js";
 import { writeServiceFile } from "./service-files.js";
 
 const TASK_NAME = "LocalApp User Daemon";
@@ -23,8 +23,8 @@ export function createWindowsUserTask(options: PlatformServiceOptions): Omit<Ser
       });
       return { mode: "service", installed };
     },
-    async start(): Promise<void> {
-      await runServiceCommand(options.run, { command: scheduler, args: ["/Run", "/TN", TASK_NAME] });
+    async start(signal?: AbortSignal): Promise<void> {
+      await runServiceCommand(options.run, withAbortSignal({ command: scheduler, args: ["/Run", "/TN", TASK_NAME] }, signal));
     },
     async stop(): Promise<void> {
       const result = await options.run({ command: scheduler, args: ["/End", "/TN", TASK_NAME] });
