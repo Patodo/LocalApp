@@ -28,7 +28,7 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.equal((await fs.stat(path.join(extracted, "package/.localapp-artifact.json"))).isFile(), true);
   assert.deepEqual(manifest.dependencies ?? {}, {});
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
-  assert.equal((await fs.stat(path.join(extracted, "package/runtime/server/bin/localapp-server.mjs"))).isFile(), true);
+  assert.equal((await fs.stat(path.join(extracted, "package/runtime/server/bin/server.mjs"))).isFile(), true);
   const nativeRoot = path.join(extracted, "package/runtime/native");
   const nativeManifest = JSON.parse(await fs.readFile(path.join(nativeRoot, "adapter-manifest.json"), "utf8"));
   const nativeEntries = await fs.readdir(nativeRoot);
@@ -38,6 +38,20 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   const version = await run(process.execPath, [binary, "--version"], extracted);
   assert.equal(version.code, 0, version.stderr);
   assert.equal(version.stdout.trim(), "localapp 0.1.0");
+
+  const installPrefix = path.join(testRoot, "clean npm prefix");
+  const installed = await run("npm", ["install", "--prefix", installPrefix, "--ignore-scripts", tarball], projectDirectory);
+  assert.equal(installed.code, 0, installed.stderr);
+  const installedBinDirectory = path.join(installPrefix, "node_modules/.bin");
+  const installedVersion = await run("localapp", ["--version"], installPrefix, {
+    PATH: `${installedBinDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
+  });
+  assert.equal(installedVersion.code, 0, installedVersion.stderr);
+  assert.equal(installedVersion.stdout.trim(), "localapp 0.1.0");
+  const installedBins = (await fs.readdir(installedBinDirectory)).filter((entry) => !entry.startsWith("."));
+  assert.equal(installedBins.length > 0, true);
+  assert.equal(installedBins.every((entry) => entry.replace(/\.(?:cmd|ps1)$/i, "") === "localapp"), true);
+  assert.equal(await fs.stat(path.join(installPrefix, "node_modules/localapp/runtime/server/bin/server.mjs")).then(() => true, () => false), true);
 });
 
 async function listFiles(directory, prefix = "") {
@@ -50,9 +64,13 @@ async function listFiles(directory, prefix = "") {
   return files;
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, environment = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      cwd,
+      env: environment === undefined ? process.env : { ...process.env, ...environment },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");

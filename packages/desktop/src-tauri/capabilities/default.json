@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Minimum permissions for the windowless LocalApp Server bridge.",
-  "windows": [],
-  "permissions": []
-}

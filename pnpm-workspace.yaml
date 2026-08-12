@@ -6,7 +6,6 @@ packages:
   - "packages/sdk-core"
   - "packages/sdk-react"
   - "packages/sdk-agent"
-  - "packages/desktop"
   - "packages/web"
   - "init-repo"
   - "init-repo/runtime"

@@ -28,9 +28,9 @@ test("npm-installed sole TypeScript localapp runs its embedded canonical Server 
   t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
 
   const product = await buildLocalAppPackage({ outputDirectory: productDirectory });
-  const serverManifest = JSON.parse(await fs.readFile(path.join(product.outputDirectory, "runtime/server/.localapp-server-artifact.json"), "utf8"));
+  const serverManifest = JSON.parse(await fs.readFile(path.join(product.outputDirectory, "runtime/server/.localapp-server-runtime.json"), "utf8"));
   for (const required of [
-    "bin/localapp-server.mjs",
+    "bin/server.mjs",
     "bin/server-cli.cjs",
     "bin/worker.cjs",
     "runner/localapp-runner.mjs",

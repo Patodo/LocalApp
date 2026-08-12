@@ -72,7 +72,7 @@ export async function buildLocalAppPackage(options = {}) {
     files,
     bundleDigest: await sha256(path.join(binDirectory, "localapp.mjs")),
     serverBundleDigest: serverArtifact.bundleDigest,
-    serverEntrypoint: "runtime/server/bin/localapp-server.mjs",
+    serverEntrypoint: "runtime/server/bin/server.mjs",
   };
   await writeJson(manifestPath, {
     ...artifactDescriptor,

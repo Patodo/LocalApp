@@ -19,6 +19,7 @@ import { runServerCommand, runServerForeground } from "./commands/server.js";
 import { LocalAppDaemon } from "./daemon/daemon.js";
 import { createRuntimeLayout } from "./daemon/runtime-layout.js";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): Promise<number> {
@@ -99,6 +100,14 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
   }
 }
 
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (process.argv[1] !== undefined && isMainModule(fileURLToPath(import.meta.url), process.argv[1])) {
   runLocalApp(process.argv.slice(2)).then((code) => { process.exitCode = code; });
+}
+
+function isMainModule(modulePath: string, invokedPath: string): boolean {
+  try {
+    return fs.realpathSync(modulePath) === fs.realpathSync(invokedPath);
+  } catch {
+    return path.resolve(modulePath) === path.resolve(invokedPath);
+  }
 }

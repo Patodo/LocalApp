@@ -1,7 +1,7 @@
 {
   "name": "@localapp/server",
   "version": "0.0.1",
-  "private": false,
+  "private": true,
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,9 +18,6 @@
       "types": "./dist/device-action-ticket.d.ts",
       "default": "./dist/device-action-ticket.js"
     }
-  },
-  "bin": {
-    "localapp-server": "dist/cli.js"
   },
   "scripts": {
     "dev": "cross-env DATA_DIR=../../data BOOTSTRAP_API_KEY=dev-api-key-change-me JWT_SECRET=dev-jwt-secret-change-me tsx watch --include ../server-core/dist src/cli.ts start",

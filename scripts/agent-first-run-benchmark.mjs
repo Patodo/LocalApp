@@ -116,8 +116,7 @@ function runDeterministicSuite() {
     if (status === "failed") break;
   }
   const capabilities = readJson(path.join(root, "platform/capabilities.json"));
-  const cliVersion = fs.readFileSync(path.join(root, "packages/cli/Cargo.toml"), "utf8")
-    .match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? "unknown";
+  const cliVersion = readJson(path.join(root, "packages/localapp/package.json")).version ?? "unknown";
   return {
     schemaVersion: 1,
     mode: "deterministic",

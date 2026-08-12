@@ -12,7 +12,7 @@ const sourceDirectory = path.join(serverDirectory, "src");
 const defaultOutputDirectory = path.join(projectDirectory, "tmp/localapp-server-package");
 
 /**
- * Build the publishable, self-contained Server directory.
+ * Build the self-contained Server runtime embedded by the localapp package.
  * @param {{ outputDirectory?: string }} [options]
  */
 export async function buildServerPackage(options = {}) {
@@ -46,10 +46,10 @@ export async function buildServerPackage(options = {}) {
   await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-cli.ts")], outfile: path.join(binDirectory, "server-cli.cjs") });
   await build({ ...bundleOptions, entryPoints: [path.join(sourceDirectory, "package-worker.ts")], outfile: path.join(binDirectory, "worker.cjs") });
   const launcher = `#!/usr/bin/env node\nimport path from "node:path";\nimport { fileURLToPath } from "node:url";\n\nconst packageDirectory = path.dirname(fileURLToPath(import.meta.url));\nprocess.env.LOCALAPP_WORKER_PATH ??= path.join(packageDirectory, "worker.cjs");\nprocess.env.LOCALAPP_WEB_ROOT ??= path.resolve(packageDirectory, "../web");\nawait import("./server-cli.cjs");\n`;
-  await fs.writeFile(path.join(binDirectory, "localapp-server.mjs"), launcher, { mode: 0o755 });
+  await fs.writeFile(path.join(binDirectory, "server.mjs"), launcher, { mode: 0o755 });
   await fs.chmod(path.join(binDirectory, "server-cli.cjs"), 0o755);
   await fs.chmod(path.join(binDirectory, "worker.cjs"), 0o755);
-  await fs.chmod(path.join(binDirectory, "localapp-server.mjs"), 0o755);
+  await fs.chmod(path.join(binDirectory, "server.mjs"), 0o755);
 
   const require = createRequire(import.meta.url);
   const sqlEntry = require.resolve("sql.js", { paths: [serverDirectory] });
@@ -60,19 +60,19 @@ export async function buildServerPackage(options = {}) {
   await fs.cp(path.join(path.dirname(sqlEntry), "sql-wasm.wasm"), path.join(sqlDirectory, "dist/sql-wasm.wasm"));
 
   const packageJson = {
-    name: "@localapp/server",
+    name: "@localapp/server-runtime",
     version: sourcePackage.version,
     description: "LocalApp canonical Server",
     license: sourcePackage.license,
     type: "module",
-    bin: { "localapp-server": "bin/localapp-server.mjs" },
+    private: true,
     engines: { node: ">=24" },
   };
   await writeJson(path.join(outputDirectory, "package.json"), packageJson);
   const files = await listFiles(outputDirectory);
   const digests = {};
   for (const file of files) {
-    if (file === ".localapp-server-artifact.json") continue;
+    if (file === ".localapp-server-runtime.json") continue;
     digests[file] = await sha256(path.join(outputDirectory, file));
   }
   const bundleDigest = sha256Bytes(Buffer.from(JSON.stringify(digests)));
@@ -81,17 +81,17 @@ export async function buildServerPackage(options = {}) {
     name: packageJson.name,
     version: packageJson.version,
     nodeMajor: 24,
-    entrypoint: "bin/localapp-server.mjs",
+    entrypoint: "bin/server.mjs",
     worker: "bin/worker.cjs",
     bundleDigest,
     files: digests,
   };
-  await writeJson(path.join(outputDirectory, ".localapp-server-artifact.json"), manifest);
+  await writeJson(path.join(outputDirectory, ".localapp-server-runtime.json"), manifest);
   return {
     outputDirectory,
-    bin: path.join(outputDirectory, "bin/localapp-server.mjs"),
+    bin: path.join(outputDirectory, "bin/server.mjs"),
     worker: path.join(outputDirectory, "bin/worker.cjs"),
-    manifestPath: path.join(outputDirectory, ".localapp-server-artifact.json"),
+    manifestPath: path.join(outputDirectory, ".localapp-server-runtime.json"),
     bundleDigest,
   };
 }

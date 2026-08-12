@@ -11,13 +11,13 @@ interface StartOptions {
 }
 
 function parseStartOptions(args: string[]): StartOptions {
-  if (args[0] !== "start") throw new Error("Usage: localapp-server start [--data-dir <dir>] [--host <host>] [--port <port>]");
+  if (args[0] !== "start") throw new Error("Internal Server usage: start [--data-dir <dir>] [--host <host>] [--port <port>]");
   const options: StartOptions = {};
   for (let index = 1; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
     if (!value || !["--data-dir", "--host", "--port"].includes(flag)) {
-      throw new Error("Usage: localapp-server start [--data-dir <dir>] [--host <host>] [--port <port>]");
+      throw new Error("Internal Server usage: start [--data-dir <dir>] [--host <host>] [--port <port>]");
     }
     if (flag === "--data-dir") options.dataDir = value;
     if (flag === "--host") options.host = value;

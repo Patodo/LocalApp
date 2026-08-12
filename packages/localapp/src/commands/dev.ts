@@ -416,7 +416,7 @@ export async function writeDevConfig(options: WriteDevConfigOptions): Promise<vo
 }
 
 function embeddedServerLauncher(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../runtime/server/bin/localapp-server.mjs");
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../runtime/server/bin/server.mjs");
 }
 
 async function readManifest(projectDir: string): Promise<{ name: string }> {

@@ -15,7 +15,7 @@ describe("server lifecycle command", () => {
     await runServerCommand({ action: "start" }, {
       layout,
       artifactDirectory: "/artifact",
-      verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/localapp-server.mjs" })),
+      verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/server.mjs" })),
       publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/release", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
       createNativeAdapter,
       createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false })), start: vi.fn(), stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
@@ -57,7 +57,7 @@ describe("server lifecycle command", () => {
   it("reports Linux foreground fallback without trying to start a missing user manager", async () => {
     const start = vi.fn(async () => undefined);
     const result = await runServerCommand({ action: "start" }, {
-      layout, artifactDirectory: "/artifact", verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/localapp-server.mjs" })),
+      layout, artifactDirectory: "/artifact", verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/server.mjs" })),
       publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/release", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
       createNativeAdapter: async () => ({ installScheme: async () => undefined }),
       createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false, reason: "systemd user manager unavailable" })), start, stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
