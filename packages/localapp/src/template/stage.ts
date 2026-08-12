@@ -34,6 +34,10 @@ export async function stageBuiltinTemplate({ repositoryRoot, outputDirectory, ve
     path.join(repositoryRoot, "packages/localapp/src/template/sync-template.cjs"),
     path.join(outputDirectory, "runtime/sync-template.cjs"),
   );
+  await fs.copyFile(
+    path.join(repositoryRoot, "packages/localapp/src/template/sync-template-command.cjs"),
+    path.join(outputDirectory, "runtime/sync-template-command.cjs"),
+  );
   await fs.writeFile(path.join(outputDirectory, "runtime/version.json"), `${JSON.stringify({ cliVersion: version }, null, 2)}\n`);
   await postprocessTemplatePackageJson(outputDirectory);
 }

@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { buildSyncInvocation } = require("./sync-template-command.cjs");
 
 let executable;
 try {
@@ -14,29 +15,33 @@ if (executable === undefined && process.exitCode !== 1) {
   process.stderr.write("Warning: localapp executable was not found; managed template sync was skipped.\n");
   process.exitCode = 0;
 } else if (executable !== undefined) {
-  const useWindowsShell = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(executable);
-  const child = spawn(executable, ["sync-template", "--quiet"], {
-    shell: useWindowsShell,
-    stdio: "inherit",
-    windowsHide: true,
-  });
-  let spawnFailed = false;
+  try {
+    const invocation = buildSyncInvocation(executable);
+    const child = spawn(invocation.command, invocation.args, {
+      ...invocation.spawnOptions,
+      stdio: "inherit",
+    });
+    let spawnFailed = false;
 
-  child.once("error", (error) => {
-    spawnFailed = true;
-    if (error && error.code === "ENOENT") {
-      process.stderr.write("Warning: localapp executable was not found; managed template sync was skipped.\n");
-      process.exitCode = 0;
-      return;
-    }
+    child.once("error", (error) => {
+      spawnFailed = true;
+      if (error && error.code === "ENOENT" && !fs.existsSync(executable)) {
+        process.stderr.write("Warning: localapp executable was not found; managed template sync was skipped.\n");
+        process.exitCode = 0;
+        return;
+      }
+      process.stderr.write("LocalApp managed template sync could not be started.\n");
+      process.exitCode = 1;
+    });
+
+    child.once("exit", (code, signal) => {
+      if (spawnFailed) return;
+      process.exitCode = signal === null && code !== null ? code : 1;
+    });
+  } catch {
     process.stderr.write("LocalApp managed template sync could not be started.\n");
     process.exitCode = 1;
-  });
-
-  child.once("exit", (code, signal) => {
-    if (spawnFailed) return;
-    process.exitCode = signal === null && code !== null ? code : 1;
-  });
+  }
 }
 
 function resolveLocalApp() {

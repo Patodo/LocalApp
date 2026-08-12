@@ -1,23 +1,27 @@
 import crypto from "node:crypto";
-import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError, LocalAppLifecycleError } from "../errors.js";
 import {
   assertTreeHasNoSymlinks,
   atomicWriteFile,
+  capturePathIdentity,
+  guardedRename,
   isInside,
   isManagedSkillName,
   lstatOptional,
   managedSkillNames,
   readProjectConfig,
+  verifyDirectoryGuard,
   verifyManagedProject,
+  verifyPathIdentity,
   verifyProjectBase,
   writeProjectConfig,
+  type DirectoryGuard,
+  type LifecycleMutationHooks,
   type VerifiedProject,
 } from "../project/safety.js";
 import { rewritePackageJsonForEjectValue } from "../template/package-json.js";
-import type { LifecycleMoveOperations } from "./sync-template.js";
 
 export interface EjectResult {
   ejected: true;
@@ -38,11 +42,9 @@ interface EjectTransaction {
   ejectedPackageContents: string;
 }
 
-const defaultMoveOperations: LifecycleMoveOperations = { rename: (source, destination) => fs.rename(source, destination) };
-
 export async function ejectManagedTemplate(
   projectDir: string,
-  operations: LifecycleMoveOperations = defaultMoveOperations,
+  hooks: LifecycleMutationHooks = {},
 ): Promise<EjectResult> {
   const project = await verifyProjectBase(projectDir);
   let config = await readProjectConfig(project);
@@ -57,15 +59,16 @@ export async function ejectManagedTemplate(
     await verifyManagedProject(project);
     transaction = await prepareTransaction(project);
     config = { ...config, templateState: "ejecting", ejectTransaction: transaction };
-    await writeProjectConfig(project, config);
+    await writeProjectConfig(project, config, hooks);
   }
 
   try {
-    for (const move of transaction.moves) await resumeMove(project, move, operations);
-    await installEjectedPackage(project, transaction);
+    for (const move of transaction.moves) await resumeMove(project, move, hooks);
+    await installEjectedPackage(project, transaction, hooks);
+    await hooks.beforeFinalMarker?.();
     const finalConfig: Record<string, unknown> = { ...config, ejected: true, templateState: "ejected" };
     delete finalConfig.ejectTransaction;
-    await writeProjectConfig(project, finalConfig);
+    await writeProjectConfig(project, finalConfig, hooks);
     return { ejected: true };
   } catch (error) {
     if (error instanceof LocalAppLifecycleError) throw error;
@@ -86,7 +89,7 @@ async function prepareTransaction(project: VerifiedProject): Promise<EjectTransa
   const ejectedPackageContents = `${JSON.stringify(rewritePackageJsonForEjectValue(packageJson), null, 2)}\n`;
   const moves: EjectMove[] = [];
   moves.push(await prepareMove(project, ".localapp/runtime", "src/_localapp_runtime"));
-  for (const name of await managedSkillNames(project.skillsDirectory)) {
+  for (const name of await managedSkillNames(project.skillsDirectory, project.skillsGuard)) {
     moves.push(await prepareMove(project, `.claude/skills/${name}`, `.claude/skills/custom-${name}`));
   }
   return {
@@ -101,8 +104,13 @@ async function prepareTransaction(project: VerifiedProject): Promise<EjectTransa
 async function prepareMove(project: VerifiedProject, source: string, destination: string): Promise<EjectMove> {
   const sourcePath = projectPath(project, source);
   const destinationPath = projectPath(project, destination);
+  const sourceParent = moveParentGuard(project, source);
+  const destinationParentGuard = moveParentGuard(project, destination);
+  await verifyDirectoryGuard(sourceParent);
+  await verifyDirectoryGuard(destinationParentGuard);
   const sourceStat = await fs.lstat(sourcePath, { bigint: true });
   if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) throw unsafeTransaction();
+  await capturePathIdentity(sourcePath);
   await assertTreeHasNoSymlinks(sourcePath);
   if (await lstatOptional(destinationPath) !== undefined) throw collision(destination);
   const destinationParent = await fs.lstat(path.dirname(destinationPath), { bigint: true });
@@ -112,36 +120,49 @@ async function prepareMove(project: VerifiedProject, source: string, destination
   return { source, destination, device: sourceStat.dev.toString(), inode: sourceStat.ino.toString() };
 }
 
-async function resumeMove(project: VerifiedProject, move: EjectMove, operations: LifecycleMoveOperations): Promise<void> {
+async function resumeMove(project: VerifiedProject, move: EjectMove, hooks: LifecycleMutationHooks): Promise<void> {
   const sourcePath = projectPath(project, move.source);
   const destinationPath = projectPath(project, move.destination);
+  const sourceParent = moveParentGuard(project, move.source);
+  const destinationParent = moveParentGuard(project, move.destination);
   const source = await fs.lstat(sourcePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
   const destination = await fs.lstat(destinationPath, { bigint: true }).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
   if (source !== undefined) {
     if (!matchesIdentity(source, move) || source.isSymbolicLink() || !source.isDirectory()) throw unsafeTransaction();
     await assertTreeHasNoSymlinks(sourcePath);
     if (destination !== undefined) throw collision(move.destination);
-    const destinationParent = await fs.lstat(path.dirname(destinationPath), { bigint: true });
-    if (destinationParent.dev !== source.dev) {
+    await verifyDirectoryGuard(sourceParent);
+    await verifyDirectoryGuard(destinationParent);
+    const destinationParentStat = await fs.lstat(path.dirname(destinationPath), { bigint: true });
+    if (destinationParentStat.dev !== source.dev) {
       throw lifecycleError("template_eject_filesystem", "Eject requires managed sources and destinations to be directories on the same filesystem.");
     }
-    await operations.rename(sourcePath, destinationPath);
+    await guardedRename({
+      source: sourcePath,
+      destination: destinationPath,
+      sourceIdentity: move,
+      sourceParent,
+      destinationParent,
+      hooks,
+    });
     return;
   }
   if (destination === undefined || !matchesIdentity(destination, move) || destination.isSymbolicLink() || !destination.isDirectory()) {
     throw collision(move.destination);
   }
+  await verifyDirectoryGuard(destinationParent);
+  await verifyPathIdentity(destinationPath, move);
   await assertTreeHasNoSymlinks(destinationPath);
 }
 
-async function installEjectedPackage(project: VerifiedProject, transaction: EjectTransaction): Promise<void> {
+async function installEjectedPackage(project: VerifiedProject, transaction: EjectTransaction, hooks: LifecycleMutationHooks): Promise<void> {
   const current = await fs.readFile(project.packagePath, "utf8");
   const currentHash = sha256(current);
   if (currentHash === transaction.ejectedPackageHash) return;
   if (currentHash !== transaction.originalPackageHash) {
     throw lifecycleError("template_eject_collision", "package.json changed during eject. Restore the original file or finish the interrupted eject manually.");
   }
-  await atomicWriteFile(project.packagePath, transaction.ejectedPackageContents);
+  await atomicWriteFile(project.packagePath, transaction.ejectedPackageContents, project.rootGuard, hooks);
 }
 
 function parseTransaction(value: unknown, project: VerifiedProject): EjectTransaction {
@@ -178,8 +199,15 @@ function projectPath(project: VerifiedProject, relative: string): string {
   return target;
 }
 
-function matchesIdentity(stat: BigIntStats, move: EjectMove): boolean {
+function matchesIdentity(stat: { dev: bigint; ino: bigint }, move: EjectMove): boolean {
   return stat.dev.toString() === move.device && stat.ino.toString() === move.inode;
+}
+
+function moveParentGuard(project: VerifiedProject, relativePath: string): DirectoryGuard {
+  if (relativePath.startsWith(".localapp/")) return project.localAppGuard;
+  if (relativePath.startsWith(".claude/skills/")) return project.skillsGuard;
+  if (relativePath.startsWith("src/")) return project.sourceGuard;
+  throw unsafeTransaction();
 }
 
 function sha256(value: string): string {

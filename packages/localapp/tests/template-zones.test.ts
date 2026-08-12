@@ -136,15 +136,97 @@ describe("managed template zones", () => {
     let moves = 0;
 
     await expect(syncManagedTemplate(project, { quiet: true }, {
-      rename: async (source, destination) => {
+      beforeRename: async () => {
         moves += 1;
         if (moves === 3) throw new Error("simulated rename interruption");
-        await fs.rename(source, destination);
       },
     })).rejects.toMatchObject({ code: "template_sync_failed" });
 
     expect(await fs.readFile(path.join(project, ".localapp/runtime/version.json"), "utf8")).toBe('{"cliVersion":"old-runtime"}\n');
     expect(await fs.readFile(path.join(project, ".claude/skills/localapp/SKILL.md"), "utf8")).toBe("old managed skill\n");
+  });
+
+  it.runIf(process.platform !== "win32")("refuses replacement of .localapp immediately before a sync rename", async () => {
+    // Break caught: replacing a validated mutation parent after preflight redirects the rename into an external tree.
+    const heldLocalApp = path.join(directory, "held-localapp");
+    const externalLocalApp = path.join(directory, "external-race-localapp");
+    await fs.mkdir(externalLocalApp);
+    await fs.writeFile(path.join(externalLocalApp, "sentinel.txt"), "external sentinel\n");
+    let replaced = false;
+
+    await expect(syncManagedTemplate(project, { quiet: true }, {
+      beforeRename: async () => {
+        if (replaced) return;
+        replaced = true;
+        await fs.rename(path.join(project, ".localapp"), heldLocalApp);
+        await fs.symlink(externalLocalApp, path.join(project, ".localapp"), "dir");
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    expect(await fs.readFile(path.join(externalLocalApp, "sentinel.txt"), "utf8")).toBe("external sentinel\n");
+    expect((await fs.readdir(externalLocalApp)).sort()).toEqual(["sentinel.txt"]);
+    await fs.rm(path.join(project, ".localapp"));
+    await fs.rename(heldLocalApp, path.join(project, ".localapp"));
+  });
+
+  it.runIf(process.platform !== "win32")("refuses replacement of .claude immediately before a managed-skill rename", async () => {
+    // Break caught: replacing .claude after preflight lets a later managed-skill rename target an external skills parent.
+    const heldClaude = path.join(directory, "held-claude");
+    const externalClaude = path.join(directory, "external-race-claude");
+    await fs.mkdir(path.join(externalClaude, "skills"), { recursive: true });
+    await fs.writeFile(path.join(externalClaude, "sentinel.txt"), "external sentinel\n");
+    let replaced = false;
+
+    await expect(syncManagedTemplate(project, { quiet: true }, {
+      beforeRename: async (source) => {
+        if (replaced || !source.includes(`${path.sep}.claude${path.sep}`)) return;
+        replaced = true;
+        await fs.rename(path.join(project, ".claude"), heldClaude);
+        await fs.symlink(externalClaude, path.join(project, ".claude"), "dir");
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    expect(await fs.readFile(path.join(externalClaude, "sentinel.txt"), "utf8")).toBe("external sentinel\n");
+    expect(await fs.readdir(path.join(externalClaude, "skills"))).toEqual([]);
+    await fs.rm(path.join(project, ".claude"));
+    await fs.rename(heldClaude, path.join(project, ".claude"));
+  });
+
+  it("preserves stage and backup recovery data when sync rollback fails", async () => {
+    // Break caught: cleanup after failed rollback deletes the only copy of the old managed runtime.
+    await fs.writeFile(path.join(project, ".localapp/runtime/version.json"), '{"cliVersion":"old-runtime"}\n');
+    const externalSentinel = path.join(directory, "outside-sentinel.txt");
+    await fs.writeFile(externalSentinel, "outside\n");
+    let guardedMoves = 0;
+
+    const failure = syncManagedTemplate(project, { quiet: true }, {
+      beforeRename: async () => {
+        guardedMoves += 1;
+        if (guardedMoves === 3 || guardedMoves === 5) throw new Error("simulated rename failure");
+      },
+    });
+
+    await expect(failure).rejects.toMatchObject({ code: "template_sync_recovery_required" });
+    const localAppEntries = await fs.readdir(path.join(project, ".localapp"));
+    const backupName = localAppEntries.find((name) => name.startsWith(".sync-backup-"));
+    const stageName = localAppEntries.find((name) => name.startsWith(".sync-stage-"));
+    expect(backupName).toBeDefined();
+    expect(stageName).toBeDefined();
+    expect(await fs.readFile(path.join(project, ".localapp", backupName!, "runtime/version.json"), "utf8")).toBe('{"cliVersion":"old-runtime"}\n');
+    expect(await fs.readFile(externalSentinel, "utf8")).toBe("outside\n");
+  });
+
+  it("does not roll back a committed sync when best-effort cleanup fails", async () => {
+    // Break caught: cleanup inside the transaction catch restores old files after the new managed zone was fully installed.
+    await fs.writeFile(path.join(project, ".localapp/runtime/version.json"), '{"cliVersion":"old-runtime"}\n');
+
+    const result = await syncManagedTemplate(project, { quiet: true }, {
+      beforeRemove: async () => { throw new Error("simulated cleanup failure"); },
+    });
+
+    expect(result).toEqual({ updated: true, version });
+    expect(JSON.parse(await fs.readFile(path.join(project, ".localapp/runtime/version.json"), "utf8"))).toEqual({ cliVersion: version });
+    expect((await fs.readdir(path.join(project, ".localapp"))).some((name) => name.startsWith(".sync-backup-"))).toBe(true);
   });
 
   it("eject copies managed files into user ownership and permanently refuses later sync", async () => {
@@ -162,10 +244,9 @@ describe("managed template zones", () => {
     // Break caught: interruption after moving runtime but before skills/package config leaves eject unable to retry safely.
     let moves = 0;
     await expect(ejectManagedTemplate(project, {
-      rename: async (source, destination) => {
+      beforeRename: async () => {
         moves += 1;
         if (moves === 2) throw new Error("simulated eject interruption");
-        await fs.rename(source, destination);
       },
     })).rejects.toMatchObject({ code: "template_eject_failed" });
 
@@ -184,6 +265,26 @@ describe("managed template zones", () => {
       templateState: "ejected",
     });
     expect(JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8")).scripts).not.toHaveProperty("postinstall");
+  });
+
+  it("resumes eject after package rewrite but before the final ejected marker", async () => {
+    // Break caught: retry after package commit mistakes the rewritten package or moved directories for user collisions.
+    await expect(ejectManagedTemplate(project, {
+      beforeFinalMarker: async () => { throw new Error("simulated final marker interruption"); },
+    })).rejects.toMatchObject({ code: "template_eject_failed" });
+
+    expect(await exists(path.join(project, "src/_localapp_runtime/server-core/dist/index.js"))).toBe(true);
+    expect(await exists(path.join(project, ".claude/skills/custom-localapp/SKILL.md"))).toBe(true);
+    expect(JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8")).scripts).not.toHaveProperty("postinstall");
+    const interruptedConfig = JSON.parse(await fs.readFile(path.join(project, ".localapp/project-config.json"), "utf8"));
+    expect(interruptedConfig).toMatchObject({ templateState: "ejecting" });
+    expect(interruptedConfig.ejected).toBeUndefined();
+
+    await expect(ejectManagedTemplate(project)).resolves.toEqual({ ejected: true });
+    expect(JSON.parse(await fs.readFile(path.join(project, ".localapp/project-config.json"), "utf8"))).toMatchObject({
+      templateState: "ejected",
+      ejected: true,
+    });
   });
 
   it("never treats an unrelated eject destination as a resumable move", async () => {

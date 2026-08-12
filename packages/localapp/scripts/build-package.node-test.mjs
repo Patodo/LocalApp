@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,22 @@ import { buildLocalAppPackage } from "./build-package.mjs";
 const projectDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const testRoot = path.join(projectDirectory, "tmp/task-1-package-test");
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+
+test("Windows sync command builder uses explicit cmd.exe invocation for a spaced special-character path", () => {
+  const { buildSyncInvocation } = require("../src/template/sync-template-command.cjs");
+  const executable = "C:\\Program Files\\Local & App!^(test)\\localapp.cmd";
+
+  assert.deepEqual(buildSyncInvocation(executable, "win32", "C:\\Windows\\System32\\cmd.exe"), {
+    command: "C:\\Windows\\System32\\cmd.exe",
+    args: ["/d", "/s", "/v:off", "/c", '""C:\\Program Files\\Local & App!^(test)\\localapp.cmd" sync-template --quiet"'],
+    spawnOptions: { shell: false, windowsHide: true, windowsVerbatimArguments: true },
+  });
+  assert.throws(
+    () => buildSyncInvocation("C:\\unsafe%PATH%\\localapp.cmd", "win32", "cmd.exe"),
+    /unsafe Windows command path/,
+  );
+});
 
 test("packed product exposes one localapp binary without workspace references", async (t) => {
   await fs.rm(testRoot, { recursive: true, force: true });
@@ -94,6 +111,46 @@ test("packed postinstall wrapper treats only a missing localapp executable as a 
   if (process.platform !== "win32") await fs.chmod(failingExecutable, 0o755);
   const failure = await runNode(wrapper, { PATH: failingPath });
   assert.equal(failure.code, 23, failure.stderr);
+});
+
+test("pnpm-packed tarball wrapper handles missing executable and genuine child failure", async (t) => {
+  const packDirectory = path.join(testRoot, "wrapper packed tarball");
+  const unpackDirectory = path.join(testRoot, "wrapper unpacked tarball");
+  const emptyPath = path.join(testRoot, "wrapper empty path");
+  const failingPath = path.join(testRoot, "wrapper & failing path (special)!");
+  for (const cleanupPath of [packDirectory, unpackDirectory, emptyPath, failingPath]) {
+    t.after(() => fs.rm(cleanupPath, { recursive: true, force: true }));
+    await fs.mkdir(cleanupPath, { recursive: true });
+  }
+
+  await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
+  await runProcess("tar", ["-xzf", path.join(packDirectory, "localapp-0.1.0.tgz"), "-C", unpackDirectory]);
+  const wrapper = path.join(unpackDirectory, "package/template/runtime/sync-template.cjs");
+
+  const missing = await runNode(wrapper, { PATH: emptyPath });
+  assert.equal(missing.code, 0, missing.stderr);
+  assert.match(missing.stderr, /localapp executable was not found; managed template sync was skipped/i);
+
+  const failingExecutable = path.join(failingPath, process.platform === "win32" ? "localapp.cmd" : "localapp");
+  await fs.writeFile(failingExecutable, process.platform === "win32" ? "@exit /b 29\r\n" : "#!/bin/sh\nexit 29\n");
+  if (process.platform !== "win32") await fs.chmod(failingExecutable, 0o755);
+  const failure = await runNode(wrapper, { PATH: failingPath });
+  assert.equal(failure.code, 29, failure.stderr);
+});
+
+test("Windows packed wrapper executes a cmd shim from a spaced special-character PATH entry", { skip: process.platform !== "win32" }, async (t) => {
+  const outputDirectory = path.join(testRoot, "windows wrapper package");
+  const executableDirectory = path.join(testRoot, "windows & wrapper path (special)!");
+  t.after(() => fs.rm(outputDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rm(executableDirectory, { recursive: true, force: true }));
+  await fs.mkdir(executableDirectory, { recursive: true });
+  const result = await buildLocalAppPackage({ outputDirectory });
+  const wrapper = path.join(result.outputDirectory, "template/runtime/sync-template.cjs");
+  await fs.writeFile(path.join(executableDirectory, "localapp.cmd"), "@exit /b 31\r\n");
+
+  const failure = await runNode(wrapper, { PATH: executableDirectory });
+
+  assert.equal(failure.code, 31, failure.stderr);
 });
 
 function run(directory, args, cwd = directory) {

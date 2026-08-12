@@ -2,12 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError, LocalAppLifecycleError } from "../errors.js";
 import {
-  lstatOptional,
+  captureDirectoryGuard,
+  capturePathIdentity,
+  guardedRemoveTree,
+  guardedRename,
   managedSkillNames,
   readProjectConfig,
-  removeVerifiedTree,
+  verifyDirectoryGuard,
   verifyManagedProject,
   verifyProjectBase,
+  type DirectoryGuard,
+  type LifecycleMutationHooks,
+  type PathIdentity,
 } from "../project/safety.js";
 import { copyManagedZone, resolveTemplateDirectory } from "./init.js";
 
@@ -16,66 +22,99 @@ export interface SyncResult {
   version: string;
 }
 
-export interface LifecycleMoveOperations {
-  rename(source: string, destination: string): Promise<void>;
+interface PathReference {
+  path: string;
+  parent: DirectoryGuard;
+  identity: PathIdentity;
 }
 
-const defaultMoveOperations: LifecycleMoveOperations = { rename: (source, destination) => fs.rename(source, destination) };
-
 interface SwapEntry {
-  current: string;
-  staged?: string;
-  backup: string;
+  currentPath: string;
+  currentParent: DirectoryGuard;
+  current?: PathReference;
+  staged?: PathReference;
+  backupPath: string;
+  backupParent: DirectoryGuard;
   movedCurrent: boolean;
   installedStaged: boolean;
+}
+
+interface RecoveryRoot {
+  path: string;
+  parent: DirectoryGuard;
+  guard: DirectoryGuard;
+  identity: PathIdentity;
 }
 
 export async function syncManagedTemplate(
   projectDir: string,
   { quiet }: { quiet: boolean },
-  operations: LifecycleMoveOperations = defaultMoveOperations,
+  hooks: LifecycleMutationHooks = {},
 ): Promise<SyncResult> {
   const project = await verifyProjectBase(projectDir);
   const config = await readProjectConfig(project);
   assertSyncAllowed(config);
   await verifyManagedProject(project);
   const templateDirectory = await resolveTemplateDirectory();
-  const stageRoot = await fs.mkdtemp(path.join(project.localAppDirectory, ".sync-stage-"));
-  const backupRoot = await fs.mkdtemp(path.join(project.localAppDirectory, ".sync-backup-"));
+  const stageRoot = await createRecoveryRoot(project.localAppDirectory, ".sync-stage-", project.localAppGuard);
+  let backupRoot: RecoveryRoot | undefined;
   let swaps: SwapEntry[] = [];
+  let version = "";
 
   try {
-    await copyManagedZone(templateDirectory, stageRoot);
-    const stagedRuntime = path.join(stageRoot, ".localapp/runtime");
-    const stagedSkills = path.join(stageRoot, ".claude/skills");
-    const version = await readStagedVersion(stagedRuntime);
-    const oldSkills = await managedSkillNames(project.skillsDirectory);
-    const newSkills = await managedSkillNames(stagedSkills);
-    await fs.mkdir(path.join(backupRoot, "skills"));
+    backupRoot = await createRecoveryRoot(project.localAppDirectory, ".sync-backup-", project.localAppGuard);
+    await copyManagedZone(templateDirectory, stageRoot.path);
+    const stagedLocalApp = await captureDirectoryGuard(path.join(stageRoot.path, ".localapp"), stageRoot.guard);
+    const stagedRuntimePath = path.join(stagedLocalApp.directory, "runtime");
+    const stagedRuntime = await pathReference(stagedRuntimePath, stagedLocalApp);
+    const stagedClaude = await captureDirectoryGuard(path.join(stageRoot.path, ".claude"), stageRoot.guard);
+    const stagedSkills = await captureDirectoryGuard(path.join(stagedClaude.directory, "skills"), stagedClaude);
+    version = await readStagedVersion(stagedRuntimePath);
+    const oldSkills = await managedSkillNames(project.skillsDirectory, project.skillsGuard);
+    const newSkills = await managedSkillNames(stagedSkills.directory, stagedSkills);
+    await verifyDirectoryGuard(backupRoot.guard);
+    await fs.mkdir(path.join(backupRoot.path, "skills"));
+    const backupSkills = await captureDirectoryGuard(path.join(backupRoot.path, "skills"), backupRoot.guard);
     swaps = [
-      createSwap(project.runtimeDirectory, stagedRuntime, path.join(backupRoot, "runtime")),
-      ...[...new Set([...oldSkills, ...newSkills])].sort().map((name) => createSwap(
-        path.join(project.skillsDirectory, name),
-        newSkills.includes(name) ? path.join(stagedSkills, name) : undefined,
-        path.join(backupRoot, "skills", name),
-      )),
+      {
+        currentPath: project.runtimeDirectory,
+        currentParent: project.localAppGuard,
+        current: await pathReference(project.runtimeDirectory, project.localAppGuard),
+        staged: stagedRuntime,
+        backupPath: path.join(backupRoot.path, "runtime"),
+        backupParent: backupRoot.guard,
+        movedCurrent: false,
+        installedStaged: false,
+      },
+      ...await Promise.all([...new Set([...oldSkills, ...newSkills])].sort().map(async (name): Promise<SwapEntry> => ({
+        currentPath: path.join(project.skillsDirectory, name),
+        currentParent: project.skillsGuard,
+        ...(oldSkills.includes(name) ? { current: await pathReference(path.join(project.skillsDirectory, name), project.skillsGuard) } : {}),
+        ...(newSkills.includes(name) ? { staged: await pathReference(path.join(stagedSkills.directory, name), stagedSkills) } : {}),
+        backupPath: path.join(backupSkills.directory, name),
+        backupParent: backupSkills,
+        movedCurrent: false,
+        installedStaged: false,
+      }))),
     ];
 
-    for (const swap of swaps) await applySwap(swap, operations);
-    await removeVerifiedTree(backupRoot);
-    await removeVerifiedTree(stageRoot);
-    if (!quiet) process.stderr.write(`Updated managed template files to ${version}.\n`);
-    return { updated: true, version };
+    for (const swap of swaps) await applySwap(swap, hooks);
   } catch (error) {
-    const rollbackSucceeded = await rollbackSwaps(swaps, operations);
-    await removeVerifiedTree(stageRoot).catch(() => undefined);
-    await removeVerifiedTree(backupRoot).catch(() => undefined);
-    if (error instanceof LocalAppLifecycleError) throw error;
+    const rollbackSucceeded = await rollbackSwaps(swaps, hooks);
     if (!rollbackSucceeded) {
-      throw lifecycleError("template_sync_rollback_failed", "Managed template sync failed and rollback could not complete. Restore the managed runtime from version control before retrying.");
+      throw lifecycleError(
+        "template_sync_recovery_required",
+        "Managed template rollback failed. Recovery data remains in .localapp/.sync-backup-* and .localapp/.sync-stage-*; restore it before retrying.",
+      );
     }
+    await cleanupRecoveryRoots([backupRoot, stageRoot], hooks);
+    if (error instanceof LocalAppLifecycleError) throw error;
     throw lifecycleError("template_sync_failed", "Managed template sync failed. The previous managed files were restored; check project permissions and retry.");
   }
+
+  await cleanupRecoveryRoots([backupRoot, stageRoot], hooks);
+  if (!quiet) process.stderr.write(`Updated managed template files to ${version}.\n`);
+  return { updated: true, version };
 }
 
 export function assertSyncAllowed(config: Record<string, unknown>): void {
@@ -87,6 +126,18 @@ export function assertSyncAllowed(config: Record<string, unknown>): void {
   }
 }
 
+async function createRecoveryRoot(parentPath: string, prefix: string, parent: DirectoryGuard): Promise<RecoveryRoot> {
+  await verifyDirectoryGuard(parent);
+  const recoveryPath = await fs.mkdtemp(path.join(parentPath, prefix));
+  const guard = await captureDirectoryGuard(recoveryPath, parent);
+  return { path: recoveryPath, parent, guard, identity: await capturePathIdentity(recoveryPath) };
+}
+
+async function pathReference(target: string, parent: DirectoryGuard): Promise<PathReference> {
+  await verifyDirectoryGuard(parent);
+  return { path: target, parent, identity: await capturePathIdentity(target) };
+}
+
 async function readStagedVersion(runtimeDirectory: string): Promise<string> {
   const parsed: unknown = JSON.parse(await fs.readFile(path.join(runtimeDirectory, "version.json"), "utf8"));
   if (parsed === null || typeof parsed !== "object" || typeof (parsed as { cliVersion?: unknown }).cliVersion !== "string") {
@@ -95,30 +146,68 @@ async function readStagedVersion(runtimeDirectory: string): Promise<string> {
   return (parsed as { cliVersion: string }).cliVersion;
 }
 
-function createSwap(current: string, staged: string | undefined, backup: string): SwapEntry {
-  return { current, staged, backup, movedCurrent: false, installedStaged: false };
-}
-
-async function applySwap(swap: SwapEntry, operations: LifecycleMoveOperations): Promise<void> {
-  if (await lstatOptional(swap.current) !== undefined) {
-    await operations.rename(swap.current, swap.backup);
+async function applySwap(swap: SwapEntry, hooks: LifecycleMutationHooks): Promise<void> {
+  if (swap.current !== undefined) {
+    await guardedRename({
+      source: swap.current.path,
+      destination: swap.backupPath,
+      sourceIdentity: swap.current.identity,
+      sourceParent: swap.current.parent,
+      destinationParent: swap.backupParent,
+      hooks,
+    });
     swap.movedCurrent = true;
   }
   if (swap.staged !== undefined) {
-    await operations.rename(swap.staged, swap.current);
+    await guardedRename({
+      source: swap.staged.path,
+      destination: swap.currentPath,
+      sourceIdentity: swap.staged.identity,
+      sourceParent: swap.staged.parent,
+      destinationParent: swap.currentParent,
+      hooks,
+    });
     swap.installedStaged = true;
   }
 }
 
-async function rollbackSwaps(swaps: SwapEntry[], operations: LifecycleMoveOperations): Promise<boolean> {
+async function rollbackSwaps(swaps: SwapEntry[], hooks: LifecycleMutationHooks): Promise<boolean> {
   let succeeded = true;
   for (const swap of [...swaps].reverse()) {
     try {
-      if (swap.installedStaged && swap.staged !== undefined) await operations.rename(swap.current, swap.staged);
-      if (swap.movedCurrent) await operations.rename(swap.backup, swap.current);
+      if (swap.installedStaged && swap.staged !== undefined) {
+        await guardedRename({
+          source: swap.currentPath,
+          destination: swap.staged.path,
+          sourceIdentity: swap.staged.identity,
+          sourceParent: swap.currentParent,
+          destinationParent: swap.staged.parent,
+          hooks,
+        });
+      }
+      if (swap.movedCurrent && swap.current !== undefined) {
+        await guardedRename({
+          source: swap.backupPath,
+          destination: swap.currentPath,
+          sourceIdentity: swap.current.identity,
+          sourceParent: swap.backupParent,
+          destinationParent: swap.currentParent,
+          hooks,
+        });
+      }
     } catch {
       succeeded = false;
     }
   }
   return succeeded;
+}
+
+async function cleanupRecoveryRoots(
+  roots: Array<RecoveryRoot | undefined>,
+  hooks: LifecycleMutationHooks,
+): Promise<void> {
+  for (const root of roots) {
+    if (root === undefined) continue;
+    await guardedRemoveTree({ target: root.path, targetIdentity: root.identity, parent: root.parent, hooks }).catch(() => undefined);
+  }
 }
