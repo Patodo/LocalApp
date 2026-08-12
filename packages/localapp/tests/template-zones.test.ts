@@ -225,6 +225,24 @@ describe("managed template zones", () => {
     await race.restore();
   });
 
+  it.runIf(process.platform !== "win32")("refuses replacement of .localapp immediately before a staged file copy", async () => {
+    // Break caught: guarding staged directory creation alone still lets a later file copy follow a replaced .localapp ancestor.
+    const race = await localAppReplacementRace("staged-file-copy");
+    let fileHookFired = false;
+
+    await expect(syncManagedTemplate(project, { quiet: true }, {
+      beforeCreate: async (target, kind) => {
+        if (fileHookFired || kind !== "file" || !target.includes(`${path.sep}.sync-stage-`)) return;
+        fileHookFired = true;
+        await race.replace();
+      },
+    })).rejects.toMatchObject({ code: "unsafe_project_path" });
+
+    expect(fileHookFired).toBe(true);
+    await race.expectExternalUntouched();
+    await race.restore();
+  });
+
   it.runIf(process.platform !== "win32")("refuses replacement of .localapp immediately before creating backup skills", async () => {
     // Break caught: a raw mkdir for the backup subdirectory can be redirected through a replaced recovery-root ancestor.
     const race = await localAppReplacementRace("backup-skills");
