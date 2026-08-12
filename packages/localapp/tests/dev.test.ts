@@ -147,6 +147,7 @@ describe("canonical local development", () => {
     await expect(running).resolves.toBe(0);
     expect(Date.now() - started).toBeLessThan(1_000);
     await expect(waitForProcessExit(pid)).resolves.toBe(true);
+    expect(output.stderr).not.toContain("Local Server exited unexpectedly");
   });
 
   it("aborts a never-resolving package build and starts Server cleanup exactly once", async () => {
@@ -256,6 +257,38 @@ describe("canonical local development", () => {
 
     await expect(settleWithin(cleanup)).resolves.toBeUndefined();
     await expect(waitForProcessExit(late.pid)).resolves.toBe(true);
+  });
+
+  it.each(["external-abort", "server-exit"] as const)("keeps the first %s stop reason when external abort and Server exit race in one turn", async (firstReason) => {
+    // Break caught: a later stop callback must not overwrite the reason that woke runPhase and selected the public exit behavior.
+    const lifecycle = new DevLifecycle();
+    const phaseRelease = deferred<void>();
+    const phase = lifecycle.runPhase(() => phaseRelease.promise);
+    const phaseOutcome = phase.then(
+      () => "fulfilled" as const,
+      () => "rejected" as const,
+    );
+
+    if (firstReason === "external-abort") {
+      const serverExit = deferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+      lifecycle.observeServerExit({ exited: serverExit.promise } as OwnedProcess);
+      lifecycle.abort();
+      serverExit.resolve({ code: 1, signal: null });
+    } else {
+      lifecycle.observeServerExit({
+        exited: Promise.resolve({ code: 1, signal: null }),
+      } as OwnedProcess);
+      queueMicrotask(() => lifecycle.abort());
+    }
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    lifecycle.sealOwnership();
+    await lifecycle.cleanup();
+
+    expect(await phaseOutcome).toBe("rejected");
+    expect(lifecycle.stopReason).toBe(firstReason);
+    phaseRelease.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
   it("cancels a blocked Server initialization fetch and settles after Server cleanup", async () => {
@@ -418,6 +451,101 @@ describe("canonical local development", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("fails promptly when the ready Server exits during a real package build and cleans the stubborn build tree", async () => {
+    // Break caught: post-readiness startup that does not supervise Server exit leaves the real build tree alive and runDev pending.
+    const fixture = await fixtureBuildProject();
+    const fixtureRoot = path.join(fixture.projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const viteLauncher = await writeFakeVite(fixtureRoot, false);
+    const output = captureIo();
+    let spawnCalls = 0;
+    const running = runDev({ projectDir: fixture.projectDir, signal: new AbortController().signal, io: output.io }, {
+      serverLauncher,
+      viteCommand: { command: process.execPath, args: [viteLauncher] },
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    });
+    const buildPids = JSON.parse(await waitForFile(fixture.pidsPath)) as number[];
+    const serverState = JSON.parse(await fs.readFile(path.join(fixtureRoot, "server.json"), "utf8")) as { pid: number };
+
+    process.kill(serverState.pid, "SIGKILL");
+
+    try {
+      expect(buildPids).toHaveLength(2);
+      await expect(settleWithin(running, 2_000)).resolves.toBe(1);
+      expect(spawnCalls).toBe(2);
+      for (const pid of buildPids) await expect(waitForProcessExit(pid)).resolves.toBe(true);
+      expect(output.stderr).toContain("Local Server exited unexpectedly");
+      await expect(fs.stat(path.join(fixture.projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.join(fixtureRoot, "vite.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.writeFile(fixture.cleanupPath, "stop\n").catch(() => undefined);
+      await settleWithin(running, 5_000).catch(() => undefined);
+    }
+  });
+
+  it.each(["fulfills", "rejects"] as const)("fails promptly when the ready Server exits during an install that later %s", async (lateOutcome) => {
+    // Break caught: Server exit must wake an abort-ignoring install, and both forms of late settlement must stay observed and inert.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const viteLauncher = await writeFakeVite(fixtureRoot, false);
+    const installStarted = deferred<void>();
+    const installRelease = deferred<void>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    const output = captureIo();
+    let installSignal: AbortSignal | undefined;
+    let spawnCalls = 0;
+    process.on("unhandledRejection", onUnhandled);
+    const running = runDev({ projectDir, signal: new AbortController().signal, io: output.io }, {
+      serverLauncher,
+      viteCommand: { command: process.execPath, args: [viteLauncher] },
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+      installDevPackage: async (_serverUrl, _apiKey, _packagePath, signal) => {
+        installSignal = signal;
+        installStarted.resolve();
+        return installRelease.promise;
+      },
+      spawnOwnedProcess: (...args) => {
+        spawnCalls += 1;
+        const owned = spawnOwnedProcess(...args);
+        processes.push(owned);
+        return owned;
+      },
+    });
+
+    try {
+      await installStarted.promise;
+      const serverState = JSON.parse(await fs.readFile(path.join(fixtureRoot, "server.json"), "utf8")) as { pid: number };
+      process.kill(serverState.pid, "SIGKILL");
+
+      await expect(settleWithin(running, 1_500)).resolves.toBe(1);
+      expect(installSignal?.aborted).toBe(true);
+      expect(spawnCalls).toBe(1);
+      expect(output.stderr).toContain("Local Server exited unexpectedly");
+
+      if (lateOutcome === "fulfills") installRelease.resolve();
+      else installRelease.reject(new Error("late install rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+      expect(spawnCalls).toBe(1);
+      await expect(fs.stat(path.join(projectDir, ".localapp/dev-config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.join(fixtureRoot, "vite.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      installRelease.resolve();
+      process.off("unhandledRejection", onUnhandled);
+      await settleWithin(running, 5_000).catch(() => undefined);
+    }
+  });
+
   it("fails closed when abort cleanup cannot confirm an owned process tree exited", async () => {
     // Break caught: runDev catches terminate rejection with allSettled and returns abort success even though process ownership is unresolved.
     const projectDir = await fixtureProject();
@@ -511,6 +639,27 @@ describe("canonical local development", () => {
     await expect(waitForProcessExit(viteState.pid)).resolves.toBe(true);
   });
 
+  it("keeps successful startup authoritative when the Server exits only during sealed cleanup", async () => {
+    // Break caught: intentional cleanup after a successful Vite outcome must not manufacture an unexpected-Server failure.
+    const projectDir = await fixtureProject();
+    const fixtureRoot = path.join(projectDir, "tmp/localapp-dev/fixtures");
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    const serverLauncher = await writeFakeServer(fixtureRoot);
+    const viteLauncher = await writeFakeVite(fixtureRoot, true, 0);
+    const output = captureIo();
+
+    const code = await runDev({ projectDir, signal: new AbortController().signal, io: output.io }, {
+      serverLauncher,
+      viteCommand: { command: process.execPath, args: [viteLauncher] },
+      buildApplicationPackage: fakePackageBuilder(fixtureRoot),
+    });
+
+    const serverState = JSON.parse(await fs.readFile(path.join(fixtureRoot, "server.json"), "utf8")) as { pid: number };
+    expect(code).toBe(0);
+    expect(output.stderr).not.toContain("Local Server exited unexpectedly");
+    await expect(waitForProcessExit(serverState.pid)).resolves.toBe(true);
+  });
+
   it("a Vite exit terminates the still-running Server tree", async () => {
     // Break caught: supervising only interrupts leaves the canonical Server orphaned when one child exits by itself.
     const projectDir = await fixtureProject();
@@ -528,6 +677,8 @@ describe("canonical local development", () => {
 
     const serverState = JSON.parse(await fs.readFile(path.join(fixtureRoot, "server.json"), "utf8")) as { pid: number };
     expect(code).toBe(1);
+    expect(output.stderr).toContain("Vite exited unexpectedly");
+    expect(output.stderr).not.toContain("Local Server exited unexpectedly");
     await expect(waitForProcessExit(serverState.pid)).resolves.toBe(true);
   });
 });
@@ -633,7 +784,7 @@ async function writeFakeServer(fixtureRoot: string): Promise<string> {
   return filePath;
 }
 
-async function writeFakeVite(fixtureRoot: string, exitImmediately: boolean): Promise<string> {
+async function writeFakeVite(fixtureRoot: string, exitImmediately: boolean, exitCode = 7): Promise<string> {
   const filePath = path.join(fixtureRoot, exitImmediately ? "exiting-vite.mjs" : "fake-vite.mjs");
   await fs.writeFile(filePath, `
     import fs from "node:fs";
@@ -643,7 +794,7 @@ async function writeFakeVite(fixtureRoot: string, exitImmediately: boolean): Pro
     if (!fs.existsSync(path.join(fixtureRoot, "install.json"))) process.exit(91);
     if (!process.env.LOCALAPP_DEV_API_KEY) process.exit(92);
     fs.writeFileSync(path.join(fixtureRoot, "vite.json"), JSON.stringify({ pid: process.pid, config, args: process.argv.slice(2) }));
-    ${exitImmediately ? "process.exit(7);" : "setInterval(() => {}, 1000);"}
+    ${exitImmediately ? `process.exit(${exitCode});` : "setInterval(() => {}, 1000);"}
   `);
   return filePath;
 }

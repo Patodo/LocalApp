@@ -97,6 +97,7 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
       timeoutMs: dependencies.readyTimeoutMs ?? 15_000,
       signal,
     }));
+    lifecycle.observeServerExit(server);
     const initialize = dependencies.initializeServer ?? initializeServer;
     await lifecycle.runPhase((signal) => initialize(ready.listenUrl, ready.setupUrl, credentials.password, signal));
 
@@ -149,9 +150,13 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
     const outcome = await firstOutcome(server, vite, lifecycle.signal);
     lifecycle.sealOwnership();
     await lifecycle.cleanup();
+    if (lifecycle.stopReason === "server-exit" || outcome.kind === "server") {
+      options.io.stderr("Local Server exited unexpectedly.\n");
+      return 1;
+    }
     if (outcome.kind === "abort") return 0;
     if (outcome.kind === "vite" && outcome.code === 0) return 0;
-    options.io.stderr(`${outcome.kind === "server" ? "Local Server" : "Vite"} exited unexpectedly.\n`);
+    options.io.stderr("Vite exited unexpectedly.\n");
     return 1;
   } catch (error) {
     lifecycle.sealOwnership();
@@ -160,6 +165,10 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
       (failure: unknown) => failure,
     );
     if (cleanupError !== undefined) throw safeCleanupFailure(cleanupError);
+    if (lifecycle.stopReason === "server-exit") {
+      options.io.stderr("Local Server exited unexpectedly.\n");
+      return 1;
+    }
     if (lifecycle.signal.aborted) return 0;
     if (error instanceof Error && "code" in error) throw error;
     throw lifecycleError("local_development_failed", safeFailureMessage(error));
@@ -173,6 +182,7 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
 export class DevLifecycle {
   private readonly abortController = new AbortController();
   private readonly ownedProcesses = new Set<OwnedProcess>();
+  private stoppedBy: "external-abort" | "server-exit" | undefined;
   private ownershipSealed = false;
   private wakeCleanup: (() => void) | undefined;
   private cleanupPromise: Promise<void> | undefined;
@@ -181,9 +191,19 @@ export class DevLifecycle {
     return this.abortController.signal;
   }
 
+  get stopReason(): "external-abort" | "server-exit" | undefined {
+    return this.stoppedBy;
+  }
+
   abort(): void {
-    if (!this.signal.aborted) this.abortController.abort();
-    void this.cleanup();
+    this.stop("external-abort");
+  }
+
+  observeServerExit(server: OwnedProcess): void {
+    void server.exited.then(
+      () => this.stopForServerExit(),
+      () => this.stopForServerExit(),
+    );
   }
 
   assertActive(): void {
@@ -290,6 +310,18 @@ export class DevLifecycle {
     const wake = this.wakeCleanup;
     this.wakeCleanup = undefined;
     wake?.();
+  }
+
+  private stopForServerExit(): void {
+    if (this.ownershipSealed || this.stoppedBy !== undefined) return;
+    this.stop("server-exit");
+  }
+
+  private stop(reason: "external-abort" | "server-exit"): void {
+    if (this.stoppedBy !== undefined) return;
+    this.stoppedBy = reason;
+    if (!this.signal.aborted) this.abortController.abort();
+    void this.cleanup();
   }
 }
 
