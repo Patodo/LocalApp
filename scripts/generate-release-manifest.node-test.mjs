@@ -7,23 +7,13 @@ import { buildReleaseManifest, verifyReleaseOutputs } from "./generate-release-m
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-release-"));
-  const files = [
-    "localapp-cli-x86_64-unknown-linux-gnu",
-    "localapp-cli-aarch64-apple-darwin",
-    "localapp-cli-x86_64-apple-darwin",
-    "localapp-cli-x86_64-pc-windows-msvc.exe",
-    "localapp-desktop-windows-x86_64-setup.exe",
-  ];
-  const statuses = {};
-  for (const filename of files) {
-    fs.writeFileSync(path.join(directory, filename), `asset:${filename}`);
-    statuses[filename] = filename.includes("apple") ? "ad-hoc" : "unsigned";
-  }
-  return { directory, files, statuses };
+  const filename = "localapp-1.2.3.tgz";
+  fs.writeFileSync(path.join(directory, filename), "localapp npm package");
+  return { directory, filename };
 }
 
-test("generates one verified manifest entry and checksum per declared asset", () => {
-  const { directory, files, statuses } = fixture();
+test("publishes the single localapp npm tarball as the only product asset", () => {
+  const { directory, filename } = fixture();
   try {
     const result = buildReleaseManifest({
       assetsDir: directory,
@@ -31,13 +21,23 @@ test("generates one verified manifest entry and checksum per declared asset", ()
       baseUrl: "https://github.com/example/localapp/releases/download/v1.2.3",
       version: "1.2.3",
       minVersion: "1.0.0",
-      generatedAt: "2026-07-30T00:00:00.000Z",
-      signatureStatuses: statuses,
+      generatedAt: "2026-08-13T00:00:00.000Z",
     });
 
-    assert.equal(result.manifest.assets.length, files.length);
-    assert.equal(new Set(result.manifest.assets.map((asset) => asset.filename)).size, files.length);
-    assert.ok(result.manifest.assets.every((asset) => asset.url.startsWith("https://github.com/")));
+    assert.deepEqual(result.manifest.assets.map(({ kind, filename: assetFilename, os, arch, signature }) => ({
+      kind,
+      filename: assetFilename,
+      os,
+      arch,
+      signature,
+    })), [{
+      kind: "npm",
+      filename,
+      os: "any",
+      arch: "any",
+      signature: "not-applicable",
+    }]);
+    assert.equal(fs.readFileSync(result.checksumsPath, "utf8").trim().endsWith(`  ${filename}`), true);
     verifyReleaseOutputs({
       assetsDir: directory,
       manifestPath: result.manifestPath,
@@ -48,40 +48,29 @@ test("generates one verified manifest entry and checksum per declared asset", ()
   }
 });
 
-test("fails closed for a missing asset or an unverified signature status", () => {
-  const { directory, files, statuses } = fixture();
+test("fails closed when the versioned npm tarball is absent", () => {
+  const { directory, filename } = fixture();
   try {
-    fs.rmSync(path.join(directory, files[0]));
+    fs.rmSync(path.join(directory, filename));
     assert.throws(() => buildReleaseManifest({
       assetsDir: directory,
       baseUrl: "https://releases.example/v1.2.3",
       version: "1.2.3",
-      signatureStatuses: statuses,
-    }), /missing/);
-
-    fs.writeFileSync(path.join(directory, files[0]), "restored");
-    delete statuses[files[1]];
-    assert.throws(() => buildReleaseManifest({
-      assetsDir: directory,
-      baseUrl: "https://releases.example/v1.2.3",
-      version: "1.2.3",
-      signatureStatuses: statuses,
-    }), /signature status/);
+    }), /required release asset is missing: localapp-1\.2\.3\.tgz/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("detects an asset changed after manifest generation", () => {
-  const { directory, files, statuses } = fixture();
+test("detects a tarball changed after manifest generation", () => {
+  const { directory, filename } = fixture();
   try {
     const result = buildReleaseManifest({
       assetsDir: directory,
       baseUrl: "https://releases.example/v1.2.3",
       version: "1.2.3",
-      signatureStatuses: statuses,
     });
-    fs.appendFileSync(path.join(directory, files[0]), "tampered");
+    fs.appendFileSync(path.join(directory, filename), "tampered");
 
     assert.throws(() => verifyReleaseOutputs({
       assetsDir: directory,
@@ -94,15 +83,15 @@ test("detects an asset changed after manifest generation", () => {
 });
 
 test("accepts complete SemVer and rejects malformed versions", () => {
-  const { directory, statuses } = fixture();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-semver-"));
   try {
+    fs.writeFileSync(path.join(directory, "localapp-1.2.3-rc.1+build.7.tgz"), "package");
     assert.doesNotThrow(() => buildReleaseManifest({
       assetsDir: directory,
       outputDir: directory,
       baseUrl: "https://releases.example/v1.2.3-rc.1+build.7",
       version: "1.2.3-rc.1+build.7",
       minVersion: "1.0.0+baseline",
-      signatureStatuses: statuses,
     }));
 
     for (const version of ["01.2.3", "1.2.3-", "1.2.3-01", "1.2.3+"]) {
@@ -111,7 +100,6 @@ test("accepts complete SemVer and rejects malformed versions", () => {
         outputDir: directory,
         baseUrl: "https://releases.example/invalid",
         version,
-        signatureStatuses: statuses,
       }), /semantic versions/);
     }
   } finally {

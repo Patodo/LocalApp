@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { isPublicSourcePath, scanPublicSource } from "./export-public-source.mjs";
+import { isPublicSourcePath, scanPublicSource, snapshotVerificationCommands } from "./export-public-source.mjs";
 
 test("top-level allowlist includes sanitized history and excludes internal runtime data and release binaries", () => {
   assert.equal(isPublicSourcePath("AGENTS.md"), true);
@@ -17,9 +17,30 @@ test("top-level allowlist includes sanitized history and excludes internal runti
   assert.equal(isPublicSourcePath("openspec/changes/archive/old/design.md"), true);
   assert.equal(isPublicSourcePath("openspec/changes/in-progress/design.md"), false);
   assert.equal(isPublicSourcePath("packages/server/static/cli/1.0.0/localapp"), false);
-  assert.equal(isPublicSourcePath("packages/desktop/src-tauri/binaries/node.exe"), false);
+  assert.equal(isPublicSourcePath("packages/localapp/runtime/native/win32-x64/localapp-native.exe"), true);
   assert.equal(isPublicSourcePath("packages/server/.env"), false);
   assert.equal(isPublicSourcePath("deploy/production/.env.local"), false);
+});
+
+test("snapshot verification uses the unified package and no replaced Rust or Desktop product", () => {
+  assert.deepEqual(snapshotVerificationCommands().map(([command, args]) => `${command} ${args.join(" ")}`), [
+    "pnpm install --frozen-lockfile",
+    "pnpm test:public-source",
+    "pnpm test:release-manifest",
+    "pnpm test:release-workflow",
+    "pnpm -C packages/server-core build",
+    "pnpm -C packages/server-core test",
+    "pnpm -C packages/web build",
+    "pnpm -C packages/web test",
+    "pnpm -C packages/server build",
+    "pnpm -C packages/server test",
+    "pnpm -C packages/localapp build",
+    "pnpm -C packages/localapp test",
+    "pnpm -C packages/localapp test:native",
+    "pnpm -C packages/localapp pack --pack-destination ../../tmp/localapp-package",
+    "pnpm -C init-repo test",
+    "openspec validate --all --strict",
+  ]);
 });
 
 test("source gate rejects unquoted environment-style credentials", () => {

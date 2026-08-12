@@ -48,9 +48,6 @@ const ALLOWED_PREFIXES = [
   "scripts/",
 ];
 const DENIED_PREFIXES = [
-  "packages/desktop/dist/",
-  "packages/desktop/src-tauri/binaries/",
-  "packages/desktop/src-tauri/resources/",
   "packages/server/static/cli/",
   "packages/server/static/profile/",
 ];
@@ -182,26 +179,31 @@ function createSourceManifest(directory, commitSha) {
 }
 
 function verifySnapshot(directory) {
-  const commands = [
+  for (const [command, args] of snapshotVerificationCommands()) {
+    const result = spawnSync(command, args, { cwd: directory, stdio: "inherit" });
+    if (result.status !== 0) throw new Error(`snapshot verification failed: ${command} ${args.join(" ")}`);
+  }
+}
+
+export function snapshotVerificationCommands() {
+  return [
     ["pnpm", ["install", "--frozen-lockfile"]],
     ["pnpm", ["test:public-source"]],
     ["pnpm", ["test:release-manifest"]],
+    ["pnpm", ["test:release-workflow"]],
     ["pnpm", ["-C", "packages/server-core", "build"]],
     ["pnpm", ["-C", "packages/server-core", "test"]],
     ["pnpm", ["-C", "packages/web", "build"]],
     ["pnpm", ["-C", "packages/web", "test"]],
-    ["cargo", ["build", "--locked", "--manifest-path", "packages/cli/Cargo.toml"]],
     ["pnpm", ["-C", "packages/server", "build"]],
     ["pnpm", ["-C", "packages/server", "test"]],
+    ["pnpm", ["-C", "packages/localapp", "build"]],
+    ["pnpm", ["-C", "packages/localapp", "test"]],
+    ["pnpm", ["-C", "packages/localapp", "test:native"]],
+    ["pnpm", ["-C", "packages/localapp", "pack", "--pack-destination", "../../tmp/localapp-package"]],
     ["pnpm", ["-C", "init-repo", "test"]],
-    ["cargo", ["test", "--manifest-path", "packages/localapp-core/Cargo.toml"]],
-    ["cargo", ["test", "--locked", "--manifest-path", "packages/cli/Cargo.toml"]],
     ["openspec", ["validate", "--all", "--strict"]],
   ];
-  for (const [command, args] of commands) {
-    const result = spawnSync(command, args, { cwd: directory, stdio: "inherit" });
-    if (result.status !== 0) throw new Error(`snapshot verification failed: ${command} ${args.join(" ")}`);
-  }
 }
 
 function scanText(relativePath, text, violations) {

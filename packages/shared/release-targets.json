@@ -1,34 +1,29 @@
 {
-  "schemaVersion": 1,
-  "targets": [
+  "schemaVersion": 2,
+  "npmPackage": {
+    "name": "localapp",
+    "filenameTemplate": "localapp-{version}.tgz"
+  },
+  "nativeAdapters": [
     {
-      "os": "linux",
-      "arch": "x86_64",
-      "rustTarget": "x86_64-unknown-linux-gnu",
-      "cliFilename": "localapp-cli-x86_64-unknown-linux-gnu",
-      "desktop": false
+      "platform": "linux",
+      "arch": "x64",
+      "target": "linux-x64"
     },
     {
-      "os": "macos",
-      "arch": "aarch64",
-      "rustTarget": "aarch64-apple-darwin",
-      "cliFilename": "localapp-cli-aarch64-apple-darwin",
-      "desktop": false
+      "platform": "darwin",
+      "arch": "arm64",
+      "target": "darwin-arm64"
     },
     {
-      "os": "macos",
-      "arch": "x86_64",
-      "rustTarget": "x86_64-apple-darwin",
-      "cliFilename": "localapp-cli-x86_64-apple-darwin",
-      "desktop": false
+      "platform": "darwin",
+      "arch": "x64",
+      "target": "darwin-x64"
     },
     {
-      "os": "windows",
-      "arch": "x86_64",
-      "rustTarget": "x86_64-pc-windows-msvc",
-      "cliFilename": "localapp-cli-x86_64-pc-windows-msvc.exe",
-      "desktop": true,
-      "desktopFilename": "localapp-desktop-windows-x86_64-setup.exe"
+      "platform": "win32",
+      "arch": "x64",
+      "target": "win32-x64"
     }
   ]
 }

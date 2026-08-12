@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: "26"
+  NODE_VERSION: "24"
   PNPM_VERSION: "10"
 
 jobs:
@@ -31,12 +31,13 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            packages/cli
-            packages/localapp-core
+          workspaces: packages/localapp/native/linux
+          shared-key: native-linux-x64
 
       - name: Install workspace and OpenSpec
         run: |
@@ -51,24 +52,24 @@ jobs:
           pnpm -C packages/server-core build
           pnpm -C packages/web build
           pnpm -C packages/server build
+          pnpm -C packages/localapp build
 
       - name: Test platform packages
         run: |
           pnpm -C packages/server-core test
           pnpm -C packages/web test
           pnpm -C packages/server test
+          pnpm -C packages/localapp test
+          pnpm -C packages/localapp test:native
           pnpm -C init-repo test
           pnpm test:platform-regression
 
-      - name: Test Rust crates
+      - name: Validate release infrastructure
         run: |
-          cargo test --manifest-path packages/localapp-core/Cargo.toml
-          cargo test --locked --manifest-path packages/cli/Cargo.toml
-
-      - name: Validate release assembly dry-run
-        run: |
+          pnpm test:windows-release-script
           pnpm test:release-manifest
           pnpm test:release-workflow
+          pnpm test:public-source
 
       - name: Validate OpenSpec
         run: openspec validate --all --strict
@@ -79,10 +80,10 @@ jobs:
       - name: Verify builds leave tracked sources unchanged
         run: git diff --exit-code
 
-      - name: Build public Docker image from source
+      - name: Build public Docker image from the npm package
         run: docker build --tag localapp-ci:${{ github.sha }} .
 
-      - name: Smoke test release discovery in Docker
+      - name: Smoke test packaged Server in Docker
         run: bash scripts/docker-release-smoke.sh localapp-ci:${{ github.sha }}
 
   secrets:

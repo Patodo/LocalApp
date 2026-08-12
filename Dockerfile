@@ -1,46 +1,32 @@
-FROM node:26-slim AS build
+FROM node:24-slim AS build
 
 WORKDIR /src
-RUN npm install --global pnpm@10
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends build-essential ca-certificates curl pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain 1.91.1 \
+    && npm install --global pnpm@10
+
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm -C packages/server-core build \
-    && pnpm -C packages/web build \
-    && pnpm -C packages/server build
+RUN mkdir -p /src/tmp/localapp-package \
+    && pnpm -C packages/localapp pack --pack-destination /src/tmp/localapp-package
 
-FROM node:26-slim AS runtime
+FROM node:24-slim AS runtime
 
 WORKDIR /app
-RUN npm install --global pnpm@10
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/server/package.json packages/server/
-COPY packages/server-core/package.json packages/server-core/
-COPY packages/backend/package.json packages/backend/
-COPY packages/sdk-core/package.json packages/sdk-core/
-COPY packages/sdk-react/package.json packages/sdk-react/
-COPY packages/sdk-agent/package.json packages/sdk-agent/
-COPY packages/web/package.json packages/web/
-COPY packages/desktop/package.json packages/desktop/
-COPY init-repo/package.json init-repo/
-COPY init-repo/runtime/package.json init-repo/runtime/
-
-RUN pnpm install --frozen-lockfile --prod --filter @localapp/server...
-
-COPY --from=build /src/packages/server/dist/ packages/server/dist/
-COPY --from=build /src/packages/server-core/dist/ packages/server-core/dist/
-COPY --from=build /src/packages/web/out/ packages/web/out/
-
-RUN mkdir -p /app/data \
+COPY --from=build /src/tmp/localapp-package/localapp-*.tgz /dist/
+RUN npm install --global /dist/localapp-*.tgz \
+    && rm -rf /dist \
+    && mkdir -p /app/data \
     && chown -R node:node /app
 
 USER node
-WORKDIR /app/packages/server
-
 EXPOSE 3000
 
 ENV NODE_ENV=production
-ENV DATA_DIR=/app/data
 
-CMD ["node", "dist/index.js"]
+CMD ["localapp", "server", "run", "--host", "0.0.0.0", "--port", "3000", "--data-dir", "/app/data"]
