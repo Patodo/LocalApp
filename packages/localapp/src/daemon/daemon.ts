@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
+import { ActivationBroker, type BrowserOpener } from "../activation/activation-broker.js";
+import { openValidatedExternalUrl } from "../native/native-adapter.js";
 import { spawnOwnedProcess, type OwnedProcess } from "../process/process-tree.js";
 import { waitForServerReady } from "../process/readiness.js";
 import { parseControlResponseFrame, type DaemonControlResponse, type DaemonServerStatus } from "./control-protocol.js";
@@ -93,6 +95,9 @@ export interface LocalAppDaemonOptions {
   readinessTimeoutMs?: number;
   healthTimeoutMs?: number;
   verifyWindowsCurrentUser?: () => Promise<boolean> | boolean;
+  /** Narrow, post-validation browser operation; never receives unparsed Scheme input. */
+  openExternal?: BrowserOpener;
+  fetch?: typeof globalThis.fetch;
 }
 
 export class LocalAppDaemon {
@@ -104,6 +109,7 @@ export class LocalAppDaemon {
   private serverStatus: DaemonServerStatus = "stopped";
   private listenUrl: string | undefined;
   private deviceControlToken: string | undefined;
+  private readonly activationBroker: ActivationBroker;
   private stopPromise: Promise<void> | undefined;
   private restartPromise: Promise<void> | undefined;
   private sealed = false;
@@ -115,6 +121,10 @@ export class LocalAppDaemon {
   constructor(options: LocalAppDaemonOptions) {
     this.options = options;
     this.bootId = options.bootId ?? crypto.randomBytes(24).toString("base64url");
+    this.activationBroker = new ActivationBroker({
+      fetch: options.fetch,
+      open: options.openExternal ?? openValidatedExternalUrl,
+    });
     void this.stopped.catch(() => undefined);
   }
 
@@ -127,7 +137,7 @@ export class LocalAppDaemon {
         endpoint: this.options.layout.controlEndpoint,
         reclaimStaleEndpoint: async () => this.lock?.reclaimed === true,
         verifyWindowsCurrentUser: this.options.verifyWindowsCurrentUser,
-        handle: async (request) => this.handle(request.type),
+        handle: async (request) => this.handle(request),
         afterResponse: async (request, response) => {
           if (request.type === "stop" && response.ok && response.type === "stop") await this.stop();
         },
@@ -159,13 +169,21 @@ export class LocalAppDaemon {
     return this.restartPromise;
   }
 
-  private async handle(type: "status" | "stop" | "restart"): Promise<DaemonControlResponse> {
+  private async handle(request: import("./control-protocol.js").DaemonControlRequest): Promise<DaemonControlResponse> {
+    const type = request.type;
     if (type === "status") return {
       ok: true, type: "status", data: {
         bootId: this.bootId, pid: process.pid, server: this.serverStatus === "ready" && this.listenUrl !== undefined
           ? { status: "ready", listenUrl: this.listenUrl } : { status: this.serverStatus },
       },
     };
+    if (type === "activation") {
+      if (this.serverStatus !== "ready" || this.listenUrl === undefined || this.deviceControlToken === undefined) {
+        throw lifecycleError("activation_server_unready", "The LocalApp Server is not ready for Scheme activation");
+      }
+      await this.activationBroker.activate({ url: request.url, listenUrl: this.listenUrl, controlToken: this.deviceControlToken });
+      return { ok: true, type };
+    }
     if (type === "restart") { await this.restart(); return { ok: true, type }; }
     return { ok: true, type };
   }

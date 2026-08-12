@@ -13,6 +13,7 @@ describe("daemon control protocol", () => {
       { type: "status" as const },
       { type: "stop" as const },
       { type: "restart" as const },
+      { type: "activation" as const, url: "localapp://notification/open?ticket=notification_ticket_0123456789" },
     ]) {
       expect(parseControlRequestFrame(encodeControlRequest(request))).toEqual(request);
     }
@@ -58,6 +59,10 @@ describe("daemon control protocol", () => {
       "IPC_REQUEST_INVALID",
     );
     expectProtocolCode(() => parseControlRequestFrame(Buffer.from('[]\n')), "IPC_REQUEST_INVALID");
+    expectProtocolCode(
+      () => parseControlRequestFrame(Buffer.from(`${JSON.stringify({ type: "activation", url: `localapp://notification/open?ticket=${"a".repeat(4_100)}` })}\n`)),
+      "IPC_REQUEST_INVALID",
+    );
   });
 
   it("rejects duplicate JSON keys at every object depth", () => {

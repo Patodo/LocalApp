@@ -18,10 +18,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:native": "node scripts/build-native-adapter.mjs",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "node scripts/prepare-pack.mjs",
     "postpack": "node scripts/cleanup-pack.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:native": "node --test scripts/native-adapter.node-test.mjs"
   },
   "devDependencies": {
     "@localapp/server": "workspace:*",

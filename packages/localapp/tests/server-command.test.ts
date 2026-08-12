@@ -9,6 +9,21 @@ const layout = {
 } satisfies RuntimeLayout;
 
 describe("server lifecycle command", () => {
+  it("installs the selected native Scheme handler after artifact verification", async () => {
+    const installScheme = vi.fn(async () => undefined);
+    const createNativeAdapter = vi.fn(async () => ({ installScheme }));
+    await runServerCommand({ action: "start" }, {
+      layout,
+      artifactDirectory: "/artifact",
+      verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/localapp-server.mjs" })),
+      publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/release", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
+      createNativeAdapter,
+      createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false })), start: vi.fn(), stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
+    });
+    expect(createNativeAdapter).toHaveBeenCalledWith("/release/runtime/native");
+    expect(installScheme).toHaveBeenCalledTimes(1);
+  });
+
   it("publishes on each start and idempotently checks the per-user service", async () => {
     const install = vi.fn(async () => ({ mode: "service" as const, installed: false }));
     const start = vi.fn(async () => undefined);
@@ -18,6 +33,7 @@ describe("server lifecycle command", () => {
     const status = vi.fn().mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ipc_unreachable" })).mockResolvedValue(readyStatus);
     const dependencies = {
       layout, publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/support/releases/1", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
+      createNativeAdapter: async () => ({ installScheme: async () => undefined }),
       createServiceManager: () => ({ install, start, stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/support/service" }),
       ipcClient: () => ({ request: status }), health: vi.fn(async () => undefined), artifactDirectory: "/artifact", verifyReleaseArtifact: vi.fn(),
     };
@@ -43,6 +59,7 @@ describe("server lifecycle command", () => {
     const result = await runServerCommand({ action: "start" }, {
       layout, artifactDirectory: "/artifact", verifyReleaseArtifact: vi.fn(async () => ({ serverEntrypoint: "runtime/server/bin/localapp-server.mjs" })),
       publishRelease: vi.fn(async () => ({ version: "1", artifactDigest: "a".repeat(64), releasePath: "/release", entrypoint: "bin/localapp.mjs", bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs" })),
+      createNativeAdapter: async () => ({ installScheme: async () => undefined }),
       createServiceManager: () => ({ install: vi.fn(async () => ({ mode: "foreground" as const, installed: false, reason: "systemd user manager unavailable" })), start, stop: vi.fn(), restart: vi.fn(), status: vi.fn(), uninstall: vi.fn(), logs: vi.fn(), registrationPath: "/service" }),
     });
     expect(result).toEqual({ action: "start", mode: "foreground", reason: "systemd user manager unavailable" });

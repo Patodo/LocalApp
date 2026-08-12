@@ -6,7 +6,9 @@ export const CONTROL_FRAME_LIMIT_BYTES = 64 * 1024;
 export type DaemonControlRequest =
   | { type: "status" }
   | { type: "stop" }
-  | { type: "restart" };
+  | { type: "restart" }
+  /** Complete, unparsed OS Scheme input. The daemon reparses it before policy. */
+  | { type: "activation"; url: string };
 
 export type DaemonServerStatus = "starting" | "ready" | "stopping" | "stopped" | "error";
 
@@ -20,11 +22,11 @@ export type DaemonControlResponse =
       server: { status: DaemonServerStatus; listenUrl?: string };
     };
   }
-  | { ok: true; type: "stop" | "restart" }
+  | { ok: true; type: "stop" | "restart" | "activation" }
   | { ok: false; code: string; message: string };
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
-const REQUEST_TYPES = new Set(["status", "stop", "restart"]);
+const REQUEST_TYPES = new Set(["status", "stop", "restart", "activation"]);
 const RESPONSE_ERROR_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
 const BOOT_ID = /^[A-Za-z0-9_-]{16,128}$/;
 
@@ -80,8 +82,14 @@ function encodeFrame(value: unknown): Buffer {
 function validateControlRequest(value: unknown): DaemonControlRequest {
   if (!isRecord(value) || typeof value.type !== "string") throw protocolError("IPC_REQUEST_INVALID");
   if (!REQUEST_TYPES.has(value.type)) throw protocolError("IPC_REQUEST_UNSUPPORTED");
+  if (value.type === "activation") {
+    if (!hasExactKeys(value, ["type", "url"]) || typeof value.url !== "string" || Buffer.byteLength(value.url, "utf8") > 4096) {
+      throw protocolError("IPC_REQUEST_INVALID");
+    }
+    return { type: "activation", url: value.url };
+  }
   if (!hasExactKeys(value, ["type"])) throw protocolError("IPC_REQUEST_INVALID");
-  return { type: value.type as DaemonControlRequest["type"] };
+  return { type: value.type as "status" | "stop" | "restart" };
 }
 
 function validateControlResponse(value: unknown): DaemonControlResponse {
@@ -93,7 +101,7 @@ function validateControlResponse(value: unknown): DaemonControlResponse {
       || /[\r\n]/.test(value.message)) throw protocolError("IPC_RESPONSE_INVALID");
     return { ok: false, code: value.code, message: value.message };
   }
-  if (value.type === "stop" || value.type === "restart") {
+  if (value.type === "stop" || value.type === "restart" || value.type === "activation") {
     if (!hasExactKeys(value, ["ok", "type"])) throw protocolError("IPC_RESPONSE_INVALID");
     return { ok: true, type: value.type };
   }

@@ -29,10 +29,26 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.deepEqual(manifest.dependencies ?? {}, {});
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
   assert.equal((await fs.stat(path.join(extracted, "package/runtime/server/bin/localapp-server.mjs"))).isFile(), true);
+  const nativeRoot = path.join(extracted, "package/runtime/native");
+  const nativeManifest = JSON.parse(await fs.readFile(path.join(nativeRoot, "adapter-manifest.json"), "utf8"));
+  const nativeEntries = await fs.readdir(nativeRoot);
+  assert.deepEqual(nativeEntries.sort(), ["adapter-manifest.json", nativeManifest.target]);
+  const packedFiles = await listFiles(path.join(extracted, "package"));
+  assert.equal(packedFiles.some((file) => /(^|\/)(tauri|desktop|electron)(\/|$)/i.test(file)), false);
   const version = await run(process.execPath, [binary, "--version"], extracted);
   assert.equal(version.code, 0, version.stderr);
   assert.equal(version.stdout.trim(), "localapp 0.1.0");
 });
+
+async function listFiles(directory, prefix = "") {
+  const files = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...await listFiles(path.join(directory, entry.name), relative));
+    else if (entry.isFile()) files.push(relative);
+  }
+  return files;
+}
 
 function run(command, args, cwd) {
   return new Promise((resolve, reject) => {

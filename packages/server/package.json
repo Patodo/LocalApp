@@ -13,6 +13,10 @@
     "./app-package-api": {
       "types": "./dist/app-package-api.d.ts",
       "default": "./dist/app-package-api.js"
+    },
+    "./device-action-ticket": {
+      "types": "./dist/device-action-ticket.d.ts",
+      "default": "./dist/device-action-ticket.js"
     }
   },
   "bin": {

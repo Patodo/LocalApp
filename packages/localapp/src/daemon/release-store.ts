@@ -214,7 +214,7 @@ async function publishImmutableDirectory(
     for (const [relativePath, bytes] of inspected.files) {
       const destination = path.join(staging, ...relativePath.split("/"));
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      await fs.writeFile(destination, bytes, { flag: "wx", mode: relativePath === inspected.manifest.entrypoint ? 0o700 : 0o600 });
+      await fs.writeFile(destination, bytes, { flag: "wx", mode: isExecutableReleaseFile(relativePath, inspected.manifest) ? 0o700 : 0o600 });
     }
     await fs.writeFile(path.join(staging, ".localapp-artifact.json"), inspected.manifestBytes, { flag: "wx", mode: 0o600 });
     await inspectReleaseArtifact(staging);
@@ -228,6 +228,11 @@ async function publishImmutableDirectory(
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
+}
+
+function isExecutableReleaseFile(relativePath: string, manifest: ReleaseArtifactManifest): boolean {
+  if (relativePath === manifest.entrypoint) return true;
+  return /^runtime\/native\/[^/]+\/(?:LocalAppBridge\.app\/Contents\/(?:MacOS\/LocalAppBridge|Resources\/localapp-native-ipc-client\.mjs)|localapp-native\.exe|localapp-native-ipc-client\.mjs)$/.test(relativePath);
 }
 
 async function ensurePrivateDirectories(layout: RuntimeLayout): Promise<void> {

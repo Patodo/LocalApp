@@ -35,4 +35,13 @@ describe("device activation ticket", () => {
       "DEVICE_ACTION_INVALID_TICKET",
     );
   });
+
+  it("rejects noncanonical URL spellings and a value over the UTF-8 preparse cap", () => {
+    expect(() => parseDeviceActivationUrl(`LOCALAPP://action/${ACTION_ID}?origin=https%3A%2F%2Fserver.example.test&nonce=${TICKET.nonce}&protocolVersion=2`))
+      .toThrow("DEVICE_ACTION_INVALID_TICKET");
+    expect(() => parseDeviceActivationUrl(`localapp://action/${ACTION_ID}?nonce=${TICKET.nonce}&origin=https%3A%2F%2Fserver.example.test&protocolVersion=2`))
+      .toThrow("DEVICE_ACTION_INVALID_TICKET");
+    expect(() => parseDeviceActivationUrl(`${createDeviceActivationUrl(TICKET)}&padding=${"界".repeat(1_400)}`))
+      .toThrow("DEVICE_ACTION_INVALID_TICKET");
+  });
 });

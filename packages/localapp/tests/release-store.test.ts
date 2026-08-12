@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
@@ -105,6 +106,22 @@ describe("release store", () => {
     await expect(publishRelease({ sourceDirectory: corrupt, layout })).rejects.toMatchObject({ code: "release_artifact_invalid" });
     expect(await readCurrentRelease(layout)).toEqual(first);
   });
+
+  it.skipIf(process.platform === "win32")("keeps the selected published native bridge and IPC client executable", async () => {
+    const root = await fixtureRoot();
+    const source = path.join(root, "native source");
+    await buildLocalAppPackage({ outputDirectory: source });
+    const layout = createRuntimeLayout({
+      platform: process.platform,
+      homeDir: root,
+      supportDir: path.join(root, "support"),
+      runtimeDir: path.join(root, "runtime"),
+    });
+    const release = await publishRelease({ sourceDirectory: source, layout });
+    const target = `${process.platform}-${process.arch}`;
+    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, "LocalAppBridge.app/Contents/MacOS/LocalAppBridge"), fsConstants.X_OK)).resolves.toBeUndefined();
+    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, "LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs"), fsConstants.X_OK)).resolves.toBeUndefined();
+  }, 30_000);
 
   it.skipIf(process.platform === "win32")("reclaims a dead publisher lock but fails closed for an active publisher", async () => {
     const root = await fixtureRoot();

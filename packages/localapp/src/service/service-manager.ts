@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { lifecycleError } from "../errors.js";
 import type { RuntimeLayout } from "../daemon/runtime-layout.js";
 import { createLinuxSystemdUserService } from "./linux-systemd-user.js";
@@ -59,6 +60,23 @@ export function createServiceManager(options: CreateServiceManagerOptions): Serv
   if (platform === "win32") return withLogs(createWindowsUserTask(normalized), options.layout);
   if (platform === "linux") return withLogs(createLinuxSystemdUserService(normalized), options.layout);
   throw lifecycleError("user_service_unsupported", `LocalApp user services are unsupported on ${platform}`);
+}
+
+/** Creates the sole current-user service boundary used by CLI and native IPC. */
+export function createCurrentUserServiceManager(layout: RuntimeLayout): ServiceManager {
+  return createServiceManager({
+    layout,
+    nodePath: process.execPath,
+    homeDir: process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(),
+    run: async ({ command, args }) => await new Promise((resolve) => {
+      const child = spawn(command, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = ""; let stderr = "";
+      child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+      child.once("error", () => resolve({ code: 1, stdout, stderr }));
+      child.once("exit", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    }),
+  });
 }
 
 export async function runServiceCommand(

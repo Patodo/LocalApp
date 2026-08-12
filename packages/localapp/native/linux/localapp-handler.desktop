@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=LocalApp
+NoDisplay=true
+Exec=@LOCALAPP_NATIVE_IPC_CLIENT@ %u
+MimeType=x-scheme-handler/localapp;

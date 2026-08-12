@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,8 +5,9 @@ import { lifecycleError } from "../errors.js";
 import { createIpcClient, type IpcClient } from "../daemon/ipc-client.js";
 import { publishRelease, readCurrentRelease, verifyReleaseArtifact, type CurrentRelease } from "../daemon/release-store.js";
 import { createRuntimeLayout, type RuntimeLayout } from "../daemon/runtime-layout.js";
-import { createServiceManager, type ServiceManager } from "../service/service-manager.js";
+import { createCurrentUserServiceManager, type ServiceManager } from "../service/service-manager.js";
 import { spawnOwnedProcess } from "../process/process-tree.js";
+import { createNativeAdapter, type NativeAdapter } from "../native/native-adapter.js";
 
 export type ServerCommandAction = "start" | "stop" | "restart" | "status" | "logs" | "uninstall";
 export interface RunServerCommandOptions { action: ServerCommandAction; }
@@ -17,6 +17,7 @@ export interface ServerCommandDependencies {
   publishRelease?: typeof publishRelease;
   verifyReleaseArtifact?: typeof verifyReleaseArtifact;
   createServiceManager?: () => ServiceManager;
+  createNativeAdapter?: (root: string) => Promise<Pick<NativeAdapter, "installScheme">>;
   ipcClient?: () => IpcClient;
   health?: (listenUrl: string) => Promise<void>;
 }
@@ -30,6 +31,8 @@ export async function runServerCommand(options: RunServerCommandOptions, depende
     const artifactDirectory = dependencies.artifactDirectory ?? defaultArtifactDirectory();
     await (dependencies.verifyReleaseArtifact ?? verifyReleaseArtifact)(artifactDirectory);
     const release = await (dependencies.publishRelease ?? publishRelease)({ sourceDirectory: artifactDirectory, layout });
+    const native = await (dependencies.createNativeAdapter ?? createNativeAdapter)(path.join(release.releasePath, "runtime", "native"));
+    await native.installScheme();
     const manager = service();
     const installed = await manager.install();
     if (installed.mode === "foreground") return { action: "start", mode: "foreground", reason: installed.reason };
@@ -178,17 +181,7 @@ async function verifyHealth(listenUrl: string): Promise<void> {
 }
 
 function defaultServiceManager(layout: RuntimeLayout): ServiceManager {
-  return createServiceManager({
-    layout, nodePath: process.execPath, homeDir: process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(),
-    run: async ({ command, args }) => await new Promise((resolve) => {
-      const child = spawn(command, args, { shell: false, windowsHide: true });
-      let stdout = ""; let stderr = "";
-      child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-      child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-      child.once("error", () => resolve({ code: 1, stdout, stderr }));
-      child.once("exit", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-    }),
-  });
+  return createCurrentUserServiceManager(layout);
 }
 
 function defaultArtifactDirectory(): string {

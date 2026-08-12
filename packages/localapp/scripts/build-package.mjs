@@ -21,6 +21,8 @@ export async function buildLocalAppPackage(options = {}) {
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
   await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
+  const { buildNativeAdapter } = await import(pathToFileURL(path.join(packageDirectory, "scripts/build-native-adapter.mjs")).href);
+  await buildNativeAdapter({ outputDirectory: path.join(outputDirectory, "runtime", "native") });
   const { buildServerPackage } = await import(pathToFileURL(path.join(projectDirectory, "packages/server/scripts/build-server-package.mjs")).href);
   const serverArtifact = await buildServerPackage({ outputDirectory: path.join(outputDirectory, "runtime/server") });
   await build({

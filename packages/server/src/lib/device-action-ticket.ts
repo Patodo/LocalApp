@@ -42,7 +42,9 @@ export function createDeviceActivationUrl(ticket: DeviceActivationTicket): strin
 }
 
 export function parseDeviceActivationUrl(value: string): DeviceActivationTicket {
-  if (typeof value !== "string" || value.length > 4096) return invalid();
+  // This cap is deliberately applied before URL parsing. JavaScript string
+  // length is UTF-16 code units, not the Scheme boundary's UTF-8 byte budget.
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > 4096) return invalid();
   let url: URL;
   try { url = new URL(value); } catch { return invalid(); }
   if (url.protocol !== "localapp:" || url.hostname !== "action" || url.username || url.password || url.hash
@@ -54,10 +56,15 @@ export function parseDeviceActivationUrl(value: string): DeviceActivationTicket 
   const origin = url.searchParams.get("origin");
   const nonce = url.searchParams.get("nonce");
   if (protocolVersion !== String(DEVICE_ACTION_PROTOCOL_VERSION) || origin === null || nonce === null) return invalid();
-  return parseDeviceActivationTicket({
+  const ticket = parseDeviceActivationTicket({
     protocolVersion: DEVICE_ACTION_PROTOCOL_VERSION,
     sourceOrigin: origin,
     actionId: url.pathname.slice(1),
     nonce,
   });
+  // Do not accept URL-parser normalizations (case folding, dot segments,
+  // decoded separators, reordered query fields, or authority spellings).
+  // The native boundary and Server therefore consume one byte-for-byte shape.
+  if (value !== createDeviceActivationUrl(ticket)) return invalid();
+  return ticket;
 }
