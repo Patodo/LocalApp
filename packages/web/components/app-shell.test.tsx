@@ -45,6 +45,7 @@ describe("AppShell dashboard content width", () => {
     render(<AppShell><div>content</div></AppShell>);
 
     expect(await screen.findByRole("link", { name: "任务" })).toHaveAttribute("href", "/my/tasks");
+    expect(screen.getByRole("link", { name: "设备通知" })).toHaveAttribute("href", "/my/device-notifications");
     expect(screen.queryByRole("link", { name: "系统设置" })).toBeNull();
   });
 });
@@ -71,11 +72,12 @@ describe("AppShell control-plane navigation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows Studio, tasks, peer connections, and system administration in the Web shell", async () => {
+  it("shows Studio, tasks, device notifications, peer connections, and system administration in the Web shell", async () => {
     render(<AppShell><div>content</div></AppShell>);
 
     expect(await screen.findByRole("link", { name: "Studio" })).toHaveAttribute("href", "/my/studio");
     expect(screen.getByRole("link", { name: "任务" })).toHaveAttribute("href", "/my/tasks");
+    expect(screen.getByRole("link", { name: "设备通知" })).toHaveAttribute("href", "/my/device-notifications");
     expect(screen.getByRole("link", { name: "对端连接" })).toHaveAttribute("href", "/my/peers");
     expect(screen.getByRole("link", { name: "系统设置" })).toHaveAttribute("href", "/my/system");
   });
