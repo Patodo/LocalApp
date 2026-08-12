@@ -315,3 +315,59 @@ Tests  9 passed (9)
 ```
 
 `git diff --check` also completed without errors.
+
+## Fix round 3: marker-overlap credential redaction
+
+### Implementation
+
+Fixed the remaining marker-overlap Critical edge in
+`packages/localapp/src/commands/shared.ts`. Redaction remains recursive and
+pre-serialization. For every non-empty credential, the deterministic marker is
+`[REDACTED]` only when that marker does not contain the credential. Otherwise,
+the marker is the private-use scalar `\uE000`; the sole one-character collision
+with that scalar deterministically uses `\uE001`. A marker therefore never
+contains the credential it replaces. Both string values and object keys use the
+same marker; the input is still copied rather than mutated.
+
+### Covering tests
+
+`packages/localapp/tests/login.test.ts` adds literal direct serialization
+regressions for credentials `D` and `[REDACTED]`. In each case the credential
+appears in both a nested object key and nested array value. The tests assert the
+raw and JSON-escaped credential are absent, the parsed key/value are literally
+the selected `\uE000` marker, and the original input remains unchanged.
+
+### RED
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 failed (1)
+Tests  2 failed | 10 passed (12)
+
+uses a marker without a single-character credential in nested keys and values
+uses a marker without the literal [REDACTED] credential in nested keys and values
+
+AssertionError: serialized output unexpectedly contained D / [REDACTED]
+```
+
+### GREEN
+
+```text
+pnpm -C packages/localapp exec vitest run tests/login.test.ts
+Test Files  1 passed (1)
+Tests  12 passed (12)
+
+pnpm -C packages/localapp build
+tsc -p tsconfig.json (exit 0)
+
+pnpm -C packages/localapp test
+Test Files  5 passed (5)
+Tests  70 passed | 1 skipped (71)
+
+pnpm -C packages/server exec vitest run tests/integration/auth.test.ts tests/integration/global-auth.test.ts
+Test Files  2 passed (2)
+Tests  9 passed (9)
+```
+
+`git diff --check` completed without errors. The deferred logout-report minor
+was not changed.

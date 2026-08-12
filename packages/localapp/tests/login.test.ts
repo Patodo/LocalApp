@@ -291,4 +291,36 @@ describe("authentication commands", () => {
     expect(JSON.parse(stdout)).toEqual({ "reply-[REDACTED]": [{ echo: "[REDACTED]" }] });
     expect(value).toEqual(original);
   });
+
+  it("uses a marker without a single-character credential in nested keys and values", () => {
+    // Break caught: the fixed [REDACTED] marker itself leaks the credential D.
+    const apiKey = "D";
+    const escapedApiKey = "D";
+    const value = { outer: [{ "key-D": { value: "D" } }] };
+    const original = structuredClone(value);
+    let stdout = "";
+
+    writeCredentialSafeJson({ stdout: (output) => { stdout += output; }, stderr: () => undefined }, value, apiKey);
+
+    expect(stdout).not.toContain(apiKey);
+    expect(stdout).not.toContain(escapedApiKey);
+    expect(JSON.parse(stdout)).toEqual({ outer: [{ "key-\uE000": { value: "\uE000" } }] });
+    expect(value).toEqual(original);
+  });
+
+  it("uses a marker without the literal [REDACTED] credential in nested keys and values", () => {
+    // Break caught: replacing [REDACTED] with the same marker leaves the credential unchanged.
+    const apiKey = "[REDACTED]";
+    const escapedApiKey = "[REDACTED]";
+    const value = { outer: [{ "key-[REDACTED]": { value: "[REDACTED]" } }] };
+    const original = structuredClone(value);
+    let stdout = "";
+
+    writeCredentialSafeJson({ stdout: (output) => { stdout += output; }, stderr: () => undefined }, value, apiKey);
+
+    expect(stdout).not.toContain(apiKey);
+    expect(stdout).not.toContain(escapedApiKey);
+    expect(JSON.parse(stdout)).toEqual({ outer: [{ "key-\uE000": { value: "\uE000" } }] });
+    expect(value).toEqual(original);
+  });
 });
