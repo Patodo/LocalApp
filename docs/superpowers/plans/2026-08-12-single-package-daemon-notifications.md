@@ -211,7 +211,7 @@ git commit -m "feat(cli): port profiles and authentication to TypeScript"
 - Produces: `syncManagedTemplate(projectDir, { quiet }): Promise<SyncResult>`.
 - Consumes: SDK, backend, Server Core build outputs and `init-repo` source.
 
-- [ ] **Step 1: Write failing real-template extraction tests**
+- [x] **Step 1: Write failing real-template extraction tests**
 
 ```ts
 it("initializes a complete builtin project from the packed template", async () => {
@@ -230,13 +230,13 @@ it("sync replaces managed files without changing user source", async () => {
 });
 ```
 
-- [ ] **Step 2: Run template tests and verify RED**
+- [x] **Step 2: Run template tests and verify RED**
 
 Run: `pnpm -C packages/server-core build && pnpm -C packages/localapp exec vitest run tests/init.test.ts tests/template-zones.test.ts`
 
 Expected: FAIL because no staged npm-package template or TypeScript init exists.
 
-- [ ] **Step 3: Implement deterministic staging and project commands**
+- [x] **Step 3: Implement deterministic staging and project commands**
 
 Stage `init-repo` without `node_modules`, `dist`, `.next`, and generated data;
 inject SDK/backend source and Server Core dist under `runtime/`; write the
@@ -246,13 +246,13 @@ LocalApp skills. Postprocess `workspace:*` dependencies into
 `eject` copies managed files into user ownership, writes the monotonic ejected
 marker, and refuses every later automatic sync.
 
-- [ ] **Step 4: Run template, init, and generated-project tests**
+- [x] **Step 4: Run template, init, and generated-project tests**
 
 Run: `pnpm -C packages/localapp test && pnpm -C init-repo test && pnpm -C init-repo build`
 
 Expected: PASS; generated files are complete and user source remains unchanged by sync.
 
-- [ ] **Step 5: Commit the TypeScript template lifecycle**
+- [x] **Step 5: Commit the TypeScript template lifecycle**
 
 ```bash
 git add packages/localapp init-repo/package.json
