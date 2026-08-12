@@ -779,7 +779,7 @@ git commit -m "feat(notify): deliver Server events through the daemon"
 - Produces: authenticated settings, enable/disable, quiet-hours, preview, and test-notification APIs.
 - Consumes: Task 10 source configuration and dispatcher.
 
-- [ ] **Step 1: Write failing permission and Web journey tests**
+- [x] **Step 1: Write failing permission and Web journey tests**
 
 ```tsx
 it("explains unavailable local integration without exposing a credential", async () => {
@@ -796,13 +796,13 @@ it("requests permission only after the explicit test-notification action", async
 });
 ```
 
-- [ ] **Step 2: Run Web and native-notification tests and verify RED**
+- [x] **Step 2: Run Web and native-notification tests and verify RED**
 
 Run: `pnpm -C packages/web exec vitest run components/device-notifications/device-notifications-page.test.tsx && pnpm -C packages/localapp exec vitest run tests/notification-dispatcher.test.ts`
 
 Expected: FAIL because neither the Web surface nor explicit permission flow exists.
 
-- [ ] **Step 3: Implement settings and native display policy**
+- [x] **Step 3: Implement settings and native display policy**
 
 Add a Lucide-based Device Notifications page showing daemon/adapter version,
 permission, explicit local/remote sources, connection state, cursor, quiet
@@ -814,13 +814,13 @@ support. Send only plain text, safe local icon, application/source labels,
 priority, and the opaque click URL. Denied permission is inbox-only and is
 never re-prompted automatically.
 
-- [ ] **Step 4: Run Web, Server, and current-platform native tests**
+- [x] **Step 4: Run Web, Server, and current-platform native tests**
 
 Run: `pnpm -C packages/web test && pnpm -C packages/server exec vitest run tests/integration/device-notifications.test.ts && pnpm -C packages/localapp test:native`
 
 Expected: PASS; settings never reveal secrets and a real local test notification is displayed when permission is granted.
 
-- [ ] **Step 5: Commit notification settings and adapters**
+- [x] **Step 5: Commit notification settings and adapters**
 
 ```bash
 git add packages/web packages/server packages/localapp
