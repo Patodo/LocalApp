@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { lifecycleError } from "../errors.js";
@@ -16,14 +17,27 @@ export function createMacosLaunchAgent(options: PlatformServiceOptions): Omit<Se
   const domain = `gui/${uid}`;
   const target = `${domain}/${LABEL}`;
   const plist = buildPlist(options);
+  const receiptPath = `${registrationPath}.loaded`;
+  const plistDigest = crypto.createHash("sha256").update(plist).digest("hex");
   return {
     registrationPath,
     async install(): Promise<ServiceInstallResult> {
       const installed = await writeServiceFile(registrationPath, plist);
+      const receipt = await fs.readFile(receiptPath, "utf8").then((value) => value.trim(), () => undefined);
+      const loaded = await options.run({ command: "/bin/launchctl", args: ["print", target] });
+      if (loaded.code === 0 && receipt === plistDigest) return { mode: "service", installed };
+      if (loaded.code !== 0 && !isMissingService(loaded.stderr)) {
+        throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent status could not be verified");
+      }
+      const removed = await options.run({ command: "/bin/launchctl", args: ["bootout", target] });
+      if (removed.code !== 0 && !isMissingService(removed.stderr)) {
+        throw lifecycleError("user_service_command_failed", "The previous macOS LaunchAgent could not be removed");
+      }
       const result = await options.run({ command: "/bin/launchctl", args: ["bootstrap", domain, registrationPath] });
-      if (result.code !== 0 && !/already (?:loaded|exists)|service is disabled/i.test(result.stderr)) {
+      if (result.code !== 0) {
         throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent could not be registered");
       }
+      await writeServiceFile(receiptPath, `${plistDigest}\n`);
       return { mode: "service", installed };
     },
     async start(): Promise<void> {
@@ -48,8 +62,13 @@ export function createMacosLaunchAgent(options: PlatformServiceOptions): Omit<Se
         throw lifecycleError("user_service_command_failed", "The macOS LaunchAgent could not be removed");
       }
       await fs.rm(registrationPath, { force: true });
+      await fs.rm(receiptPath, { force: true });
     },
   };
+}
+
+function isMissingService(stderr: string): boolean {
+  return /could not find service|service (?:is )?not found|no such process/i.test(stderr);
 }
 
 function buildPlist(options: PlatformServiceOptions): string {

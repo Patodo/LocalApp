@@ -55,8 +55,8 @@ export async function verifyReleaseArtifact(directory: string): Promise<ReleaseA
 export async function publishRelease(options: PublishReleaseOptions): Promise<CurrentRelease> {
   const sourceDirectory = path.resolve(options.sourceDirectory);
   const inspected = await inspectReleaseArtifact(sourceDirectory);
+  await ensurePrivateDirectories(options.layout);
   return withReleaseLock(options.layout, options.lockTimeoutMs ?? 5_000, async () => {
-    await ensurePrivateDirectories(options.layout);
     const releaseName = `${inspected.manifest.version}-${inspected.manifest.artifactDigest}`;
     const releasePath = path.join(options.layout.releasesDir, releaseName);
     const existing = await lstatOptional(releasePath);
@@ -75,7 +75,7 @@ export async function publishRelease(options: PublishReleaseOptions): Promise<Cu
       bootstrapEntrypoint: inspected.manifest.bootstrapEntrypoint,
     };
     const launcherBytes = await readRegularFile(path.join(releasePath, ...inspected.manifest.bootstrapEntrypoint.split("/")));
-    await writeAtomic(options.layout.launcherPath, launcherBytes, 0o700);
+    await ensureStableLauncher(options.layout.launcherPath, launcherBytes);
     await writeAtomic(options.layout.currentManifestPath, Buffer.from(`${JSON.stringify(current, null, 2)}\n`), 0o600);
     return current;
   });
@@ -231,37 +231,165 @@ async function publishImmutableDirectory(
 }
 
 async function ensurePrivateDirectories(layout: RuntimeLayout): Promise<void> {
-  for (const directory of [layout.supportDir, layout.releasesDir, layout.logsDir, layout.runtimeDir, path.dirname(layout.launcherPath)]) {
-    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-    if (process.platform !== "win32") await fs.chmod(directory, 0o700);
+  validateRuntimeLayout(layout);
+  await ensurePrivateDirectory(layout.supportDir);
+  for (const directory of [layout.releasesDir, layout.logsDir, path.dirname(layout.launcherPath), layout.runtimeDir]) {
+    await ensurePrivateDirectory(directory);
   }
 }
 
 async function withReleaseLock<T>(layout: RuntimeLayout, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
-  await fs.mkdir(layout.runtimeDir, { recursive: true, mode: 0o700 });
+  await ensurePrivateDirectory(layout.runtimeDir);
   const deadline = Date.now() + timeoutMs;
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  while (handle === undefined) {
-    try {
-      handle = await fs.open(layout.releaseLockPath, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`);
-      await handle.sync();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) throw lifecycleError("release_store_busy", "Another LocalApp release publication is still in progress");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+  let lock: OwnedReleaseLock | undefined;
+  while (lock === undefined) {
+    lock = await tryCreateReleaseLock(layout);
+    if (lock !== undefined) break;
+    if (await reclaimDeadReleaseLock(layout.releaseLockPath)) continue;
+    if (Date.now() >= deadline) throw lifecycleError("release_store_busy", "Another LocalApp release publication is still in progress");
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  const identity = await handle.stat({ bigint: true });
   try {
     return await operation();
   } finally {
-    await handle.close();
-    const current = await fs.lstat(layout.releaseLockPath, { bigint: true }).catch(() => undefined);
-    if (current && !current.isSymbolicLink() && current.dev === identity.dev && current.ino === identity.ino) {
-      await fs.unlink(layout.releaseLockPath);
+    await lock.handle.close();
+    await unlinkOwnedPath(layout.releaseLockPath, lock.identity);
+  }
+}
+
+interface FileIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+interface OwnedReleaseLock {
+  handle: Awaited<ReturnType<typeof fs.open>>;
+  identity: FileIdentity;
+}
+
+async function tryCreateReleaseLock(layout: RuntimeLayout): Promise<OwnedReleaseLock | undefined> {
+  const temporary = path.join(layout.runtimeDir, `.release-lock.${process.pid}.${crypto.randomUUID()}.next`);
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let identity: FileIdentity | undefined;
+  let linked = false;
+  try {
+    handle = await fs.open(temporary, "wx", 0o600);
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile()) throw lifecycleError("release_store_lock_invalid", "The LocalApp release lock could not be initialized");
+    identity = { dev: stat.dev, ino: stat.ino };
+    await handle.writeFile(`${JSON.stringify({ schemaVersion: 1, pid: process.pid, createdAt: new Date().toISOString() })}\n`);
+    await handle.sync();
+    try {
+      await fs.link(temporary, layout.releaseLockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return undefined;
+      throw error;
+    }
+    linked = true;
+    const canonical = await fs.lstat(layout.releaseLockPath, { bigint: true });
+    if (!canonical.isFile() || canonical.isSymbolicLink() || canonical.dev !== identity.dev || canonical.ino !== identity.ino) {
+      throw lifecycleError("release_store_lock_invalid", "The LocalApp release lock identity changed during creation");
+    }
+    await unlinkOwnedPath(temporary, identity);
+    return { handle, identity };
+  } catch (error) {
+    if (linked && identity !== undefined) await unlinkOwnedPath(layout.releaseLockPath, identity).catch(() => undefined);
+    linked = false;
+    throw error;
+  } finally {
+    if (!linked || identity === undefined) {
+      await handle?.close().catch(() => undefined);
+      if (identity !== undefined) await unlinkOwnedPath(temporary, identity).catch(() => undefined);
+      else await fs.rm(temporary, { force: true }).catch(() => undefined);
     }
   }
+}
+
+async function reclaimDeadReleaseLock(lockPath: string): Promise<boolean> {
+  const before = await fs.lstat(lockPath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (before === undefined) return true;
+  if (!before.isFile() || before.isSymbolicLink() || (process.platform !== "win32" && (Number(before.mode) & 0o077) !== 0)) return false;
+  let value: unknown;
+  try {
+    value = JSON.parse((await readRegularFile(lockPath)).toString("utf8"));
+  } catch {
+    return false;
+  }
+  if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "pid", "createdAt"])
+    || value.schemaVersion !== 1 || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0
+    || typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))) return false;
+  if (processExists(value.pid)) return false;
+  return unlinkOwnedPath(lockPath, { dev: before.dev, ino: before.ino });
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function unlinkOwnedPath(filePath: string, identity: FileIdentity): Promise<boolean> {
+  const current = await fs.lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (current === undefined || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino) return false;
+  await fs.unlink(filePath);
+  return true;
+}
+
+async function ensurePrivateDirectory(directory: string): Promise<void> {
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const stat = await fs.lstat(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw lifecycleError("release_path_unsafe", "A LocalApp release directory is not a private regular directory");
+  }
+  if (process.platform !== "win32") {
+    await fs.chmod(directory, 0o700);
+    const secured = await fs.lstat(directory);
+    if (!secured.isDirectory() || secured.isSymbolicLink() || (secured.mode & 0o077) !== 0) {
+      throw lifecycleError("release_path_unsafe", "A LocalApp release directory is not private");
+    }
+  }
+}
+
+function validateRuntimeLayout(layout: RuntimeLayout): void {
+  const support = path.resolve(layout.supportDir);
+  const expected = [
+    [layout.releasesDir, path.join(support, "releases")],
+    [layout.currentManifestPath, path.join(support, "current.json")],
+    [layout.launcherPath, path.join(support, "bin", "localapp-daemon-bootstrap.mjs")],
+    [layout.logsDir, path.join(support, "logs")],
+  ];
+  if (expected.some(([actual, canonical]) => path.resolve(actual) !== path.resolve(canonical))
+    || path.resolve(layout.releaseLockPath) !== path.resolve(layout.runtimeDir, "release.lock")) {
+    throw lifecycleError("release_path_unsafe", "The LocalApp release layout is invalid");
+  }
+}
+
+async function ensureStableLauncher(filePath: string, bytes: Buffer): Promise<void> {
+  const existing = await fs.lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (existing === undefined) {
+    await writeAtomic(filePath, bytes, 0o700);
+    return;
+  }
+  if (!existing.isFile() || existing.isSymbolicLink()) {
+    throw lifecycleError("release_launcher_incompatible", "The stable LocalApp launcher is invalid");
+  }
+  const current = await readRegularFile(filePath);
+  if (!current.equals(bytes)) {
+    throw lifecycleError("release_launcher_incompatible", "The stable LocalApp launcher is incompatible with this release");
+  }
+  if (process.platform !== "win32") await fs.chmod(filePath, 0o700);
 }
 
 async function writeAtomic(filePath: string, bytes: Buffer, mode: number): Promise<void> {

@@ -60,11 +60,15 @@ function parseFrame(frame: Uint8Array): unknown {
   if (trailing.length > 0) {
     throw protocolError(trailing.includes("\n") ? "IPC_MULTIPLE_FRAMES" : "IPC_TRAILING_DATA");
   }
+  const json = text.slice(0, newline);
+  let parsed: unknown;
   try {
-    return JSON.parse(text.slice(0, newline));
+    parsed = JSON.parse(json);
   } catch {
     throw protocolError("IPC_JSON_INVALID");
   }
+  assertNoDuplicateJsonKeys(json);
+  return parsed;
 }
 
 function encodeFrame(value: unknown): Buffer {
@@ -136,6 +140,88 @@ function isLoopbackHttpOrigin(value: string): boolean {
 
 function protocolError(code: string): Error {
   return lifecycleError(code, code);
+}
+
+function assertNoDuplicateJsonKeys(json: string): void {
+  let index = 0;
+  const whitespace = () => {
+    while (index < json.length && /[\t\n\r ]/.test(json[index]!)) index += 1;
+  };
+  const stringValue = (): string => {
+    const start = index;
+    index += 1;
+    while (index < json.length) {
+      if (json[index] === "\\") {
+        index += 2;
+        continue;
+      }
+      if (json[index] === '"') {
+        index += 1;
+        return JSON.parse(json.slice(start, index)) as string;
+      }
+      index += 1;
+    }
+    throw protocolError("IPC_JSON_INVALID");
+  };
+  const value = (): void => {
+    whitespace();
+    const first = json[index];
+    if (first === "{") {
+      index += 1;
+      whitespace();
+      const keys = new Set<string>();
+      if (json[index] === "}") {
+        index += 1;
+        return;
+      }
+      while (index < json.length) {
+        whitespace();
+        if (json[index] !== '"') throw protocolError("IPC_JSON_INVALID");
+        const key = stringValue();
+        if (keys.has(key)) throw protocolError("IPC_JSON_DUPLICATE_KEY");
+        keys.add(key);
+        whitespace();
+        if (json[index] !== ":") throw protocolError("IPC_JSON_INVALID");
+        index += 1;
+        value();
+        whitespace();
+        if (json[index] === "}") {
+          index += 1;
+          return;
+        }
+        if (json[index] !== ",") throw protocolError("IPC_JSON_INVALID");
+        index += 1;
+      }
+      throw protocolError("IPC_JSON_INVALID");
+    }
+    if (first === "[") {
+      index += 1;
+      whitespace();
+      if (json[index] === "]") {
+        index += 1;
+        return;
+      }
+      while (index < json.length) {
+        value();
+        whitespace();
+        if (json[index] === "]") {
+          index += 1;
+          return;
+        }
+        if (json[index] !== ",") throw protocolError("IPC_JSON_INVALID");
+        index += 1;
+      }
+      throw protocolError("IPC_JSON_INVALID");
+    }
+    if (first === '"') {
+      stringValue();
+      return;
+    }
+    while (index < json.length && !/[\t\n\r ,\]}]/.test(json[index]!)) index += 1;
+  };
+  value();
+  whitespace();
+  if (index !== json.length) throw protocolError("IPC_JSON_INVALID");
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {

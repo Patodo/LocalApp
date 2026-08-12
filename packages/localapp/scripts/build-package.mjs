@@ -146,6 +146,7 @@ async function collectArtifactFiles(root) {
 }
 
 const DAEMON_BOOTSTRAP_SOURCE = String.raw`#!/usr/bin/env node
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -155,29 +156,122 @@ const launcher = fileURLToPath(import.meta.url);
 const support = path.resolve(path.dirname(launcher), "..");
 const currentPath = path.join(support, "current.json");
 const fail = () => { process.stderr.write("LocalApp current release is unavailable. Run localapp server start again.\n"); process.exit(1); };
-let current;
-try { current = JSON.parse(fs.readFileSync(currentPath, "utf8")); } catch { fail(); }
-const digest = typeof current?.artifactDigest === "string" && /^[0-9a-f]{64}$/.test(current.artifactDigest) ? current.artifactDigest : "";
-const version = typeof current?.version === "string" && /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/.test(current.version) ? current.version : "";
-const expectedRelease = path.join(support, "releases", version + "-" + digest);
-const entrypoint = typeof current?.entrypoint === "string" ? current.entrypoint : "";
-if (!version || !digest || path.resolve(current.releasePath ?? "") !== path.resolve(expectedRelease)
-  || !entrypoint || entrypoint.includes("\\") || path.posix.normalize(entrypoint) !== entrypoint
-  || entrypoint.startsWith("/") || entrypoint.split("/").some((part) => !part || part === "." || part === "..")) fail();
-const executable = path.join(expectedRelease, ...entrypoint.split("/"));
-const child = spawn(process.execPath, [executable, "_daemon"], {
-  cwd: expectedRelease,
-  env: { ...process.env, LOCALAPP_RELEASE_PATH: expectedRelease },
-  stdio: "inherit",
-  shell: false,
-  windowsHide: true,
-});
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => child.kill(signal));
-child.once("error", fail);
-child.once("exit", (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  else process.exit(code ?? 1);
-});
+const digestPattern = /^[0-9a-f]{64}$/;
+const versionPattern = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$/;
+const exactKeys = (value, expected) => {
+  const keys = Object.keys(value).sort();
+  const sorted = [...expected].sort();
+  return keys.length === sorted.length && keys.every((key, index) => key === sorted[index]);
+};
+const safeRelative = (value) => typeof value === "string" && value.length > 0 && value.length <= 512
+  && !value.includes("\\") && !value.startsWith("/") && !value.endsWith("/")
+  && path.posix.normalize(value) === value
+  && value.split("/").every((part) => part && part !== "." && part !== "..");
+const regularBytes = (filePath) => {
+  const before = fs.lstatSync(filePath, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("unsafe file");
+  const bytes = fs.readFileSync(filePath);
+  const after = fs.lstatSync(filePath, { bigint: true });
+  if (!after.isFile() || after.isSymbolicLink() || after.dev !== before.dev || after.ino !== before.ino
+    || after.size !== before.size || BigInt(bytes.byteLength) !== after.size) throw new Error("changed file");
+  return bytes;
+};
+const listFiles = (root, prefix = "") => {
+  const output = [];
+  for (const entry of fs.readdirSync(path.join(root, ...prefix.split("/").filter(Boolean)), { withFileTypes: true })) {
+    const relative = prefix ? prefix + "/" + entry.name : entry.name;
+    if (relative === ".localapp-artifact.json") continue;
+    if (!safeRelative(relative) || entry.isSymbolicLink()) throw new Error("unsafe release entry");
+    if (entry.isDirectory()) output.push(...listFiles(root, relative));
+    else if (entry.isFile()) output.push(relative);
+    else throw new Error("unsupported release entry");
+  }
+  return output.sort();
+};
+let executable;
+let expectedRelease;
+try {
+  const supportStat = fs.lstatSync(support);
+  const releasesPath = path.join(support, "releases");
+  const releasesStat = fs.lstatSync(releasesPath);
+  if (!supportStat.isDirectory() || supportStat.isSymbolicLink() || !releasesStat.isDirectory() || releasesStat.isSymbolicLink()) {
+    throw new Error("unsafe support root");
+  }
+  const currentStat = fs.lstatSync(currentPath);
+  if (!currentStat.isFile() || currentStat.isSymbolicLink()) throw new Error("unsafe current manifest");
+  const current = JSON.parse(regularBytes(currentPath).toString("utf8"));
+  if (!current || typeof current !== "object" || Array.isArray(current)
+    || !exactKeys(current, ["version", "artifactDigest", "releasePath", "entrypoint", "bootstrapEntrypoint"])
+    || typeof current.version !== "string" || !versionPattern.test(current.version)
+    || typeof current.artifactDigest !== "string" || !digestPattern.test(current.artifactDigest)
+    || !safeRelative(current.entrypoint) || !safeRelative(current.bootstrapEntrypoint)) throw new Error("invalid current manifest");
+  expectedRelease = path.join(releasesPath, current.version + "-" + current.artifactDigest);
+  const releaseStat = fs.lstatSync(expectedRelease);
+  if (!releaseStat.isDirectory() || releaseStat.isSymbolicLink()
+    || path.resolve(current.releasePath) !== path.resolve(expectedRelease)) throw new Error("unsafe current release");
+  const manifestPath = path.join(expectedRelease, ".localapp-artifact.json");
+  const manifest = JSON.parse(regularBytes(manifestPath).toString("utf8"));
+  const allowedManifestKeys = ["schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint", "files", "artifactDigest", "bundleDigest", "serverBundleDigest", "serverEntrypoint"];
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
+    || Object.keys(manifest).some((key) => !allowedManifestKeys.includes(key))
+    || manifest.schemaVersion !== 2 || manifest.name !== "localapp" || manifest.nodeMajor !== 24
+    || manifest.version !== current.version || manifest.artifactDigest !== current.artifactDigest
+    || manifest.entrypoint !== current.entrypoint || manifest.bootstrapEntrypoint !== current.bootstrapEntrypoint
+    || !Array.isArray(manifest.files) || manifest.files.length === 0) throw new Error("invalid release manifest");
+  const files = manifest.files.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || !exactKeys(entry, ["path", "size", "sha256"])
+      || !safeRelative(entry.path) || entry.path === ".localapp-artifact.json"
+      || !Number.isSafeInteger(entry.size) || entry.size < 0 || typeof entry.sha256 !== "string" || !digestPattern.test(entry.sha256)) {
+      throw new Error("invalid release file");
+    }
+    return { path: entry.path, size: entry.size, sha256: entry.sha256 };
+  });
+  const canonicalFiles = [...files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  if (new Set(files.map((entry) => entry.path)).size !== files.length
+    || canonicalFiles.some((entry, index) => entry.path !== files[index].path)
+    || !files.some((entry) => entry.path === manifest.entrypoint)
+    || !files.some((entry) => entry.path === manifest.bootstrapEntrypoint)) throw new Error("noncanonical release files");
+  const descriptor = {
+    schemaVersion: 2,
+    name: "localapp",
+    version: manifest.version,
+    nodeMajor: 24,
+    entrypoint: manifest.entrypoint,
+    bootstrapEntrypoint: manifest.bootstrapEntrypoint,
+    files,
+    ...(typeof manifest.bundleDigest === "string" ? { bundleDigest: manifest.bundleDigest } : {}),
+    ...(typeof manifest.serverBundleDigest === "string" ? { serverBundleDigest: manifest.serverBundleDigest } : {}),
+    ...(typeof manifest.serverEntrypoint === "string" ? { serverEntrypoint: manifest.serverEntrypoint } : {}),
+  };
+  const descriptorDigest = crypto.createHash("sha256").update(JSON.stringify(descriptor)).digest("hex");
+  if (descriptorDigest !== manifest.artifactDigest) throw new Error("release descriptor changed");
+  const observed = listFiles(expectedRelease);
+  if (observed.length !== files.length || observed.some((entry, index) => entry !== files[index].path)) throw new Error("release tree changed");
+  for (const entry of files) {
+    const bytes = regularBytes(path.join(expectedRelease, ...entry.path.split("/")));
+    if (bytes.byteLength !== entry.size || crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256) {
+      throw new Error("release file changed");
+    }
+  }
+  executable = path.join(expectedRelease, ...manifest.entrypoint.split("/"));
+} catch {
+  fail();
+}
+if (executable && expectedRelease) {
+  const child = spawn(process.execPath, [executable, "_daemon"], {
+    cwd: expectedRelease,
+    env: { ...process.env, LOCALAPP_RELEASE_PATH: expectedRelease },
+    stdio: "inherit",
+    shell: false,
+    windowsHide: true,
+  });
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => child.kill(signal));
+  child.once("error", fail);
+  child.once("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exit(code ?? 1);
+  });
+}
 `;
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

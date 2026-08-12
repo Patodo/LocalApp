@@ -28,7 +28,10 @@ export function createLinuxSystemdUserService(options: PlatformServiceOptions): 
       await runServiceCommand(options.run, { command: systemctl, args: ["--user", "start", UNIT_NAME] });
     },
     async stop(): Promise<void> {
-      await runServiceCommand(options.run, { command: systemctl, args: ["--user", "stop", UNIT_NAME] }, [5]);
+      const result = await options.run({ command: systemctl, args: ["--user", "stop", UNIT_NAME] });
+      if (result.code !== 0 && !isMissingUnit(result.stderr)) {
+        throw lifecycleError("user_service_command_failed", "The systemd user service could not be stopped");
+      }
     },
     async restart(): Promise<void> {
       await runServiceCommand(options.run, { command: systemctl, args: ["--user", "restart", UNIT_NAME] });
@@ -40,11 +43,18 @@ export function createLinuxSystemdUserService(options: PlatformServiceOptions): 
       throw lifecycleError("user_service_command_failed", "The systemd user service status is unavailable");
     },
     async uninstall(): Promise<void> {
-      await runServiceCommand(options.run, { command: systemctl, args: ["--user", "disable", "--now", UNIT_NAME] }, [1, 5]);
+      const disabled = await options.run({ command: systemctl, args: ["--user", "disable", "--now", UNIT_NAME] });
+      if (disabled.code !== 0 && !isMissingUnit(disabled.stderr)) {
+        throw lifecycleError("user_service_command_failed", "The systemd user service could not be removed");
+      }
       await fs.rm(registrationPath, { force: true });
       await runServiceCommand(options.run, { command: systemctl, args: ["--user", "daemon-reload"] });
     },
   };
+}
+
+function isMissingUnit(stderr: string): boolean {
+  return /not loaded|not found|does not exist|no such file/i.test(stderr);
 }
 
 function buildUnit(options: PlatformServiceOptions): string {

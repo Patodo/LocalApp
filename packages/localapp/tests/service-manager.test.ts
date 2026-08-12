@@ -42,6 +42,31 @@ describe("per-user service manager", () => {
     expect(commands.flatMap((command) => command.args).join(" ")).not.toContain("system/");
   });
 
+  it("reloads a changed LaunchAgent and leaves an unchanged loaded registration alone", async () => {
+    const fixture = await serviceFixture("mac reload");
+    const commands: ServiceCommandInvocation[] = [];
+    const manager = createServiceManager({
+      platform: "darwin",
+      layout: fixture.layout,
+      nodePath: "/Node Runtime/bin/node",
+      uid: 501,
+      homeDir: fixture.root,
+      run: recordingRunner(commands, (invocation) => invocation.args[0] === "print"
+        ? { code: 0, stdout: "loaded", stderr: "" }
+        : undefined),
+    });
+
+    await manager.install();
+    const firstBootoutCount = commands.filter((command) => command.args[0] === "bootout").length;
+    const firstBootstrapCount = commands.filter((command) => command.args[0] === "bootstrap").length;
+    expect(firstBootoutCount).toBe(1);
+    expect(firstBootstrapCount).toBe(1);
+
+    await manager.install();
+    expect(commands.filter((command) => command.args[0] === "bootout")).toHaveLength(firstBootoutCount);
+    expect(commands.filter((command) => command.args[0] === "bootstrap")).toHaveLength(firstBootstrapCount);
+  });
+
   it("creates a LIMITED current-user Windows task with one safely quoted command", async () => {
     const fixture = await serviceFixture("windows & task (one)!");
     const commands: ServiceCommandInvocation[] = [];
@@ -83,6 +108,24 @@ describe("per-user service manager", () => {
     expect(unit).toContain("ExecStart=\"");
     expect(unit).toContain("/opt/Node Runtime/bin/node");
     expect(commands.every((command) => command.args[0] === "--user")).toBe(true);
+  });
+
+  it("does not delete a systemd unit when disable fails for a real error", async () => {
+    const fixture = await serviceFixture("linux uninstall failure");
+    const manager = createServiceManager({
+      platform: "linux",
+      layout: fixture.layout,
+      nodePath: process.execPath,
+      homeDir: fixture.root,
+      env: { XDG_CONFIG_HOME: path.join(fixture.root, "config") },
+      run: recordingRunner([], (invocation) => invocation.args.includes("disable")
+        ? { code: 1, stdout: "", stderr: "Access denied" }
+        : undefined),
+    });
+    await manager.install();
+
+    await expect(manager.uninstall()).rejects.toMatchObject({ code: "user_service_command_failed" });
+    await expect(fs.stat(manager.registrationPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
   });
 
   it("rejects secret-bearing service environments before writing registration", async () => {

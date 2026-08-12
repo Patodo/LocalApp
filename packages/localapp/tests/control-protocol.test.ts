@@ -60,6 +60,17 @@ describe("daemon control protocol", () => {
     expectProtocolCode(() => parseControlRequestFrame(Buffer.from('[]\n')), "IPC_REQUEST_INVALID");
   });
 
+  it("rejects duplicate JSON keys at every object depth", () => {
+    expectProtocolCode(
+      () => parseControlRequestFrame(Buffer.from('{"type":"status","type":"stop"}\n')),
+      "IPC_JSON_DUPLICATE_KEY",
+    );
+    expectProtocolCode(
+      () => parseControlResponseFrame(Buffer.from('{"ok":true,"type":"status","data":{"bootId":"boot_0123456789abcdef","pid":1,"pid":2,"server":{"status":"ready","listenUrl":"http://127.0.0.1:43127"}}}\n')),
+      "IPC_JSON_DUPLICATE_KEY",
+    );
+  });
+
   it("rejects malformed or credential-shaped public responses", () => {
     expectProtocolCode(
       () => parseControlResponseFrame(Buffer.from('{"ok":false,"code":"bad","message":"x"}\n')),
