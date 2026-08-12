@@ -249,7 +249,9 @@ export class LocalAppDaemon {
       const notificationRuntime = this.notificationRuntime;
       this.notificationRuntime = undefined;
       this.notificationResolver = undefined;
-      await notificationRuntime?.manager.stop().catch(() => undefined);
+      if (notificationRuntime !== undefined) {
+        await withCleanupTimeout(notificationRuntime.manager.stop(), this.options.notificationStopTimeoutMs ?? 15_000).catch(() => undefined);
+      }
       // Keep the ownership reference until process-tree cleanup is proven.  A
       // failed terminate must reach the outer cleanup path, which then keeps
       // the daemon lock rather than allowing another daemon to reclaim it.

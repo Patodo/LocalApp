@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(process.cwd(), "../..");
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))));
 
-async function fixture(cursor?: number) {
+async function fixture(cursor?: number, connectionDelay?: (ms: number, signal: AbortSignal) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(repositoryRoot, "tmp/task-10c-source-"));
   roots.push(root);
   const store = new DeliveryStore({ statePath: path.join(root, "state.json") });
@@ -31,7 +31,7 @@ async function fixture(cursor?: number) {
       return socket;
     },
     reportStatus: async (_id, status) => { statuses.push(status); },
-    delay: (_ms, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })),
+    delay: connectionDelay ?? ((_ms, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))),
     jitter: () => 0,
   });
   return { id, store, native, socket, statuses, connection };
@@ -113,6 +113,39 @@ describe("SourceConnection", () => {
     socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 10 } });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(statuses).toEqual(expect.arrayContaining([expect.objectContaining({ error: expect.objectContaining({ code: "SOURCE_PROTOCOL_INVALID" }) })]));
+    await active.stop();
+  });
+
+  it("uses authoritative catch-up instead of skipping a live gap", async () => {
+    const { id, store, native, socket, statuses, connection } = await fixture(10, async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ success: true, data: { items: [], nextSequence: 10, snapshotHighWater: 10, hasMore: false, omittedCount: 0 } }))
+      .mockResolvedValueOnce(Response.json({ success: true, data: { items: [delivery(11), delivery(12)], nextSequence: 12, snapshotHighWater: 12, hasMore: false, omittedCount: 0 } })) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 10 } });
+    await waitFor(() => statuses.some((status: any) => status.state === "connected"));
+    socket.frame({ type: "notify:notification", data: delivery(12) });
+    await waitFor(async () => (await store.readSource(id))?.cursor === 12);
+    expect(native.showNotification.mock.calls.map((call) => call[0].title)).toEqual(["Title 11", "Title 12"]);
+    await active.stop();
+  });
+
+  it("aborts and settles an in-flight catch-up before retrying after a protocol failure", async () => {
+    const { id, store, native, socket, statuses, connection } = await fixture(0);
+    let aborted = false;
+    const fetch = vi.fn((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => { aborted = true; reject(init.signal?.reason); }, { once: true });
+    })) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 1 } });
+    await waitFor(() => fetch.mock.calls.length === 1);
+    socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 1 } });
+    await waitFor(() => statuses.some((status: any) => status.error?.code === "SOURCE_PROTOCOL_INVALID"));
+    expect(aborted).toBe(true);
+    expect((await store.readSource(id))?.cursor).toBe(0);
+    expect(native.showNotification).not.toHaveBeenCalled();
     await active.stop();
   });
 });

@@ -88,6 +88,8 @@ export class SourceConnection {
   }
 
   private async connectOnce(): Promise<void> {
+    const attemptController = new AbortController();
+    const attemptSignal = AbortSignal.any([this.controller.signal, attemptController.signal]);
     await this.report("connecting", await this.cursor(), null);
     const socket = (this.options.createSocket ?? createRealSocket)(webSocketUrl(this.source.sourceOrigin), this.source.credential!);
     this.socket = socket;
@@ -118,37 +120,40 @@ export class SourceConnection {
     try {
       await Promise.race([readyPromise, connectionFailure]);
       if (ready === undefined || ready.userId !== this.source.targetUserId) throw new SourceConnectionError("SOURCE_IDENTITY_MISMATCH");
-      await Promise.race([(async () => {
+      const synchronization = (async () => {
         const current = await this.options.store.readSource(this.source.id);
         if (current === null) {
           await this.options.store.baseline(this.source.id, ready!.latestSequence);
         } else {
-          if (current.pending !== null) await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: this.controller.signal });
-          await this.catchUp();
+          if (current.pending !== null) await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: current.pending.sourceLabel, policy: "native", delivery: current.pending.delivery, signal: attemptSignal });
+          await this.catchUp(attemptSignal);
         }
-        for (const delivery of live.sort((a, b) => a.sequence - b.sequence)) await this.dispatch(delivery);
-      })(), connectionFailure]);
+        for (const delivery of live.sort((a, b) => a.sequence - b.sequence)) await this.dispatch(delivery, attemptSignal, false);
+      })();
+      try { await Promise.race([synchronization, connectionFailure]); }
+      catch (error) { attemptController.abort(); await synchronization.catch(() => undefined); throw error; }
       await this.report("connected", await this.cursor(), null);
-      await this.liveLoop(socket, live, () => pongAt, connectionFailure, () => protocolFailure);
+      await this.liveLoop(socket, live, () => pongAt, connectionFailure, () => protocolFailure, attemptSignal);
     } finally {
+      attemptController.abort();
       socket.close();
       if (this.socket === socket) this.socket = undefined;
     }
   }
 
-  private async catchUp(): Promise<void> {
+  private async catchUp(signal: AbortSignal): Promise<void> {
     let source = await this.options.store.readSource(this.source.id);
     if (source === null) throw new SourceConnectionError("SOURCE_STATE_MISSING");
     const since = new Date((this.options.now?.() ?? new Date()).getTime() - 24 * 60 * 60 * 1_000).toISOString();
     let first = true;
-    while (!this.controller.signal.aborted) {
-      const page = await this.fetchPage(source.cursor, since);
+    while (!signal.aborted) {
+      const page = await this.fetchPage(source.cursor, since, signal);
       if (first && page.omittedCount > 0) {
-        await this.options.dispatcher.dispatchSummary({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, omittedCount: page.items.length + page.omittedCount, signal: this.controller.signal });
+        await this.options.dispatcher.dispatchSummary({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, omittedCount: page.items.length + page.omittedCount, signal });
         await this.options.store.advanceCursor(this.source.id, source.cursor, page.snapshotHighWater);
         return;
       }
-      for (const delivery of page.items) await this.dispatch(delivery);
+      for (const delivery of page.items) await this.dispatch(delivery, signal, true);
       source = (await this.options.store.readSource(this.source.id))!;
       if (!page.hasMore) {
         await this.options.store.advanceCursor(this.source.id, source.cursor, page.nextSequence);
@@ -158,32 +163,39 @@ export class SourceConnection {
     }
   }
 
-  private async fetchPage(afterSequence: number, since: string): Promise<DeliveryPage> {
+  private async fetchPage(afterSequence: number, since: string, signal: AbortSignal): Promise<DeliveryPage> {
     const url = `${this.source.sourceOrigin}/api/inbox/delivery?afterSequence=${afterSequence}&limit=100&since=${encodeURIComponent(since)}`;
     return withDeadline(async (signal) => {
       const response = await (this.options.fetch ?? globalThis.fetch)(url, { headers: { "X-API-Key": this.source.credential! }, redirect: "error", signal });
       if (response.status === 401 || response.status === 403) throw new SourceConnectionError("SOURCE_AUTHENTICATION_FAILED");
       if (!response.ok || response.redirected) throw new SourceConnectionError("SOURCE_DELIVERY_FAILED");
       return parseDeliveryPage(await response.json(), afterSequence);
-    }, this.controller.signal, this.options.readTimeoutMs ?? 10_000);
+    }, signal, this.options.readTimeoutMs ?? 10_000);
   }
 
-  private async dispatch(delivery: DeliveryNotification): Promise<void> {
-    const current = await this.options.store.readSource(this.source.id);
+  private async dispatch(delivery: DeliveryNotification, signal: AbortSignal, authoritativeGap: boolean): Promise<void> {
+    let current = await this.options.store.readSource(this.source.id);
     if (current === null || delivery.sequence <= current.cursor) return;
     if (current.pending === null && delivery.sequence > current.cursor + 1) {
-      await this.options.store.advanceCursor(this.source.id, current.cursor, delivery.sequence - 1);
+      if (authoritativeGap) {
+        await this.options.store.advanceCursor(this.source.id, current.cursor, delivery.sequence - 1);
+      } else {
+        await this.catchUp(signal);
+        current = await this.options.store.readSource(this.source.id);
+        if (current === null || delivery.sequence <= current.cursor) return;
+        if (delivery.sequence !== current.cursor + 1) throw new SourceConnectionError("SOURCE_DELIVERY_GAP");
+      }
     }
-    await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, policy: "native", delivery, signal: this.controller.signal });
+    await this.options.dispatcher.dispatch({ sourceId: this.source.id, sourceLabel: this.source.sourceLabel, policy: "native", delivery, signal });
   }
 
-  private async liveLoop(socket: SourceSocket, live: DeliveryNotification[], getPong: () => number, connectionFailure: Promise<never>, getProtocolFailure: () => unknown): Promise<void> {
+  private async liveLoop(socket: SourceSocket, live: DeliveryNotification[], getPong: () => number, connectionFailure: Promise<never>, getProtocolFailure: () => unknown, signal: AbortSignal): Promise<void> {
     const heartbeat = this.options.heartbeatMs ?? 15_000;
     while (!this.controller.signal.aborted && socket.readyState === WebSocket.OPEN) {
-      while (live.length > 0) await this.dispatch(live.shift()!);
+      while (live.length > 0) await this.dispatch(live.shift()!, signal, false);
       if (Date.now() - getPong() > heartbeat * 2 + 5_000) throw new SourceConnectionError("SOURCE_HEARTBEAT_TIMEOUT");
       socket.send(JSON.stringify({ type: "bus:ping", data: { t: Date.now() } }));
-      await Promise.race([(this.options.delay ?? abortableDelay)(heartbeat, this.controller.signal), connectionFailure]);
+      await Promise.race([(this.options.delay ?? abortableDelay)(heartbeat, signal), connectionFailure]);
     }
     if (!this.controller.signal.aborted) throw getProtocolFailure() ?? new SourceConnectionError("SOURCE_SOCKET_CLOSED");
   }
