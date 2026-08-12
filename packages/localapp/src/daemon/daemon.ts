@@ -296,13 +296,28 @@ export class LocalAppDaemon {
       dispatcher,
       fetch: this.options.fetch,
       applyDisplayPolicy: (settings) => dispatcher.configure(settings),
+      readNativeStatus: async () => ({
+        permission: await native.permissionState().catch(() => "unknown" as const),
+        daemonVersion: options.releaseVersion,
+        adapterVersion: options.releaseVersion,
+      }),
       runTestNotification: async (command) => ({
         ...await dispatcher.sendTestNotification(command.id),
         daemonVersion: options.releaseVersion,
         adapterVersion: options.releaseVersion,
       }),
     });
-    return { manager, resolver: new NotificationActivationResolver({ store, manager, open: options.open, fetch: this.options.fetch }) };
+    const ownedManager: DaemonNotificationRuntime["manager"] = {
+      start: () => manager.start(),
+      currentSource: (id) => manager.currentSource(id),
+      stop: async () => {
+        let failure: unknown;
+        try { await manager.stop(); } catch (error) { failure = error; }
+        try { await native.shutdown(); } catch (error) { failure ??= error; }
+        if (failure !== undefined) throw failure;
+      },
+    };
+    return { manager: ownedManager, resolver: new NotificationActivationResolver({ store, manager, open: options.open, fetch: this.options.fetch }) };
   }
 
   private async cleanup(): Promise<void> {

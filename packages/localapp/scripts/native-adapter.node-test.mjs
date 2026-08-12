@@ -31,10 +31,11 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   await new Promise((resolve, reject) => { daemon.once("error", reject); daemon.listen(endpoint, resolve); });
   t.after(async () => { await new Promise((resolve) => daemon.close(resolve)); });
 
+  const bundleIdentifier = `dev.localapp.bridge.task11.p${process.pid}`;
   const built = await buildNativeAdapter({
     outputDirectory: path.join(testRoot, "native"),
     signing: "adhoc",
-    bundleIdentifier: "dev.localapp.bridge.task8",
+    bundleIdentifier,
   });
   assert.equal(built.signing.mode, "adhoc");
   const codeSign = await run("/usr/bin/codesign", ["--verify", "--strict", built.appBundle]);
@@ -47,6 +48,25 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
 
   const malformedNotification = await run(built.executable, ["--show-notification", "{}"]);
   assert.equal(malformedNotification.code, 1, malformedNotification.stderr);
+  const iconPath = path.join(testRoot, "notification-icon.png");
+  await fs.writeFile(iconPath, "png");
+  const notificationEnvelope = {
+    identifier: "notification_native_0123456789",
+    ticket: "notification_ticket_0123456789",
+    productLabel: "LocalApp",
+    applicationLabel: "Interview App",
+    sourceLabel: "Local server",
+    title: "Build complete",
+    body: "The task finished",
+    priority: "normal",
+    iconPath,
+  };
+  assert.equal((await run(built.executable, ["--validate-notification", JSON.stringify(notificationEnvelope)])).code, 0);
+  assert.equal((await run(built.executable, ["--validate-notification", JSON.stringify({ ...notificationEnvelope, url: "https://evil.example" })])).code, 1);
+  assert.equal((await run(built.executable, ["--validate-notification", JSON.stringify({ ...notificationEnvelope, title: "<script>run()</script>" })])).code, 1);
+  const duplicateTitle = JSON.stringify(notificationEnvelope).replace('"title":"Build complete"', '"title":"first","title":"second"');
+  assert.equal((await run(built.executable, ["--validate-notification", duplicateTitle])).code, 1);
+  assert.equal((await run(built.executable, ["--request-permission", "unexpected"])).code, 1);
   const bridgeConfigPath = path.join(testRoot, "bridge-runtime.json");
   await fs.writeFile(bridgeConfigPath, `${JSON.stringify({
     nodePath: process.execPath,
@@ -56,7 +76,8 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   // The test owns this identifier, so clear a stale registration left by an
   // interrupted previous acceptance before asserting the new bundle mapping.
   await run(built.executable, ["--unregister"]);
-  assert.equal((await run(built.executable, ["--register", bridgeConfigPath])).code, 0);
+  const registered = await run(built.executable, ["--register", bridgeConfigPath]);
+  assert.equal(registered.code, 0, registered.stderr);
   t.after(async () => { await run(built.executable, ["--unregister"]); });
   t.after(async () => { await fs.rm(testRoot, { recursive: true, force: true }); });
   const activationUrl = "localapp://action/11111111-1111-4111-8111-111111111111?origin=https%3A%2F%2Fserver.example.test&nonce=nonce_abcdefghijklmnopqrstuvwxyz-0123456789&protocolVersion=2";
@@ -66,10 +87,17 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   // Force a fresh short-lived bridge instance. A prior interrupted acceptance
   // may leave a background-only process alive, and LaunchServices otherwise
   // reuses that process with its stale in-memory registration state.
-  const opened = await run("/usr/bin/open", ["-n", "-b", "dev.localapp.bridge.task8", activationUrl]);
+  const opened = await run("/usr/bin/open", ["-n", "-b", bundleIdentifier, activationUrl]);
   assert.equal(opened.code, 0, opened.stderr);
   await waitFor(() => received.length === 2, "one LaunchServices bridge IPC activation");
-  assert.deepEqual(received, [{ type: "activation", url: activationUrl }, { type: "activation", url: activationUrl }]);
+  const notificationTicket = "notification_ticket_0123456789";
+  assert.equal((await run(built.executable, ["--notification-activation-ticket", notificationTicket])).code, 0);
+  await waitFor(() => received.length === 3, "one notification click bridge IPC activation");
+  assert.deepEqual(received, [
+    { type: "activation", url: activationUrl },
+    { type: "activation", url: activationUrl },
+    { type: "activation", url: `localapp://notification/open?ticket=${notificationTicket}` },
+  ]);
 
   const markerPath = path.join(testRoot, "unexpected-native-spawn");
   const markerClient = path.join(testRoot, "marker-client.mjs");
@@ -77,7 +105,7 @@ test("ad-hoc signed macOS bridge forwards exactly one real Scheme URL to the rep
   await fs.writeFile(bridgeConfigPath, `${JSON.stringify({ nodePath: process.execPath, ipcClientPath: markerClient })}\n`, { mode: 0o600 });
   const oversizedActivation = `localapp://notification/open?ticket=${"界".repeat(1_400)}`;
   assert.ok(Buffer.byteLength(oversizedActivation, "utf8") > 4_096);
-  assert.equal((await run(built.executable, [oversizedActivation])).code, 0);
+  assert.equal((await run(built.executable, [oversizedActivation])).code, 1);
   await new Promise((resolve) => setTimeout(resolve, 150));
   await assert.rejects(fs.access(markerPath));
 });
@@ -91,9 +119,12 @@ test("Linux and Windows exact-target adapter builds can be injected without muta
     platform: "linux",
     arch: "x64",
     outputDirectory: path.join(crossRoot, "linux"),
+    buildLinux: async ({ executable }) => {
+      await fs.writeFile(executable, "test Linux notification helper\n");
+    },
   });
   const linuxTarget = path.join(linux.outputDirectory, "linux-x64");
-  assert.deepEqual(await fs.readdir(linuxTarget), ["localapp-native-ipc-client.mjs"]);
+  assert.deepEqual((await fs.readdir(linuxTarget)).sort(), ["localapp-native-ipc-client.mjs", "localapp-notifications"]);
   const linuxClient = await fs.readFile(path.join(linuxTarget, "localapp-native-ipc-client.mjs"), "utf8");
   assert.equal(linuxClient.includes(process.execPath), false);
   assert.equal(linuxClient.includes(linux.outputDirectory), false);

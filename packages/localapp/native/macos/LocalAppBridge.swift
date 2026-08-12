@@ -6,6 +6,25 @@ import UserNotifications
 private let bridgeConfigPreference = "LocalAppBridgeConfigPath"
 private let notificationEnvelopeLimit = 8 * 1024
 private let activationURLLimit = 4096
+private let notificationKeys = Set(["identifier", "ticket", "productLabel", "applicationLabel", "sourceLabel", "title", "body", "priority", "iconPath"])
+
+private func bridgeBundle() -> Bundle {
+  if Bundle.main.bundleIdentifier != nil { return Bundle.main }
+  let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+  let application = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  return Bundle(url: application) ?? Bundle.main
+}
+
+private func bridgePreferenceValue() -> String? {
+  guard let identifier = bridgeBundle().bundleIdentifier else { return nil }
+  return CFPreferencesCopyAppValue(bridgeConfigPreference as CFString, identifier as CFString) as? String
+}
+
+private func setBridgePreferenceValue(_ value: String?) -> Bool {
+  guard let identifier = bridgeBundle().bundleIdentifier else { return false }
+  CFPreferencesSetAppValue(bridgeConfigPreference as CFString, value as CFPropertyList?, identifier as CFString)
+  return CFPreferencesAppSynchronize(identifier as CFString)
+}
 
 private struct BridgeConfiguration: Decodable {
   let nodePath: String
@@ -22,13 +41,31 @@ private func safeAbsolutePath(_ value: String) -> Bool {
     && value.hasPrefix("/") && URL(fileURLWithPath: value).standardized.path == value
 }
 
+private func safePlainText(_ value: String) -> Bool {
+  return !value.unicodeScalars.contains { scalar in
+    CharacterSet.controlCharacters.contains(scalar) || scalar == "<" || scalar == ">"
+  }
+}
+
+private func safeLabel(_ value: String) -> Bool {
+  return !value.isEmpty && value.count <= 128 && safePlainText(value)
+}
+
+private func regularLocalFile(_ value: String) -> Bool {
+  guard safeAbsolutePath(value),
+        let attributes = try? FileManager.default.attributesOfItem(atPath: value),
+        attributes[.type] as? FileAttributeType == .typeRegular
+  else { return false }
+  return true
+}
+
 private func defaultBridgeConfigurationURL() -> URL {
   return FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/LocalApp/native-bridge.json")
 }
 
 private func bridgeConfigurationURL() -> URL? {
-  if let configured = UserDefaults.standard.string(forKey: bridgeConfigPreference), safeAbsolutePath(configured) {
+  if let configured = bridgePreferenceValue(), safeAbsolutePath(configured) {
     return URL(fileURLWithPath: configured)
   }
   return defaultBridgeConfigurationURL()
@@ -48,6 +85,15 @@ private func loadBridgeConfiguration() -> BridgeConfiguration? {
 }
 
 final class LocalAppBridge: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    NSAppleEventManager.shared().setEventHandler(
+      self,
+      andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+      forEventClass: AEEventClass(kInternetEventClass),
+      andEventID: AEEventID(kAEGetURL)
+    )
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.prohibited)
     UNUserNotificationCenter.current().delegate = self
@@ -61,36 +107,60 @@ final class LocalAppBridge: NSObject, NSApplicationDelegate, UNUserNotificationC
     DispatchQueue.main.async { NSApp.terminate(nil) }
   }
 
+  func applicationWillTerminate(_ notification: Notification) {
+    NSAppleEventManager.shared().removeEventHandler(
+      forEventClass: AEEventClass(kInternetEventClass),
+      andEventID: AEEventID(kAEGetURL)
+    )
+  }
+
+  @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+    if let value = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+       value.hasPrefix("localapp://") {
+      _ = forward(value)
+    }
+    DispatchQueue.main.async { NSApp.terminate(nil) }
+  }
+
   private func forward(_ url: String) -> Bool {
-    guard url.hasPrefix("localapp://"), url.lengthOfBytes(using: .utf8) <= activationURLLimit,
-          let configuration = loadBridgeConfiguration() else {
-      reportFailure("Scheme bridge configuration is unavailable")
-      return false
-    }
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: configuration.nodePath)
-    task.arguments = [configuration.ipcClientPath, url]
-    var environment = ProcessInfo.processInfo.environment
-    if let configured = configuration.environment {
-      for (key, value) in configured { environment[key] = value }
-    }
-    task.environment = environment
-    task.standardOutput = FileHandle.nullDevice
-    task.standardError = FileHandle.nullDevice
-    do {
-      try task.run()
-      return true
-    } catch {
-      reportFailure("could not start the packaged IPC client")
-      return false
-    }
+    return forwardScheme(url)
   }
 
   func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
     if let ticket = response.notification.request.content.userInfo["localappTicket"] as? String, validTicket(ticket) {
-      _ = forward("localapp://notification/open?ticket=\(ticket)")
+      _ = forward(notificationActivationURL(ticket)!)
     }
     completionHandler()
+  }
+}
+
+private func forwardScheme(_ url: String) -> Bool {
+  guard url.hasPrefix("localapp://"), url.lengthOfBytes(using: .utf8) <= activationURLLimit,
+        let configuration = loadBridgeConfiguration() else {
+    reportFailure("Scheme bridge configuration is unavailable")
+    return false
+  }
+  return forwardScheme(url, configuration: configuration)
+}
+
+private func forwardScheme(_ url: String, configuration: BridgeConfiguration) -> Bool {
+  guard url.hasPrefix("localapp://"), url.lengthOfBytes(using: .utf8) <= activationURLLimit else { return false }
+  let task = Process()
+  task.executableURL = URL(fileURLWithPath: configuration.nodePath)
+  task.arguments = [configuration.ipcClientPath, url]
+  var environment = ProcessInfo.processInfo.environment
+  if let configured = configuration.environment {
+    for (key, value) in configured { environment[key] = value }
+  }
+  task.environment = environment
+  task.standardOutput = FileHandle.nullDevice
+  task.standardError = FileHandle.nullDevice
+  do {
+    try task.run()
+    return true
+  } catch {
+    reportFailure("could not start the packaged IPC client")
+    return false
   }
 }
 
@@ -98,12 +168,16 @@ private func validTicket(_ ticket: String) -> Bool {
   return ticket.range(of: "^[A-Za-z0-9_-]{16,256}$", options: .regularExpression) != nil
 }
 
-private func bridgeBundleURL() -> CFURL { Bundle.main.bundleURL as CFURL }
+private func notificationActivationURL(_ ticket: String) -> String? {
+  return validTicket(ticket) ? "localapp://notification/open?ticket=\(ticket)" : nil
+}
+
+private func bridgeBundleURL() -> CFURL { bridgeBundle().bundleURL as CFURL }
 
 private func unregisterExactBundle() -> Bool {
   let task = Process()
   task.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
-  task.arguments = ["-u", Bundle.main.bundlePath]
+  task.arguments = ["-u", bridgeBundle().bundlePath]
   task.standardOutput = FileHandle.nullDevice
   task.standardError = FileHandle.nullDevice
   let completed = DispatchSemaphore(value: 0)
@@ -134,7 +208,7 @@ private func permissionState() -> String? {
 private func requestPermission() -> String? {
   let completed = DispatchSemaphore(value: 0)
   var result: String?
-  UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+  UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { granted, error in
     result = error == nil ? (granted ? "granted" : "denied") : nil
     completed.signal()
   }
@@ -142,38 +216,116 @@ private func requestPermission() -> String? {
   return result
 }
 
-private func showNotification(_ rawEnvelope: String) -> Bool {
+private struct NotificationEnvelope {
+  let identifier: String
+  let ticket: String
+  let productLabel: String
+  let applicationLabel: String
+  let sourceLabel: String
+  let title: String
+  let body: String
+  let priority: String
+  let iconPath: String
+}
+
+private func parseNotificationEnvelope(_ rawEnvelope: String) -> NotificationEnvelope? {
   guard rawEnvelope.lengthOfBytes(using: .utf8) <= notificationEnvelopeLimit,
-        let data = rawEnvelope.data(using: .utf8),
-        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        Set(object.keys) == Set(["identifier", "ticket", "title", "body", "sourceLabel", "priority", "iconPath"]),
-        let identifier = object["identifier"] as? String, validTicket(identifier),
-        let ticket = object["ticket"] as? String, validTicket(ticket),
-        let title = object["title"] as? String, !title.isEmpty,
-        let body = object["body"] as? String,
-        let sourceLabel = object["sourceLabel"] as? String, !sourceLabel.isEmpty,
-        let priority = object["priority"] as? String, priority == "normal" || priority == "high",
-        let iconPath = object["iconPath"] as? String, safeAbsolutePath(iconPath)
-  else { return false }
+        let object = parseExactStringObject(rawEnvelope), Set(object.keys) == notificationKeys,
+        let identifier = object["identifier"], validTicket(identifier),
+        let ticket = object["ticket"], validTicket(ticket),
+        object["productLabel"] == "LocalApp",
+        let applicationLabel = object["applicationLabel"], safeLabel(applicationLabel),
+        let sourceLabel = object["sourceLabel"], safeLabel(sourceLabel),
+        let title = object["title"], !title.isEmpty, safePlainText(title),
+        let body = object["body"], safePlainText(body),
+        let priority = object["priority"], priority == "normal" || priority == "high",
+        let iconPath = object["iconPath"], regularLocalFile(iconPath)
+  else { return nil }
+  return NotificationEnvelope(
+    identifier: identifier,
+    ticket: ticket,
+    productLabel: "LocalApp",
+    applicationLabel: applicationLabel,
+    sourceLabel: sourceLabel,
+    title: title,
+    body: body,
+    priority: priority,
+    iconPath: iconPath
+  )
+}
+
+private func showNotification(_ rawEnvelope: String) -> Bool {
+  guard let envelope = parseNotificationEnvelope(rawEnvelope) else { return false }
 
   let content = UNMutableNotificationContent()
-  content.title = title
-  content.subtitle = sourceLabel
-  content.body = body
-  content.userInfo = ["localappTicket": ticket]
-  content.sound = .default
+  content.title = envelope.title
+  content.subtitle = "\(envelope.applicationLabel) · \(envelope.sourceLabel)"
+  content.body = envelope.body
+  content.userInfo = ["localappTicket": envelope.ticket]
+  guard let attachment = try? UNNotificationAttachment(identifier: "localapp-icon", url: URL(fileURLWithPath: envelope.iconPath)) else { return false }
+  content.attachments = [attachment]
   let completed = DispatchSemaphore(value: 0)
   var accepted = false
-  UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { error in
+  UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: envelope.identifier, content: content, trigger: nil)) { error in
     accepted = error == nil
     completed.signal()
   }
   return completed.wait(timeout: .now() + 10) == .success && accepted
 }
 
+private func parseExactStringObject(_ raw: String) -> [String: String]? {
+  let bytes = Array(raw.utf8)
+  var index = 0
+  func skipWhitespace() {
+    while index < bytes.count && [9, 10, 13, 32].contains(bytes[index]) { index += 1 }
+  }
+  func stringToken() -> String? {
+    guard index < bytes.count, bytes[index] == 34 else { return nil }
+    let start = index
+    index += 1
+    var escaped = false
+    while index < bytes.count {
+      let byte = bytes[index]
+      index += 1
+      if escaped { escaped = false; continue }
+      if byte == 92 { escaped = true; continue }
+      if byte == 34 {
+        let token = Data(bytes[start..<index])
+        guard let decoded = try? JSONSerialization.jsonObject(with: Data("[".utf8) + token + Data("]".utf8)) as? [String], decoded.count == 1 else { return nil }
+        return decoded[0]
+      }
+      if byte < 32 { return nil }
+    }
+    return nil
+  }
+
+  skipWhitespace()
+  guard index < bytes.count, bytes[index] == 123 else { return nil }
+  index += 1
+  var result: [String: String] = [:]
+  skipWhitespace()
+  if index < bytes.count, bytes[index] == 125 { index += 1; skipWhitespace(); return index == bytes.count ? result : nil }
+  while index < bytes.count {
+    skipWhitespace()
+    guard let key = stringToken(), result[key] == nil else { return nil }
+    skipWhitespace()
+    guard index < bytes.count, bytes[index] == 58 else { return nil }
+    index += 1
+    skipWhitespace()
+    guard let value = stringToken() else { return nil }
+    result[key] = value
+    skipWhitespace()
+    guard index < bytes.count else { return nil }
+    if bytes[index] == 125 { index += 1; skipWhitespace(); return index == bytes.count ? result : nil }
+    guard bytes[index] == 44 else { return nil }
+    index += 1
+  }
+  return nil
+}
+
 private func registerBridge(configPath: String) -> Bool {
   guard safeAbsolutePath(configPath), loadConfiguration(at: configPath) != nil else { return false }
-  UserDefaults.standard.set(configPath, forKey: bridgeConfigPreference)
+  guard setBridgePreferenceValue(configPath) else { return false }
   return LSRegisterURL(bridgeBundleURL(), true) == noErr
 }
 
@@ -197,7 +349,7 @@ private func runCommand(_ arguments: [String]) -> Bool {
     return arguments.count == 2 && registerBridge(configPath: arguments[1])
   case "--unregister":
     guard arguments.count == 1 else { return false }
-    UserDefaults.standard.removeObject(forKey: bridgeConfigPreference)
+    _ = setBridgePreferenceValue(nil)
     return unregisterExactBundle()
   case "--open-url":
     return arguments.count == 2 && openExternalURL(arguments[1])
@@ -211,6 +363,14 @@ private func runCommand(_ arguments: [String]) -> Bool {
     return true
   case "--show-notification":
     return arguments.count == 2 && showNotification(arguments[1])
+  case "--scheme":
+    guard arguments.count == 4, arguments[1] == "--config", let configuration = loadConfiguration(at: arguments[2]) else { return false }
+    return forwardScheme(arguments[3], configuration: configuration)
+  case "--validate-notification":
+    return arguments.count == 2 && parseNotificationEnvelope(arguments[1]) != nil
+  case "--notification-activation-ticket":
+    guard arguments.count == 2, let url = notificationActivationURL(arguments[1]) else { return false }
+    return forwardScheme(url)
   default:
     return false
   }
@@ -220,6 +380,12 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 if let first = arguments.first, first.hasPrefix("--") {
   let succeeded = runCommand(arguments)
   if !succeeded { reportFailure("command failed") }
+  exit(succeeded ? 0 : 1)
+}
+let commandLineActivations = arguments.filter { $0.hasPrefix("localapp://") }
+if !commandLineActivations.isEmpty {
+  let succeeded = commandLineActivations.allSatisfy { forwardScheme($0) }
+  if !succeeded { reportFailure("Scheme activation failed") }
   exit(succeeded ? 0 : 1)
 }
 let app = NSApplication.shared

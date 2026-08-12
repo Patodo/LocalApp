@@ -1,0 +1,11 @@
+[package]
+name = "localapp-linux-notifications"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+localapp-native-contract = { path = "../common" }
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = { version = "4.18", default-features = false, features = ["d_vendored"] }

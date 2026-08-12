@@ -13,6 +13,8 @@ export type NativePermissionState = "not-determined" | "granted" | "denied" | "u
 export interface NativeNotificationEnvelope {
   identifier: string;
   ticket: string;
+  productLabel: "LocalApp";
+  applicationLabel: string;
   title: string;
   body: string;
   sourceLabel: string;
@@ -25,10 +27,18 @@ export interface NativeAdapter {
   showNotification(envelope: NativeNotificationEnvelope): Promise<void>;
   permissionState(): Promise<NativePermissionState>;
   requestPermission(): Promise<NativePermissionState>;
+  shutdown(): Promise<void>;
 }
 
 export interface NativeCommandRunner {
   (command: string, args: readonly string[]): Promise<string>;
+}
+
+export interface LinuxNotificationSession {
+  permissionState(): Promise<NativePermissionState>;
+  requestPermission(): Promise<NativePermissionState>;
+  showNotification(envelope: NativeNotificationEnvelope, activationUrl: string): Promise<{ actions: boolean }>;
+  shutdown(): Promise<void>;
 }
 
 export interface NativeAdapterOptions {
@@ -39,6 +49,10 @@ export interface NativeAdapterOptions {
   nodePath?: string;
   env?: NodeJS.ProcessEnv;
   run?: NativeCommandRunner;
+  permissionTimeoutMs?: number;
+  commandTimeoutMs?: number;
+  verifyIcon?: (iconPath: string) => Promise<boolean>;
+  linuxNotifications?: LinuxNotificationSession;
 }
 
 /**
@@ -50,9 +64,18 @@ export async function createNativeAdapter(root: string, options: NativeAdapterOp
   const platform = options.platform ?? process.platform;
   const environment = options.env ?? process.env;
   const selected = await selectNativeAdapter({ root, platform, arch: options.arch ?? process.arch });
-  const run = options.run ?? runCommand;
+  const permissionTimeoutMs = boundedTimeout(options.permissionTimeoutMs, 12_000);
+  const commandTimeoutMs = boundedTimeout(options.commandTimeoutMs, 12_000);
+  const run = options.run === undefined
+    ? (command: string, args: readonly string[], timeoutMs: number) => runCommand(command, args, timeoutMs, environment)
+    : (command: string, args: readonly string[], timeoutMs: number) => settleWithin(options.run!(command, args), timeoutMs);
   const nodePath = options.nodePath ?? process.execPath;
   const bridgeConfigPath = nativeBridgeConfigPath(platform, options.supportDir, environment);
+  const verifyIcon = options.verifyIcon ?? verifyRegularLocalFile;
+  const linuxNotifications = platform === "linux"
+    ? options.linuxNotifications ?? createPackagedLinuxNotificationSession(selected, nodePath, environment, commandTimeoutMs)
+    : undefined;
+  let stopped = false;
 
   return {
     async installScheme() {
@@ -61,35 +84,54 @@ export async function createNativeAdapter(root: string, options: NativeAdapterOp
           nodePath,
           ipcClientPath: selected.ipcClient,
           dataHome: options.dataHome ?? linuxDataHome(environment),
-          run,
+          run: (command, args) => run(command, args, commandTimeoutMs),
         });
         return;
       }
 
       await writeBridgeConfiguration({ platform, configPath: bridgeConfigPath, nodePath, ipcClientPath: selected.ipcClient });
       if (platform === "darwin") {
-        await run(selected.executable, ["--register", bridgeConfigPath]);
+        await run(selected.executable, ["--register", bridgeConfigPath], commandTimeoutMs);
         return;
       }
       if (platform === "win32") {
         const registration = createWindowsSchemeRegistrationInvocation(selected.executable, bridgeConfigPath);
-        await run(registration.command, registration.args);
+        await run(registration.command, registration.args, commandTimeoutMs);
         return;
       }
       throw unsupported(platform);
     },
     async showNotification(envelope) {
       const canonical = validateNativeNotificationEnvelope(envelope, platform);
-      if (platform !== "darwin") throw lifecycleError("native_notification_unsupported", "NATIVE_NOTIFICATION_UNSUPPORTED: LocalApp notifications are unavailable on this platform");
-      await run(selected.executable, ["--show-notification", JSON.stringify(canonical)]);
+      if (!(await verifyIcon(canonical.iconPath))) throw invalidEnvelope();
+      if (platform === "linux") {
+        await settleWithin(linuxNotifications!.showNotification(canonical, notificationActivationUrl(canonical.ticket)), commandTimeoutMs);
+        return;
+      }
+      if (platform === "darwin" || platform === "win32") {
+        await run(selected.executable, ["--show-notification", JSON.stringify(canonical)], commandTimeoutMs);
+        return;
+      }
+      throw lifecycleError("native_notification_unsupported", "NATIVE_NOTIFICATION_UNSUPPORTED: LocalApp notifications are unavailable on this platform");
     },
     async permissionState() {
-      if (platform !== "darwin") return "unsupported";
-      return parsePermission(await run(selected.executable, ["--permission-state"]));
+      if (platform === "linux") return settleWithin(linuxNotifications!.permissionState(), permissionTimeoutMs);
+      if (platform === "darwin" || platform === "win32") {
+        return parsePermission(await run(selected.executable, ["--permission-state"], permissionTimeoutMs));
+      }
+      return "unsupported";
     },
     async requestPermission() {
-      if (platform !== "darwin") return "unsupported";
-      return parsePermission(await run(selected.executable, ["--request-permission"]));
+      if (platform === "linux") return settleWithin(linuxNotifications!.requestPermission(), permissionTimeoutMs);
+      if (platform === "darwin" || platform === "win32") {
+        return parsePermission(await run(selected.executable, ["--request-permission"], permissionTimeoutMs));
+      }
+      return "unsupported";
+    },
+    async shutdown() {
+      if (stopped) return;
+      stopped = true;
+      await linuxNotifications?.shutdown();
     },
   };
 }
@@ -100,15 +142,30 @@ export function validateNativeNotificationEnvelope(value: unknown, platform: Nod
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { throw invalidEnvelope(); }
   if (Buffer.byteLength(serialized, "utf8") > NATIVE_NOTIFICATION_ENVELOPE_LIMIT_BYTES
-    || !exactKeys(value, ["identifier", "ticket", "title", "body", "sourceLabel", "priority", "iconPath"])
+    || !exactKeys(value, ["identifier", "ticket", "productLabel", "applicationLabel", "sourceLabel", "title", "body", "priority", "iconPath"])
     || typeof value.identifier !== "string" || !/^[A-Za-z0-9_-]{16,256}$/.test(value.identifier)
     || typeof value.ticket !== "string" || !/^[A-Za-z0-9_-]{16,256}$/.test(value.ticket)
+    || value.productLabel !== "LocalApp" || typeof value.applicationLabel !== "string"
     || typeof value.title !== "string" || typeof value.body !== "string" || typeof value.sourceLabel !== "string"
     || (value.priority !== "normal" && value.priority !== "high") || typeof value.iconPath !== "string"
-    || value.title.length === 0 || value.sourceLabel.length === 0 || !safeAbsoluteLocalPath(value.iconPath, platform)) {
+    || value.applicationLabel.length === 0 || value.applicationLabel.length > 128
+    || value.title.length === 0 || value.sourceLabel.length === 0 || value.sourceLabel.length > 128
+    || !plainNotificationText(value.applicationLabel) || !plainNotificationText(value.title)
+    || !plainNotificationText(value.body) || !plainNotificationText(value.sourceLabel)
+    || !safeAbsoluteLocalPath(value.iconPath, platform)) {
     throw invalidEnvelope();
   }
-  return { identifier: value.identifier, ticket: value.ticket, title: value.title, body: value.body, sourceLabel: value.sourceLabel, priority: value.priority, iconPath: value.iconPath };
+  return {
+    identifier: value.identifier,
+    ticket: value.ticket,
+    productLabel: value.productLabel,
+    applicationLabel: value.applicationLabel,
+    sourceLabel: value.sourceLabel,
+    title: value.title,
+    body: value.body,
+    priority: value.priority,
+    iconPath: value.iconPath,
+  };
 }
 
 export interface LinuxSchemeInstallOptions {
@@ -267,18 +324,197 @@ function windowsNativeExecutableFromEnvironment(): string | undefined {
   return path.join(release, "runtime", "native", `win32-${process.arch}`, "localapp-native.exe");
 }
 
-async function runCommand(command: string, args: readonly string[]): Promise<string> {
-  const child = spawn(command, [...args], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+async function runCommand(command: string, args: readonly string[], timeoutMs: number, environment: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const child = spawn(command, [...args], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: environment });
   let stdout = "";
   let stderr = "";
+  let timedOut = false;
   child.stdout?.setEncoding("utf8"); child.stderr?.setEncoding("utf8");
   child.stdout?.on("data", (chunk) => { stdout += chunk; }); child.stderr?.on("data", (chunk) => { stderr += chunk; });
   await new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => code === 0 ? resolve() : reject(lifecycleError("native_adapter_failed", "The LocalApp native adapter command failed")));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    timer.unref();
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      if (timedOut) reject(timeoutError());
+      else code === 0 ? resolve() : reject(lifecycleError("native_adapter_failed", "The LocalApp native adapter command failed"));
+    });
   });
   if (stderr.length > 0 || stdout.length > 1024) throw lifecycleError("native_adapter_failed", "The LocalApp native adapter response is invalid");
   return stdout.trim();
+}
+
+function settleWithin<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(timeoutError()), timeoutMs);
+    timer.unref();
+    operation.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function boundedTimeout(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
+    throw lifecycleError("native_adapter_invalid", "The native adapter timeout is invalid");
+  }
+  return value;
+}
+
+async function verifyRegularLocalFile(iconPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(iconPath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function notificationActivationUrl(ticket: string): string {
+  return `localapp://notification/open?ticket=${ticket}`;
+}
+
+class PackagedLinuxNotificationSession implements LinuxNotificationSession {
+  private readonly helper: string;
+  private readonly nodePath: string;
+  private readonly ipcClientPath: string;
+  private readonly environment: NodeJS.ProcessEnv;
+  private readonly timeoutMs: number;
+  private readonly active = new Map<string, { id: number; child: ChildProcess }>();
+  private stopped = false;
+
+  constructor(helper: string, nodePath: string, ipcClientPath: string, environment: NodeJS.ProcessEnv, timeoutMs: number) {
+    this.helper = helper;
+    this.nodePath = nodePath;
+    this.ipcClientPath = ipcClientPath;
+    this.environment = environment;
+    this.timeoutMs = timeoutMs;
+  }
+
+  async permissionState(): Promise<NativePermissionState> {
+    if (this.stopped) return "unsupported";
+    return parsePermission(await runCommand(this.helper, ["--permission-state"], this.timeoutMs, this.environment));
+  }
+
+  async requestPermission(): Promise<NativePermissionState> {
+    if (this.stopped) return "unsupported";
+    return parsePermission(await runCommand(this.helper, ["--request-permission"], this.timeoutMs, this.environment));
+  }
+
+  async showNotification(envelope: NativeNotificationEnvelope, activationUrl: string): Promise<{ actions: boolean }> {
+    if (this.stopped || activationUrl !== notificationActivationUrl(envelope.ticket)) {
+      throw lifecycleError("native_adapter_failed", "The Linux notification session is unavailable");
+    }
+    const previous = this.active.get(envelope.identifier);
+    const args = [
+      "--show-notification", JSON.stringify(envelope),
+      "--node", this.nodePath,
+      "--ipc-client", this.ipcClientPath,
+      "--replace-id", String(previous?.id ?? 0),
+    ];
+    const child = spawn(this.helper, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: this.environment,
+    });
+    const accepted = await readLinuxAccepted(child, this.timeoutMs);
+    if (previous !== undefined && previous.child !== child) previous.child.kill();
+    if (accepted.actions) {
+      this.active.set(envelope.identifier, { id: accepted.notificationId, child });
+      child.once("exit", () => {
+        if (this.active.get(envelope.identifier)?.child === child) this.active.delete(envelope.identifier);
+      });
+    }
+    return { actions: accepted.actions };
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    const children = [...this.active.values()].map((entry) => entry.child);
+    this.active.clear();
+    await Promise.all(children.map(async (child) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill();
+      await settleWithin(new Promise<void>((resolve) => child.once("exit", () => resolve())), this.timeoutMs).catch(() => undefined);
+    }));
+  }
+}
+
+function createPackagedLinuxNotificationSession(
+  selected: Awaited<ReturnType<typeof selectNativeAdapter>>,
+  nodePath: string,
+  environment: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): LinuxNotificationSession {
+  const relative = `${selected.target}/localapp-notifications`;
+  if (!selected.assets.some((asset) => asset.path === relative)) return unsupportedLinuxNotificationSession();
+  return new PackagedLinuxNotificationSession(path.join(selected.root, ...relative.split("/")), nodePath, selected.ipcClient, environment, timeoutMs);
+}
+
+function readLinuxAccepted(child: ChildProcess, timeoutMs: number): Promise<{ actions: boolean; notificationId: number }> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderrBytes = 0;
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(timeoutError()), timeoutMs);
+    timer.unref();
+    child.once("error", fail);
+    child.once("exit", () => fail(lifecycleError("native_adapter_failed", "The Linux notification helper exited before accepting the notification")));
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderrBytes += Buffer.byteLength(chunk);
+      if (stderrBytes > 1024) fail(lifecycleError("native_adapter_failed", "The Linux notification helper response is invalid"));
+    });
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      if (settled) return;
+      stdout += chunk;
+      if (Buffer.byteLength(stdout, "utf8") > 1024) {
+        fail(lifecycleError("native_adapter_failed", "The Linux notification helper response is invalid"));
+        return;
+      }
+      const newline = stdout.indexOf("\n");
+      if (newline < 0) return;
+      let value: unknown;
+      try { value = JSON.parse(stdout.slice(0, newline)); } catch { fail(lifecycleError("native_adapter_failed", "The Linux notification helper response is invalid")); return; }
+      if (!record(value) || !exactKeys(value, ["accepted", "actions", "notificationId"])
+        || value.accepted !== true || typeof value.actions !== "boolean"
+        || !Number.isSafeInteger(value.notificationId) || (value.notificationId as number) < 1 || (value.notificationId as number) > 0xffff_ffff) {
+        fail(lifecycleError("native_adapter_failed", "The Linux notification helper response is invalid"));
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve({ actions: value.actions, notificationId: value.notificationId as number });
+    });
+  });
+}
+
+function unsupportedLinuxNotificationSession(): LinuxNotificationSession {
+  return {
+    permissionState: async () => "unsupported",
+    requestPermission: async () => "unsupported",
+    showNotification: async () => { throw lifecycleError("native_notification_unsupported", "NATIVE_NOTIFICATION_UNSUPPORTED: the Linux desktop notification service is unavailable"); },
+    shutdown: async () => undefined,
+  };
+}
+
+function plainNotificationText(value: string): boolean {
+  return !/[\u0000-\u001f\u007f<>]/.test(value);
 }
 
 function parsePermission(value: string): NativePermissionState {
@@ -310,6 +546,10 @@ function safeAbsoluteLocalPath(value: string, platform: NodeJS.Platform): boolea
 
 function invalidEnvelope(): ReturnType<typeof lifecycleError> {
   return lifecycleError("native_notification_invalid", "NATIVE_NOTIFICATION_INVALID");
+}
+
+function timeoutError(): ReturnType<typeof lifecycleError> {
+  return lifecycleError("native_adapter_timeout", "NATIVE_ADAPTER_TIMEOUT: the native adapter did not settle in time");
 }
 
 function unsupported(platform: string): ReturnType<typeof lifecycleError> {

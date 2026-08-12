@@ -33,7 +33,7 @@ export async function buildNativeAdapter(options = {}) {
 
   let result;
   if (platform === "darwin") result = await buildMacAdapter({ target, targetDirectory, signing, ...options });
-  else if (platform === "linux") result = await buildLinuxAdapter({ targetDirectory });
+  else if (platform === "linux") result = await buildLinuxAdapter({ target, targetDirectory, outputDirectory, buildLinux: options.buildLinux });
   else result = await buildWindowsAdapter({ target, targetDirectory, outputDirectory, buildWindows: options.buildWindows });
 
   const assets = await collectAssets(outputDirectory);
@@ -67,12 +67,29 @@ async function buildMacAdapter(options) {
   return { appBundle, executable, ipcClient };
 }
 
-async function buildLinuxAdapter({ targetDirectory }) {
+async function buildLinuxAdapter({ target, targetDirectory, outputDirectory, buildLinux }) {
   const ipcClient = path.join(targetDirectory, "localapp-native-ipc-client.mjs");
   await bundleIpcClient(ipcClient);
+  const executable = path.join(targetDirectory, "localapp-notifications");
+  if (typeof buildLinux === "function") {
+    await buildLinux({ target, executable, targetDirectory });
+  } else {
+    if (process.platform !== "linux") throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${target} without an injected Linux toolchain`);
+    const cargoTarget = linuxCargoTarget(target);
+    const cargoDirectory = path.join(outputDirectory, ".cargo-linux-target");
+    try {
+      await run("cargo", ["build", "--release", "--locked", "--manifest-path", path.join(packageDirectory, "native/linux/Cargo.toml"), "--target", cargoTarget], {
+        CARGO_TARGET_DIR: cargoDirectory,
+      });
+      await fs.copyFile(path.join(cargoDirectory, cargoTarget, "release", "localapp-linux-notifications"), executable);
+    } finally {
+      await fs.rm(cargoDirectory, { recursive: true, force: true });
+    }
+  }
+  await fs.chmod(executable, 0o755);
   // The per-user desktop file is generated only by installLinuxScheme, once
   // the immutable release path and current Node executable are known.
-  return { executable: ipcClient, ipcClient };
+  return { executable, ipcClient };
 }
 
 async function buildWindowsAdapter({ target, targetDirectory, outputDirectory, buildWindows }) {
@@ -85,8 +102,11 @@ async function buildWindowsAdapter({ target, targetDirectory, outputDirectory, b
     if (process.platform !== "win32") throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: cannot build ${target} without an injected Windows toolchain`);
     const cargoTarget = windowsCargoTarget(target);
     const cargoDirectory = path.join(outputDirectory, ".cargo-target");
-    const cargoSource = path.join(outputDirectory, ".cargo-source");
+    const cargoWorkspace = path.join(outputDirectory, ".cargo-source");
+    const cargoSource = path.join(cargoWorkspace, "windows");
+    const cargoCommon = path.join(cargoWorkspace, "common");
     await fs.cp(path.join(packageDirectory, "native", "windows"), cargoSource, { recursive: true });
+    await fs.cp(path.join(packageDirectory, "native", "common"), cargoCommon, { recursive: true });
     try {
       await run("cargo", ["build", "--release", "--manifest-path", path.join(cargoSource, "Cargo.toml"), "--target", cargoTarget], {
         CARGO_TARGET_DIR: cargoDirectory,
@@ -95,7 +115,7 @@ async function buildWindowsAdapter({ target, targetDirectory, outputDirectory, b
     } finally {
       await Promise.all([
         fs.rm(cargoDirectory, { recursive: true, force: true }),
-        fs.rm(cargoSource, { recursive: true, force: true }),
+        fs.rm(cargoWorkspace, { recursive: true, force: true }),
       ]);
     }
   }
@@ -148,6 +168,12 @@ function windowsCargoTarget(target) {
   if (target === "win32-x64") return "x86_64-pc-windows-msvc";
   if (target === "win32-arm64") return "aarch64-pc-windows-msvc";
   throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: no Windows Rust target for ${target}`);
+}
+
+function linuxCargoTarget(target) {
+  if (target === "linux-x64") return "x86_64-unknown-linux-gnu";
+  if (target === "linux-arm64") return "aarch64-unknown-linux-gnu";
+  throw new Error(`NATIVE_ADAPTER_UNSUPPORTED: no Linux Rust target for ${target}`);
 }
 
 async function collectAssets(root) {
