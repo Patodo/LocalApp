@@ -1,5 +1,8 @@
 import { LocalAppArgumentError, parseLocalAppArgs } from "./cli/args.js";
 import { defaultCliIo, type CliIo, writeStructuredError } from "./cli/output.js";
+import { login } from "./commands/login.js";
+import { logout } from "./commands/logout.js";
+import { whoami } from "./commands/whoami.js";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
@@ -11,6 +14,12 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       io.stdout(`localapp ${VERSION}\n`);
     } else if (command.kind === "help") {
       io.stdout("Usage: localapp <command>\n");
+    } else if (command.kind === "login") {
+      return login(command, io);
+    } else if (command.kind === "logout") {
+      return logout(command, io);
+    } else if (command.kind === "whoami") {
+      return whoami(command, io);
     }
     return 0;
   } catch (error) {
@@ -22,7 +31,8 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       });
       return 1;
     }
-    throw error;
+    writeStructuredError(io, { code: "command_failed", message: "LocalApp command failed" });
+    return 1;
   }
 }
 
