@@ -91,6 +91,7 @@ export class SourceConnection {
     const attemptController = new AbortController();
     const attemptSignal = AbortSignal.any([this.controller.signal, attemptController.signal]);
     await this.report("connecting", await this.cursor(), null);
+    attemptSignal.throwIfAborted();
     const socket = (this.options.createSocket ?? createRealSocket)(webSocketUrl(this.source.sourceOrigin), this.source.credential!);
     this.socket = socket;
     const live: DeliveryNotification[] = [];
@@ -100,6 +101,8 @@ export class SourceConnection {
     let rejectConnection!: (error: unknown) => void;
     const connectionFailure = new Promise<never>((_resolve, reject) => { rejectConnection = reject; });
     void connectionFailure.catch(() => undefined);
+    attemptSignal.addEventListener("abort", () => rejectConnection(attemptSignal.reason), { once: true });
+    if (attemptSignal.aborted) rejectConnection(attemptSignal.reason);
     const readyPromise = new Promise<void>((resolve) => {
       const timeout = setTimeout(() => rejectConnection(new SourceConnectionError("SOURCE_CONNECT_TIMEOUT")), this.options.connectTimeoutMs ?? 10_000);
       timeout.unref?.();
@@ -112,7 +115,7 @@ export class SourceConnection {
           }
           else if (frame.type === "bus:pong") pongAt = Date.now();
           else if (frame.type === "notify:notification") live.push(frame.data);
-        } catch (error) { protocolFailure = error; clearTimeout(timeout); rejectConnection(error); socket.close(1002, "Invalid notification protocol"); }
+        } catch (error) { protocolFailure = error; attemptController.abort(); clearTimeout(timeout); rejectConnection(error); socket.close(1002, "Invalid notification protocol"); }
       });
       socket.on("close", (code: number) => { clearTimeout(timeout); rejectConnection(protocolFailure ?? new SourceConnectionError(code === 4401 ? "SOURCE_AUTHENTICATION_FAILED" : "SOURCE_SOCKET_CLOSED")); });
       socket.on("error", () => { clearTimeout(timeout); rejectConnection(new SourceConnectionError("SOURCE_SOCKET_ERROR")); });
@@ -134,6 +137,9 @@ export class SourceConnection {
       catch (error) { attemptController.abort(); await synchronization.catch(() => undefined); throw error; }
       await this.report("connected", await this.cursor(), null);
       await this.liveLoop(socket, live, () => pongAt, connectionFailure, () => protocolFailure, attemptSignal);
+    } catch (error) {
+      if (protocolFailure !== undefined) throw protocolFailure;
+      throw error;
     } finally {
       attemptController.abort();
       socket.close();

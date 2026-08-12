@@ -148,6 +148,26 @@ describe("SourceConnection", () => {
     expect(native.showNotification).not.toHaveBeenCalled();
     await active.stop();
   });
+
+  it("aborts a live-gap catch-up immediately on a protocol failure", async () => {
+    const { id, store, native, socket, statuses, connection } = await fixture(10, async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    let secondAborted = false;
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ success: true, data: { items: [], nextSequence: 10, snapshotHighWater: 10, hasMore: false, omittedCount: 0 } }))
+      .mockImplementationOnce((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => { secondAborted = true; reject(init.signal?.reason); }, { once: true }))) as unknown as typeof globalThis.fetch;
+    const active = connection(fetch);
+    active.start(); await waitFor(() => statuses.some((status: any) => status.state === "connecting"));
+    socket.open(); socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 10 } });
+    await waitFor(() => statuses.some((status: any) => status.state === "connected"));
+    socket.frame({ type: "notify:notification", data: delivery(12) });
+    await waitFor(() => fetch.mock.calls.length === 2);
+    socket.frame({ type: "bus:ready", data: { userId: "u", notificationProtocolVersion: 2, latestSequence: 12 } });
+    await waitFor(() => statuses.some((status: any) => status.error?.code === "SOURCE_PROTOCOL_INVALID"));
+    expect(secondAborted).toBe(true);
+    expect((await store.readSource(id))?.cursor).toBe(10);
+    expect(native.showNotification).not.toHaveBeenCalled();
+    await active.stop();
+  });
 });
 
 class FakeSocket extends EventEmitter implements SourceSocket {
