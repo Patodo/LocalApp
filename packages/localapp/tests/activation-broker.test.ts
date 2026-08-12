@@ -31,18 +31,29 @@ describe("Scheme activation broker", () => {
     expect(request).toHaveBeenLastCalledWith({ type: "activation", url });
   });
 
-  it("bounds a hanging service start within the one activation deadline", async () => {
+  it("waits for a cooperative aborted service start to finish cleanup within a deterministic bound", async () => {
+    let cleanupSettled = false;
+    const start = vi.fn(async (signal?: AbortSignal) => await new Promise<void>((resolve) => {
+      const cleanup = () => setTimeout(() => {
+        cleanupSettled = true;
+        resolve();
+      }, 150);
+      if (signal?.aborted) cleanup();
+      else signal?.addEventListener("abort", cleanup, { once: true });
+    }));
     const result = await Promise.race([
       forwardActivationToDaemon({
         url,
         ipcClient: { request: async () => { throw Object.assign(new Error("endpoint absent"), { code: "ipc_unreachable" }); } },
-        service: { start: async () => await new Promise<never>(() => undefined) },
+        service: { start },
         deadlineMs: 20,
       }).then(() => "resolved", (error: unknown) => error),
-      new Promise<"test timeout">((resolve) => setTimeout(() => resolve("test timeout"), 250)),
+      new Promise<"test timeout">((resolve) => setTimeout(() => resolve("test timeout"), 500)),
     ]);
 
     expect(result).toMatchObject({ code: "ipc_unreachable" });
+    expect(start).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(cleanupSettled).toBe(true);
   });
 
   it("settles the deadline only after reaping an abort-resistant service command", async () => {

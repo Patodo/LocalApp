@@ -132,6 +132,29 @@ describe("per-user service manager", () => {
     expect(commands.every((command) => command.args[0] === "--user")).toBe(true);
   });
 
+  it.each([
+    { name: "macOS LaunchAgent", platform: "darwin" as const, uid: 501 },
+    { name: "Linux systemd user unit", platform: "linux" as const },
+    { name: "Windows current-user task", platform: "win32" as const },
+  ])("passes the abort signal to every $name start command", async ({ platform, uid }) => {
+    const fixture = await serviceFixture(`${platform} abort propagation`);
+    const commands: ServiceCommandInvocation[] = [];
+    const manager = createServiceManager({
+      platform,
+      layout: fixture.layout,
+      nodePath: process.execPath,
+      homeDir: fixture.root,
+      ...(uid === undefined ? {} : { uid }),
+      run: recordingRunner(commands),
+    });
+    const controller = new AbortController();
+
+    await manager.start(controller.signal);
+
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.every((command) => command.signal === controller.signal)).toBe(true);
+  });
+
   it("does not delete a systemd unit when disable fails for a real error", async () => {
     const fixture = await serviceFixture("linux uninstall failure");
     const manager = createServiceManager({

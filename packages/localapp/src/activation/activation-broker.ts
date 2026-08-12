@@ -36,8 +36,6 @@ const DEVICE_ACTION_STATUSES = new Set([
   "pending", "claimed", "awaiting_trust", "preparing", "running", "succeeded", "failed", "cancelled", "expired", "interrupted",
 ]);
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SERVICE_ABORT_DRAIN_LIMIT_MS = 100;
-
 /** Adapter-side, bounded private-IPC delivery. It never launches a path itself. */
 export async function forwardActivationToDaemon(options: ForwardActivationOptions): Promise<void> {
   parseActivationUrl(options.url);
@@ -55,7 +53,7 @@ export async function forwardActivationToDaemon(options: ForwardActivationOption
       if (!started) {
         started = true;
         try {
-          await beforeDeadline((signal) => options.service.start(signal), deadline, { drainAfterAbort: true });
+          await beforeDeadline((signal) => options.service.start(signal), deadline, { awaitWorkAfterAbort: true });
         } catch (startError) {
           if (!isDeadlineElapsed(startError)) throw startError;
           break;
@@ -177,7 +175,7 @@ function isDeadlineElapsed(error: unknown): boolean {
 async function beforeDeadline<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   deadline: number,
-  options: { drainAfterAbort?: boolean } = {},
+  options: { awaitWorkAfterAbort?: boolean } = {},
 ): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw lifecycleError("activation_deadline_elapsed", "The LocalApp activation deadline elapsed");
@@ -199,7 +197,7 @@ async function beforeDeadline<T>(
       }),
     ]);
   } catch (error) {
-    if (timedOut && options.drainAfterAbort && work !== undefined) await drainAbortedService(work);
+    if (timedOut && options.awaitWorkAfterAbort && work !== undefined) await settleAbortedService(work);
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -208,23 +206,11 @@ async function beforeDeadline<T>(
 }
 
 /**
- * The runtime service runner settles only after child_process `close`, so this
- * reaps an aborted launch before preserving the original deadline failure.
- * A non-cooperative injected test double cannot extend the activation forever.
+ * ServiceManager.start(signal) settles only after it reaps its owned command,
+ * so preserve the original deadline failure only after that cleanup completes.
  */
-async function drainAbortedService(work: Promise<unknown>): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      work.then(() => undefined, () => undefined),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, SERVICE_ABORT_DRAIN_LIMIT_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+async function settleAbortedService(work: Promise<unknown>): Promise<void> {
+  await work.then(() => undefined, () => undefined);
 }
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {

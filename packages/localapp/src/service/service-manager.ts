@@ -29,6 +29,11 @@ export interface ServiceInstallResult {
 export interface ServiceManager {
   readonly registrationPath: string;
   install(): Promise<ServiceInstallResult>;
+  /**
+   * Starts the current-user daemon. If `signal` aborts, this must settle only
+   * after every owned service command has closed and been reaped (or before
+   * one was created); observing abort alone is not sufficient.
+   */
   start(signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
   restart(): Promise<void>;
@@ -73,7 +78,10 @@ export function createCurrentUserServiceManager(layout: RuntimeLayout): ServiceM
   });
 }
 
-/** The runtime command runner binds the broker deadline signal directly to spawn. */
+/**
+ * Binds the broker deadline signal to spawn and settles only on `close`, so an
+ * aborted owned service command is reaped before ServiceManager.start settles.
+ */
 export function createSpawnServiceCommandRunner(): ServiceCommandRunner {
   return async ({ command, args, signal }) => await new Promise((resolve) => {
     if (signal?.aborted) { resolve({ code: 1, stdout: "", stderr: "aborted" }); return; }
