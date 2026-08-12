@@ -32,10 +32,22 @@ describe("ClickTicketStore", () => {
     const { delivery, tickets } = await stores();
     await delivery.baseline("local", 0);
     const pending = await delivery.preparePending("local", notification());
+    if (pending === null) throw new Error("expected pending delivery");
     await delivery.commitShown("local", 1);
     const [first, second] = await Promise.all([tickets.consume(pending.ticket), tickets.consume(pending.ticket)]);
     expect([first, second].filter(Boolean)).toEqual([{ kind: "notification", sourceId: "local", notificationId: "n-1" }]);
     expect(await tickets.consume("invalid-ticket-value")).toBeNull();
+  });
+
+  it("allows only one winner across independent store instances", async () => {
+    const { delivery } = await stores();
+    await delivery.baseline("local", 0);
+    const pending = await delivery.preparePending("local", notification());
+    if (pending === null) throw new Error("expected pending delivery");
+    await delivery.commitShown("local", 1);
+    const instances = [delivery, ...Array.from({ length: 7 }, () => new DeliveryStore({ statePath: delivery.statePath }))];
+    const results = await Promise.all(instances.map((store) => store.consumeTicket(pending.ticket)));
+    expect(results.filter(Boolean)).toEqual([{ kind: "notification", sourceId: "local", notificationId: "n-1" }]);
   });
 
   it("supports source-only summary intent and expires without revealing metadata", async () => {
@@ -46,5 +58,13 @@ describe("ClickTicketStore", () => {
     const expired = await tickets.issueSummary("peer-one", new Date("2026-08-12T00:05:00.000Z"));
     advance(new Date("2026-08-12T00:06:00.000Z"));
     expect(await tickets.consume(expired.ticket)).toBeNull();
+  });
+
+  it("does not rewrite state for a well-formed unknown ticket", async () => {
+    const { delivery, tickets } = await stores();
+    await delivery.baseline("local", 0);
+    const before = await fs.readFile(delivery.statePath);
+    expect(await tickets.consume(Buffer.alloc(32, 88).toString("base64url"))).toBeNull();
+    expect(await fs.readFile(delivery.statePath)).toEqual(before);
   });
 });
