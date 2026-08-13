@@ -65,7 +65,7 @@ test("the release image is loaded and smoke tested before its first push", () =>
   assert.doesNotMatch(release, /push:\s*true/);
 });
 
-test("Docker smoke cleanup removes container-owned state before host cleanup", () => {
+test("Docker smoke checks fresh setup on container loopback and cleans container-owned state", () => {
   fs.mkdirSync(projectTmp, { recursive: true });
   const root = fs.mkdtempSync(path.join(projectTmp, "docker-smoke-test-"));
   const bin = path.join(root, "bin");
@@ -110,7 +110,7 @@ case "$command" in
   rm) ;;
 esac
 `);
-  fs.writeFileSync(path.join(bin, "curl"), "#!/usr/bin/env bash\nexit 0\n");
+  fs.writeFileSync(path.join(bin, "curl"), "#!/usr/bin/env bash\necho 'fresh setup is not reachable through the published port' >&2\nexit 56\n");
   fs.writeFileSync(path.join(bin, "rm"), `#!/usr/bin/env bash
 set -euo pipefail
 target="\${!#}"

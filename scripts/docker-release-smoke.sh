@@ -32,14 +32,14 @@ docker run -d --name "${server_container}" \
   -v "${state_dir}:/app/data" \
   "${image}" >/dev/null
 
-host_port="$(docker port "${server_container}" 3000/tcp | sed -n 's/.*://p' | head -1)"
+health_check='const response = await fetch("http://127.0.0.1:3000/health"); const body = await response.json(); if (!response.ok || body.status !== "ok") process.exit(1);'
 for _ in $(seq 1 30); do
-  if curl --fail --silent "http://127.0.0.1:${host_port}/health" >/dev/null; then
+  if docker exec "${server_container}" node --input-type=module --eval "${health_check}"; then
     break
   fi
   sleep 1
 done
-curl --fail --silent "http://127.0.0.1:${host_port}/health" >/dev/null
+docker exec "${server_container}" node --input-type=module --eval "${health_check}"
 
 docker exec "${server_container}" localapp --version | grep -Fq "${version_output}"
 
