@@ -3,15 +3,21 @@ import fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createRuntimeLayout } from "../src/daemon/runtime-layout.js";
 import { publishRelease, readCurrentRelease, verifyReleaseArtifact } from "../src/daemon/release-store.js";
 import { buildLocalAppPackage } from "../scripts/build-package.mjs";
 
 const repositoryRoot = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(repositoryRoot, "tmp/task-7-release-tests");
+const packageArtifact = path.join(testRoot, "package-artifact");
 const directories: string[] = [];
 
+beforeAll(async () => {
+  await fs.mkdir(testRoot, { recursive: true });
+  await buildLocalAppPackage({ outputDirectory: packageArtifact });
+}, 120_000);
+afterAll(async () => { await fs.rm(packageArtifact, { recursive: true, force: true }); });
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
 });
@@ -44,8 +50,6 @@ describe("daemon runtime layout", () => {
 describe("release store", () => {
   it("publishes the real self-contained packed product manifest", async () => {
     const root = await fixtureRoot();
-    const source = path.join(root, "real packed product");
-    await buildLocalAppPackage({ outputDirectory: source });
     const layout = createRuntimeLayout({
       platform: process.platform,
       homeDir: root,
@@ -53,7 +57,7 @@ describe("release store", () => {
       runtimeDir: path.join(root, "runtime"),
     });
 
-    const published = await publishRelease({ sourceDirectory: source, layout });
+    const published = await publishRelease({ sourceDirectory: packageArtifact, layout });
 
     expect(await verifyReleaseArtifact(published.releasePath)).toMatchObject({
       schemaVersion: 2,
@@ -109,18 +113,22 @@ describe("release store", () => {
 
   it.skipIf(process.platform === "win32")("keeps the selected published native bridge and IPC client executable", async () => {
     const root = await fixtureRoot();
-    const source = path.join(root, "native source");
-    await buildLocalAppPackage({ outputDirectory: source });
     const layout = createRuntimeLayout({
       platform: process.platform,
       homeDir: root,
       supportDir: path.join(root, "support"),
       runtimeDir: path.join(root, "runtime"),
     });
-    const release = await publishRelease({ sourceDirectory: source, layout });
+    const release = await publishRelease({ sourceDirectory: packageArtifact, layout });
     const target = `${process.platform}-${process.arch}`;
-    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, "LocalAppBridge.app/Contents/MacOS/LocalAppBridge"), fsConstants.X_OK)).resolves.toBeUndefined();
-    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, "LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs"), fsConstants.X_OK)).resolves.toBeUndefined();
+    const executable = process.platform === "darwin"
+      ? "LocalAppBridge.app/Contents/MacOS/LocalAppBridge"
+      : "localapp-notifications";
+    const ipcClient = process.platform === "darwin"
+      ? "LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs"
+      : "localapp-native-ipc-client.mjs";
+    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, executable), fsConstants.X_OK)).resolves.toBeUndefined();
+    await expect(fs.access(path.join(release.releasePath, "runtime/native", target, ipcClient), fsConstants.X_OK)).resolves.toBeUndefined();
   }, 30_000);
 
   it.skipIf(process.platform === "win32")("reclaims a dead publisher lock but fails closed for an active publisher", async () => {
@@ -179,15 +187,13 @@ describe("release store", () => {
 
   it.skipIf(process.platform === "win32")("stable bootstrap refuses a mutated published entrypoint", async () => {
     const root = await fixtureRoot();
-    const source = path.join(root, "real source");
-    await buildLocalAppPackage({ outputDirectory: source });
     const layout = createRuntimeLayout({
       platform: process.platform,
       homeDir: root,
       supportDir: path.join(root, "support"),
       runtimeDir: path.join(root, "runtime"),
     });
-    const published = await publishRelease({ sourceDirectory: source, layout });
+    const published = await publishRelease({ sourceDirectory: packageArtifact, layout });
     const marker = path.join(root, "compromised-marker");
     await fs.writeFile(path.join(published.releasePath, "bin/localapp.mjs"),
       `import fs from "node:fs"; fs.writeFileSync(process.env.LOCALAPP_BOOTSTRAP_MARKER, "executed");\n`);
@@ -214,8 +220,7 @@ describe("release store", () => {
 
   it("rejects descriptor order substitution and a native runtime manifest that disagrees with the descriptor", async () => {
     const root = await fixtureRoot();
-    const source = path.join(root, "real product");
-    await buildLocalAppPackage({ outputDirectory: source });
+    const source = packageArtifact;
 
     const reordered = path.join(root, "reordered descriptor");
     await fs.cp(source, reordered, { recursive: true });
@@ -246,7 +251,7 @@ describe("release store", () => {
   it("rejects a release descriptor that omits required protocol and native adapter contracts", async () => {
     const root = await fixtureRoot();
     const source = path.join(root, "missing release contracts");
-    await buildLocalAppPackage({ outputDirectory: source });
+    await fs.cp(packageArtifact, source, { recursive: true });
     const manifestPath = path.join(source, ".localapp-artifact.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
     delete manifest.protocolVersions;
