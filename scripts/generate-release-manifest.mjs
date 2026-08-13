@@ -87,7 +87,7 @@ export function verifyReleaseOutputs({ assetsDir, manifestPath, checksumsPath })
 
 function readTargetConfig() {
   const config = JSON.parse(fs.readFileSync(targetsPath, "utf8"));
-  if (config.schemaVersion !== 2 || config.npmPackage?.name !== "@patodo/localapp"
+  if (config.schemaVersion !== 2 || config.npmPackage?.name !== "localapp"
     || config.npmPackage.filenameTemplate !== "localapp-{version}.tgz"
     || !Array.isArray(config.nativeAdapters) || config.nativeAdapters.length === 0) {
     throw new Error("release target fixture is invalid");

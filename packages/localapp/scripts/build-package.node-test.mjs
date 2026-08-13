@@ -94,6 +94,31 @@ test("direct builder execution works from a source path containing spaces", asyn
   assert.equal(await run(outputDirectory, ["--version"]), "localapp 0.1.0");
 });
 
+test("builder rejects a source package identity that diverges from the shared release target", async (t) => {
+  const sourceDirectory = path.join(testRoot, "source package with mismatched identity");
+  const outputDirectory = path.join(testRoot, "mismatched identity package");
+  await fs.rm(testRoot, { recursive: true, force: true });
+  await fs.mkdir(testRoot, { recursive: true });
+  t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
+  await fs.cp(packageDirectory, sourceDirectory, {
+    recursive: true,
+    filter: (source) => !["node_modules", "dist"].includes(path.basename(source)),
+  });
+  await fs.symlink(path.join(packageDirectory, "node_modules"), path.join(sourceDirectory, "node_modules"));
+  const sourceManifestPath = path.join(sourceDirectory, "package.json");
+  const sourceManifest = JSON.parse(await fs.readFile(sourceManifestPath, "utf8"));
+  sourceManifest.name = "@patodo/mismatched-localapp";
+  await fs.writeFile(sourceManifestPath, `${JSON.stringify(sourceManifest, null, 2)}\n`);
+
+  const result = await runNode(path.join(sourceDirectory, "scripts/build-package.mjs"), {
+    LOCALAPP_PACKAGE_DIR: outputDirectory,
+    LOCALAPP_REPOSITORY_ROOT: projectDirectory,
+  });
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /release target.*package manifest/i);
+});
+
 test("packed tarball keeps the builtin runtime available to init", async (t) => {
   const packDirectory = path.join(testRoot, "packed tarball");
   const unpackDirectory = path.join(testRoot, "unpacked tarball");

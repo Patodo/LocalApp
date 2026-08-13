@@ -17,6 +17,9 @@ export async function buildLocalAppPackage(options = {}) {
   const outputDirectory = path.resolve(options.outputDirectory ?? process.env.LOCALAPP_PACKAGE_DIR ?? defaultOutputDirectory);
   const binDirectory = path.join(outputDirectory, "bin");
   const sourceManifest = JSON.parse(await fs.readFile(path.join(packageDirectory, "package.json"), "utf8"));
+  const releaseTargets = JSON.parse(await fs.readFile(path.join(projectDirectory, "packages/shared/release-targets.json"), "utf8"));
+  const npmPackage = readNpmPackageTarget(releaseTargets);
+  if (npmPackage.name !== sourceManifest.name) throw new Error("release target npm package does not match package manifest");
 
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
@@ -29,7 +32,6 @@ export async function buildLocalAppPackage(options = {}) {
   const prebuiltNativeAdaptersDirectory = options.prebuiltNativeAdaptersDirectory ?? process.env.LOCALAPP_PREBUILT_NATIVE_ADAPTERS_DIR;
   let nativeManifest;
   if (prebuiltNativeAdaptersDirectory) {
-    const releaseTargets = JSON.parse(await fs.readFile(path.join(projectDirectory, "packages/shared/release-targets.json"), "utf8"));
     const requiredTargets = releaseTargets.nativeAdapters?.map((entry) => entry.target);
     if (!Array.isArray(requiredTargets)) throw new Error("release native adapter matrix is unavailable");
     const { mergePrebuiltNativeAdapters } = await import(pathToFileURL(path.join(packageDirectory, "scripts/merge-native-adapters.mjs")).href);
@@ -67,7 +69,7 @@ export async function buildLocalAppPackage(options = {}) {
   await fs.chmod(path.join(binDirectory, "localapp.mjs"), 0o755);
 
   const packageJson = {
-    name: sourceManifest.name,
+    name: npmPackage.name,
     version: sourceManifest.version,
     description: sourceManifest.description,
     license: sourceManifest.license,
@@ -81,7 +83,7 @@ export async function buildLocalAppPackage(options = {}) {
   const bootstrapEntrypoint = "runtime/bootstrap/localapp-daemon-bootstrap.mjs";
   const bootstrapPath = path.join(outputDirectory, bootstrapEntrypoint);
   await fs.mkdir(path.dirname(bootstrapPath), { recursive: true, mode: 0o755 });
-  await fs.writeFile(bootstrapPath, DAEMON_BOOTSTRAP_SOURCE, { mode: 0o755 });
+  await fs.writeFile(bootstrapPath, daemonBootstrapSource(npmPackage.name), { mode: 0o755 });
   await fs.chmod(bootstrapPath, 0o755);
   const manifestPath = path.join(outputDirectory, ".localapp-artifact.json");
   await writeJson(path.join(outputDirectory, "package.json"), packageJson);
@@ -110,6 +112,15 @@ export async function buildLocalAppPackage(options = {}) {
   });
 
   return { outputDirectory, tarballInput: outputDirectory, manifestPath };
+}
+
+function readNpmPackageTarget(value) {
+  const npmPackage = value?.npmPackage;
+  if (!npmPackage || typeof npmPackage.name !== "string" || npmPackage.name.length === 0
+    || typeof npmPackage.filenameTemplate !== "string" || !npmPackage.filenameTemplate.includes("{version}")) {
+    throw new Error("release npm package target is unavailable");
+  }
+  return npmPackage;
 }
 
 async function stageBuiltinTemplate({ outputDirectory, version }) {
@@ -177,12 +188,18 @@ async function collectArtifactFiles(root) {
   return files;
 }
 
+function daemonBootstrapSource(npmPackageName) {
+  return DAEMON_BOOTSTRAP_SOURCE.replace("__LOCALAPP_NPM_PACKAGE_NAME__", JSON.stringify(npmPackageName));
+}
+
 const DAEMON_BOOTSTRAP_SOURCE = String.raw`#!/usr/bin/env node
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+const npmPackageName = __LOCALAPP_NPM_PACKAGE_NAME__;
 
 const launcher = fileURLToPath(import.meta.url);
 const support = path.resolve(path.dirname(launcher), "..");
@@ -246,7 +263,7 @@ try {
   const allowedManifestKeys = ["schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint", "files", "artifactDigest", "bundleDigest", "serverBundleDigest", "serverEntrypoint", "protocolVersions", "nativeAdapters"];
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
     || Object.keys(manifest).some((key) => !allowedManifestKeys.includes(key))
-    || manifest.schemaVersion !== 2 || manifest.name !== "@patodo/localapp" || manifest.nodeMajor !== 24
+    || manifest.schemaVersion !== 2 || manifest.name !== npmPackageName || manifest.nodeMajor !== 24
     || manifest.version !== current.version || manifest.artifactDigest !== current.artifactDigest
     || manifest.entrypoint !== current.entrypoint || manifest.bootstrapEntrypoint !== current.bootstrapEntrypoint
     || !Array.isArray(manifest.files) || manifest.files.length === 0) throw new Error("invalid release manifest");
@@ -265,7 +282,7 @@ try {
     || !files.some((entry) => entry.path === manifest.bootstrapEntrypoint)) throw new Error("noncanonical release files");
   const descriptor = {
     schemaVersion: 2,
-    name: "@patodo/localapp",
+    name: npmPackageName,
     version: manifest.version,
     nodeMajor: 24,
     entrypoint: manifest.entrypoint,

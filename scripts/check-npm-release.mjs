@@ -59,7 +59,7 @@ export async function checkNpmRelease({ tarballPath, expectedTag, runNpmDryRun =
 }
 
 function validatePackageManifest(manifest, expectedTag) {
-  if (manifest.name !== "@patodo/localapp") throw new Error(`package name must be @patodo/localapp, received ${String(manifest.name)}`);
+  if (manifest.name !== "localapp") throw new Error(`package name must be localapp, received ${String(manifest.name)}`);
   if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
     throw new Error("package version must be a valid release version");
   }
