@@ -84,6 +84,17 @@ function canonicalServerOrigin(req: FastifyRequest): string {
   return `http://${host}:${address.port}`;
 }
 
+function daemonLoopbackFastPath(req: FastifyRequest, sourceOrigin: string): { controlToken: string } | null {
+  const config = (req.server as FastifyInstance & {
+    config: { publicUrl?: string; listenHost: string; deviceControlToken?: string };
+  }).config;
+  if (config.publicUrl || (config.listenHost !== "127.0.0.1" && config.listenHost !== "::1")) return null;
+  if (typeof config.deviceControlToken !== "string" || config.deviceControlToken.length < 16) return null;
+  const parsed = new URL(sourceOrigin);
+  if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "[::1]" && parsed.hostname !== "::1") return null;
+  return { controlToken: config.deviceControlToken };
+}
+
 export async function handleDeviceActionCreation(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -128,15 +139,34 @@ export async function handleDeviceActionCreation(
       timeoutSeconds: request.timeoutSeconds,
       permissions: request.permissions,
     });
-    const activationUrl = createDeviceActivationUrl({
+    const ticket = {
       protocolVersion: DEVICE_ACTION_PROTOCOL_VERSION,
       sourceOrigin,
       actionId: action.id,
       nonce: action.nonce,
-    });
+    } as const;
+    let activationUrl = createDeviceActivationUrl(ticket);
+    let status: DeviceActionStatus = action.status;
+    const local = daemonLoopbackFastPath(req, sourceOrigin);
+    if (local) {
+      const activation = await req.server.inject({
+        method: "POST",
+        url: "/api/device-control/activations",
+        headers: { "content-type": "application/json", "x-localapp-device-control": local.controlToken },
+        payload: ticket,
+      });
+      if (activation.statusCode !== 200) return sendError(reply, 502, "DEVICE_ACTION_LOCAL_ACTIVATION_FAILED", "Local device action activation failed");
+      const body = activation.json() as { success?: boolean; data?: { requestId?: string; status?: DeviceActionStatus; confirmationUrl?: string } };
+      if (body.success !== true || body.data?.requestId !== action.id || typeof body.data.confirmationUrl !== "string" || !body.data.status) {
+        return sendError(reply, 502, "DEVICE_ACTION_LOCAL_ACTIVATION_INVALID", "Local device action activation response is invalid");
+      }
+      activationUrl = body.data.confirmationUrl;
+      status = body.data.status;
+    }
     const data = {
       requestId: action.id,
       activationUrl,
+      status,
       expiresAt: action.expiresAt,
       protocolVersion: DEVICE_ACTION_PROTOCOL_VERSION,
       permissionsDigest: action.permissionsDigest,

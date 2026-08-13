@@ -470,9 +470,9 @@ the package never discovers legacy local data on its own.
 ### Product acceptance
 
 - Use `browser:control-in-app-browser` against loopback formal routes.
-- In the SKILL marketplace, click install in Web, traverse the real
-  `localapp://` Device Action path on the same computer, approve trust, and
-  verify the fixture SKILL appears below repository `tmp/`.
+- In the SKILL marketplace, click install in Web, reach the same-origin Device
+  Actions confirmation page through the daemon-loopback fast path, approve
+  trust, and verify the fixture SKILL appears below repository `tmp/`.
 - In resume manager, upload, preview, and byte-verify downloads for an image and
   PDF through the packaged Server.
 - Trigger an application notification, observe it in the Server inbox and as a
@@ -490,7 +490,8 @@ the package never discovers legacy local data on its own.
   build.
 - There is no tray, window, WebView, Desktop backend, MiniServer, or special
   local user.
-- `localapp://` Device Action activation works on the computer where the user
+- Daemon-loopback Device Actions enter same-origin confirmation directly;
+  remote `localapp://` activation still targets the computer where the user
   clicked and transfers no script or credential in the URL.
 - The daemon receives eligible local and explicitly enabled remote
   notifications, reconnects by cursor without duplicates, and displays native

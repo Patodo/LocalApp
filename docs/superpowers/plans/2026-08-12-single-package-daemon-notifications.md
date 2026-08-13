@@ -1037,35 +1037,35 @@ explicit evidence directories below `tmp/`.
   same-origin confirmation URL for daemon-managed loopback or the canonical
   `localapp://` URL for every other source.
 
-- [ ] **Step 1: Add failing Server integration tests**
+- [x] **Step 1: Add failing Server integration tests**
 
 Assert that a daemon-managed loopback creation is internally claimed and
 returns `/my/device-actions/?requestId=<id>`, while a Server without a Device
 Control token continues to return `localapp://` and remains pending.
 
-- [ ] **Step 2: Add failing SDK tests**
+- [x] **Step 2: Add failing SDK tests**
 
 Assert that the SDK navigates only an exact same-origin confirmation URL and
 continues to click an anchor for a canonical `localapp://` activation URL.
 
-- [ ] **Step 3: Implement one shared activation service**
+- [x] **Step 3: Implement one shared activation service**
 
 Extract the claim, trust lookup, and execution transition currently owned by
 the private activation route. Reuse it from both the control-token route and
 the loopback creation path; do not duplicate execution or trust policy.
 
-- [ ] **Step 4: Implement strict SDK activation dispatch**
+- [x] **Step 4: Implement strict SDK activation dispatch**
 
 Accept only the canonical Scheme URL or the exact same-origin confirmation URL
 for the returned request ID. Navigate the current tab for local confirmation;
 preserve native Scheme activation for remote sources.
 
-- [ ] **Step 5: Run focused and package regressions**
+- [x] **Step 5: Run focused and package regressions**
 
 Run the Server Device Action integration tests, SDK tests, TypeScript builds,
 `pnpm test:localapp-package`, and `pnpm test:real-apps`.
 
-- [ ] **Step 6: Rebuild the acceptance package and verify in Browser**
+- [x] **Step 6: Rebuild the acceptance package and verify in Browser**
 
 Install the new tarball under `tmp/single-package-acceptance`, start the same
 daemon, use the formal SKILL market URL, approve the action on the same-origin

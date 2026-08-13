@@ -346,10 +346,15 @@ function toCreateResponse(value: unknown): CreateResponse {
   if (!isRecord(value)
     || typeof value.requestId !== "string"
     || typeof value.activationUrl !== "string"
-    || !value.activationUrl.startsWith("localapp://")) {
+    || (!value.activationUrl.startsWith("localapp://") && !isLocalConfirmationUrl(value.activationUrl, value.requestId))) {
     throw new DesktopActionError("invalid_response", "Desktop action creation response is invalid");
   }
   return value as unknown as CreateResponse;
+}
+
+function isLocalConfirmationUrl(value: string, requestId: string): boolean {
+  if (typeof window === "undefined" || typeof window.location?.origin !== "string") return false;
+  return value === `${window.location.origin}/my/device-actions/?requestId=${encodeURIComponent(requestId)}`;
 }
 
 function toSnapshot<TResult>(value: unknown, fallbackRequestId?: string): DesktopActionSnapshot<TResult> {
@@ -424,6 +429,21 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function activateCustomProtocol(url: string): void {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    const target = new URL(url);
+    const event = new CustomEvent("localapp:platform_request", {
+      cancelable: true,
+      detail: {
+        type: "localapp:platform_request",
+        id: `device-action-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        capability: "openRoute",
+        payload: { href: `${target.pathname}${target.search}${target.hash}` },
+      },
+    });
+    if (!window.dispatchEvent(event)) return;
+    window.location.href = url;
+    return;
+  }
   if (typeof document === "undefined") return;
   const anchor = document.createElement("a");
   anchor.href = url;

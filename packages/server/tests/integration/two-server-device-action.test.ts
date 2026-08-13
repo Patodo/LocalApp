@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import { parseDeviceActivationUrl } from "../../src/lib/device-action-ticket.js";
 import { createTestUser } from "../helpers/createUser.js";
 import { createTestPage, createTestServer } from "./helpers.js";
 import { getTestApiKey } from "./helpers.js";
@@ -31,7 +30,7 @@ describe("local Server device action activation", () => {
     await fs.rm(fixtureDirectory, { recursive: true, force: true });
   });
 
-  it("claims on the local Server, waits for admin trust, and executes in the target computer", async () => {
+  it("directly claims a daemon-managed loopback action before returning its local confirmation URL", async () => {
     const output = path.join(fixtureDirectory, "installed.txt");
     const create = await fetch(`${baseUrl}/serve/localdeviceowner/skill-market/api/device-actions`, {
       method: "POST",
@@ -45,16 +44,11 @@ describe("local Server device action activation", () => {
       }),
     });
     expect(create.status).toBe(201);
-    const created = (await create.json()).data as { requestId: string; activationUrl: string };
-    const ticket = parseDeviceActivationUrl(created.activationUrl);
-
-    const activation = await fetch(`${baseUrl}/api/device-control/activations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-localapp-device-control": controlToken },
-      body: JSON.stringify(ticket),
+    const created = (await create.json()).data as { requestId: string; activationUrl: string; status: string };
+    expect(created).toMatchObject({
+      status: "awaiting_trust",
+      activationUrl: `${baseUrl}/my/device-actions/?requestId=${created.requestId}`,
     });
-    expect(activation.status).toBe(200);
-    expect((await activation.json()).data).toMatchObject({ requestId: created.requestId, status: "awaiting_trust" });
 
     const pending = await fetch(`${baseUrl}/api/device-actions/local`, { headers: { "x-api-key": getTestApiKey() } });
     expect(pending.status).toBe(200);

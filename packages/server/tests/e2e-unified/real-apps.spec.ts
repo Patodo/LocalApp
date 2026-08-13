@@ -170,7 +170,7 @@ describe("real builtin applications", () => {
     const request = createSkillInstallRequest(installRoot);
     expect(request.permissions).toEqual({ filesystemWrite: [installRoot], childProcess: false });
 
-    const created = await api<JsonEnvelope<{ requestId: string; activationUrl: string }>>(
+    const created = await api<JsonEnvelope<{ requestId: string; activationUrl: string; status: string }>>(
       "/serve/localadmin/skill-market/api/device-actions",
       {
         method: "POST",
@@ -178,21 +178,10 @@ describe("real builtin applications", () => {
         body: JSON.stringify(request),
       },
     );
-    expect(created.data?.activationUrl).toMatch(/^localapp:\/\/action\//);
-    const ticketUrl = new URL(created.data!.activationUrl);
-    const ticket = {
-      protocolVersion: Number(ticketUrl.searchParams.get("protocolVersion")),
-      sourceOrigin: ticketUrl.searchParams.get("origin"),
-      actionId: ticketUrl.pathname.split("/").at(-1),
-      nonce: ticketUrl.searchParams.get("nonce"),
-    };
-
-    const activation = await fetch(`${baseUrl}/api/device-control/activations`, {
-      method: "POST",
-      headers: { "x-localapp-device-control": CONTROL_TOKEN, "content-type": "application/json" },
-      body: JSON.stringify(ticket),
+    expect(created.data).toMatchObject({
+      status: "awaiting_trust",
+      activationUrl: `${baseUrl}/my/device-actions/?requestId=${created.data!.requestId}`,
     });
-    expect(activation.status).toBe(200);
 
     const cookie = await loginCookie();
     const trust = await fetch(`${baseUrl}/api/device-actions/local/${created.data!.requestId}/trust`, {
