@@ -72,6 +72,11 @@ localapp app install --target local
 本地与远程都运行同一份 Server 包，并使用同一套应用、认证、权限、数据库和文件实现；
 两者只在监听地址、数据目录和存储配置上不同。
 
+应用触发当前电脑上的 Device Action 时，本地 daemon 管理的 loopback Server 会直接
+进入同源的“本机设备动作”授权页；用户确认后由该 Server 执行。只有应用来自远端、
+局域网或代理 Server 时才使用 `localapp://`，由点击按钮这台电脑上的 native adapter
+把一次性票据交给本地 daemon。Scheme 不携带脚本、API Key、Cookie 或应用数据。
+
 为远端 Server 保存一个 profile 后显式选择目标：
 
 ```bash
@@ -252,10 +257,14 @@ docker load -i localapp-image.tar
 
 ## Native adapter 与 Windows 发行
 
-LocalApp 没有托盘、Desktop 窗口或独立原生 CLI。npm 包启动同一 Node.js Server：
+旧 Tauri Desktop 已移除，不再是源码中的产品、构建目标或发行产物。LocalApp 没有
+托盘、Desktop 窗口或独立原生 CLI。npm 包启动同一 Node.js Server：
 `localapp server` 注册并启动当前用户 daemon，`localapp server run` 在前台运行。
 包内极小 native adapter 只负责注册和转发 `localapp://`、显示系统通知及回传点击；
 所有安全决策、应用管理和动作执行仍由 daemon 中的 Server 完成。
+
+仓库中的少量 Swift/Rust 代码仅用于编译这些按平台分发的 native adapter，不包含
+Tauri、WebView、托盘 UI、CLI 或第二套 Server。
 
 Windows 的用户发行物仍是标准 npm tgz。完整的 native adapter 构建、签名、打包
 检查和干净环境验收流程见：
