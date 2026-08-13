@@ -69,6 +69,36 @@ describe("native adapter boundary", () => {
     expect(calls).toEqual([["--permission-state"], ["--request-permission"]]);
   });
 
+  it("persists an explicit runtime layout for an OS-launched macOS Scheme bridge", async () => {
+    const fixture = await nativeFixture("darwin");
+    const runtimeDir = path.join(fixture.root, "runtime");
+    const dataDir = path.join(fixture.root, "server-data");
+    const adapter = await createNativeAdapter(fixture.root, {
+      platform: "darwin",
+      arch: "arm64",
+      supportDir: fixture.support,
+      env: {
+        LOCALAPP_SUPPORT_DIR: fixture.support,
+        LOCALAPP_RUNTIME_DIR: runtimeDir,
+        LOCALAPP_DATA_DIR: dataDir,
+        LOCALAPP_API_KEY: "must-not-be-persisted",
+      },
+      run: async () => "",
+    });
+
+    await adapter.installScheme();
+
+    expect(JSON.parse(await fs.readFile(path.join(fixture.support, "native-bridge.json"), "utf8"))).toEqual({
+      nodePath: process.execPath,
+      ipcClientPath: path.join(fixture.root, "darwin-arm64/LocalAppBridge.app/Contents/Resources/localapp-native-ipc-client.mjs"),
+      environment: {
+        LOCALAPP_SUPPORT_DIR: fixture.support,
+        LOCALAPP_RUNTIME_DIR: runtimeDir,
+        LOCALAPP_DATA_DIR: dataDir,
+      },
+    });
+  });
+
   it("validates a regular local icon before macOS display and preserves stable replacement argv", async () => {
     const fixture = await nativeFixture("darwin");
     const icon = path.join(fixture.root, "icon.png");

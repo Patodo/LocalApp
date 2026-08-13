@@ -89,7 +89,13 @@ export async function createNativeAdapter(root: string, options: NativeAdapterOp
         return;
       }
 
-      await writeBridgeConfiguration({ platform, configPath: bridgeConfigPath, nodePath, ipcClientPath: selected.ipcClient });
+      await writeBridgeConfiguration({
+        platform,
+        configPath: bridgeConfigPath,
+        nodePath,
+        ipcClientPath: selected.ipcClient,
+        environment: bridgeRuntimeEnvironment(environment, platform),
+      });
       if (platform === "darwin") {
         await run(selected.executable, ["--register", bridgeConfigPath], commandTimeoutMs);
         return;
@@ -229,17 +235,33 @@ export function createWindowsSchemeForwardInvocation(executable: string, configP
 interface BridgeConfiguration {
   nodePath: string;
   ipcClientPath: string;
+  environment?: Partial<Record<"LOCALAPP_SUPPORT_DIR" | "LOCALAPP_RUNTIME_DIR" | "LOCALAPP_DATA_DIR", string>>;
 }
 
-async function writeBridgeConfiguration(options: { platform: NodeJS.Platform; configPath: string; nodePath: string; ipcClientPath: string }): Promise<void> {
+async function writeBridgeConfiguration(options: BridgeConfiguration & { platform: NodeJS.Platform; configPath: string }): Promise<void> {
   if (!safeAbsoluteLocalPath(options.configPath, options.platform) || !safeAbsoluteLocalPath(options.nodePath, options.platform)
-    || !safeAbsoluteLocalPath(options.ipcClientPath, options.platform)) {
+    || !safeAbsoluteLocalPath(options.ipcClientPath, options.platform)
+    || Object.values(options.environment ?? {}).some((value) => !safeAbsoluteLocalPath(value, options.platform))) {
     throw lifecycleError("native_adapter_invalid", "The native bridge configuration is invalid");
   }
-  const content = `${JSON.stringify({ nodePath: options.nodePath, ipcClientPath: options.ipcClientPath } satisfies BridgeConfiguration)}\n`;
+  const configuration: BridgeConfiguration = { nodePath: options.nodePath, ipcClientPath: options.ipcClientPath };
+  if (options.environment !== undefined) configuration.environment = options.environment;
+  const content = `${JSON.stringify(configuration)}\n`;
   await fs.mkdir(path.dirname(options.configPath), { recursive: true, mode: 0o700 });
   const current = await fs.readFile(options.configPath, "utf8").catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
   if (current !== content) await fs.writeFile(options.configPath, content, { mode: 0o600 });
+}
+
+function bridgeRuntimeEnvironment(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): BridgeConfiguration["environment"] {
+  const keys = ["LOCALAPP_SUPPORT_DIR", "LOCALAPP_RUNTIME_DIR", "LOCALAPP_DATA_DIR"] as const;
+  const environment: NonNullable<BridgeConfiguration["environment"]> = {};
+  for (const key of keys) {
+    const value = env[key];
+    if (value === undefined) continue;
+    if (!safeAbsoluteLocalPath(value, platform)) throw lifecycleError("native_adapter_invalid", "The native bridge runtime layout is invalid");
+    environment[key] = value;
+  }
+  return Object.keys(environment).length === 0 ? undefined : environment;
 }
 
 function nativeBridgeConfigPath(platform: NodeJS.Platform, supportDir: string | undefined, env: NodeJS.ProcessEnv): string {
