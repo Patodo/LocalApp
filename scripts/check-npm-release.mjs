@@ -169,7 +169,8 @@ function run(command, args) {
   });
 }
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
+  if (argv[0] === "--") argv = argv.slice(1);
   const values = {};
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];

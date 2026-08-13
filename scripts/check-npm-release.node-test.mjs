@@ -14,7 +14,14 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
   await fs.rm(testRoot, { recursive: true, force: true });
   await fs.mkdir(testRoot, { recursive: true });
   t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
-  const { checkNpmRelease, npmPublishDryRunArgs } = await import("./check-npm-release.mjs");
+  const { checkNpmRelease, npmPublishDryRunArgs, parseArguments } = await import("./check-npm-release.mjs");
+
+  await t.test("accepts pnpm's argument separator", () => {
+    assert.deepEqual(parseArguments(["--", "--tarball", "candidate.tgz", "--tag", "v0.1.0"]), {
+      tarball: "candidate.tgz",
+      tag: "v0.1.0",
+    });
+  });
 
   await t.test("constructs only the public npm dry-run command", () => {
     assert.deepEqual(npmPublishDryRunArgs("/candidate/localapp.tgz"), [
