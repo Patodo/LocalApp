@@ -271,11 +271,13 @@ Windows 的用户发行物仍是标准 npm tgz。完整的 native adapter 构建
 
 - [本地运行与按需发布](docs/local-runtime.md)
 - [Windows 本地发行指南](docs/windows-local-release.md)
+- [npm 发布手册](docs/npm-release.md)
 
 ## 设计与规格
 
 - [OpenSpec 平台规格](openspec/specs)
 - [公开源码发布指南](docs/open-source-release.md)
+- [npm 发布手册](docs/npm-release.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)
 - [应用模板说明](init-repo/CLAUDE.md)

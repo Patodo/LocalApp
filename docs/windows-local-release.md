@@ -74,18 +74,17 @@ npm install ..\localapp-package\localapp-<version>.tgz
 6. `localapp init`、`check`、`build --package` 和 `app install --target local` 使用该
    tgz 完成，不依赖仓库源码或独立 Server 包。
 
-## 签名与发布
+## 签名与发布候选包
 
 公开发布时可使用组织的 Windows 代码签名证书签署 npm tgz 内的 native adapter。
 签名状态必须如实记录；没有正式证书时不得把 adapter 标记为正式签名。无论是否签名，
 npm 包清单中的 SHA-256 都必须与实际 adapter 一致，包内任何字节变化都必须重新生成
 清单和 tgz。
 
-将同一个 tgz 发布到 npm registry：
-
-```powershell
-npm publish .\tmp\localapp-package\localapp-<version>.tgz
-```
+开发机生成的 tgz 只包含当前 Windows adapter，不能发布到 npm。正式发布只能使用
+GitHub Release workflow 合并 Linux x64、macOS arm64、macOS x64 与 Windows x64
+adapter 后生成的唯一四平台 tgz。账户准备、tag、checksum、候选包检查、2FA 手动发布
+和发布后验收统一遵循 [npm 发布手册](npm-release.md)，不要从本页直接执行发布命令。
 
 用户安装与升级路径只有 npm：
 
