@@ -36,6 +36,7 @@ const ALLOWED_PREFIXES = [
   "deploy/",
   "docs/issue-workspace.md",
   "docs/local-runtime.md",
+  "docs/npm-release.md",
   "docs/open-source-release.md",
   "docs/plan.md",
   "docs/windows-local-release.md",
@@ -68,6 +69,7 @@ const SAFE_CREDENTIAL_MARKERS = [
 const PRIVATE_IDENTITY_MARKERS = ["pato" + "do"];
 const SCAN_BASELINE_PATH = "scripts/public-source-scan-baseline.json";
 const CANONICAL_PUBLIC_REPOSITORY_URL = /(?:git\+)?https:\/\/github\.com\/Patodo\/LocalApp(?:\.git|#readme|\/issues)?/g;
+const CANONICAL_PUBLIC_NPM_PACKAGE = /@patodo\/localapp\b/gi;
 
 export function isPublicSourcePath(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -229,7 +231,9 @@ function scanText(relativePath, text, violations) {
   for (const [rule, pattern] of rules) {
     if (pattern.test(text)) violations.push({ path: relativePath, rule });
   }
-  const identityScanText = text.replace(CANONICAL_PUBLIC_REPOSITORY_URL, "https://github.com/public-owner/public-repository");
+  const identityScanText = text
+    .replace(CANONICAL_PUBLIC_REPOSITORY_URL, "https://github.com/public-owner/public-repository")
+    .replace(CANONICAL_PUBLIC_NPM_PACKAGE, "@public-owner/public-package");
   if (PRIVATE_IDENTITY_MARKERS.some((marker) => identityScanText.toLowerCase().includes(marker))) {
     violations.push({ path: relativePath, rule: "PRIVATE_TEST_IDENTITY" });
   }

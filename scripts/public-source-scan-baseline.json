@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "exceptions": [
+    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "ec46c921443eead6fae9ab1b3c73a66c76827588e31fa0d381dd5112cf81b9b9" },
     { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
     { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
     { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
@@ -8,7 +9,7 @@
     { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
     { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
     { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
-    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "e18329d8d2eb20623f6e5e23a5aef03179a051ae5e5c77c868b6ad005b63a9b5" },
+    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "ed9ad9a4437316e7de6ddb09446dd655837d9ff85eb85c701414f72eb26c45b8" },
     { "path": "packages/server/src/routes/device-control.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "570b1f02b1df63ab956605b24ded8b0bc5b3df6d6ca732315a657b6b547fde14" },
     { "path": "packages/server/src/routes/device-notifications.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "5ab094359f0f0750be2f507205a514a91723636f3d1799a17209df7c4b6c314f" },
     { "path": "packages/server/tests/config-store.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "e6e207d15266ed1cacfa2ab9dbf0e68139cfbacaba2df2e1bc4e0ebb944c8b11" },
@@ -24,8 +25,10 @@
     { "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65" },
     { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
     { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" },
-    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "98e80ed44c3bf5eca209e70852cfeac6f78914ff7e5f6570d265cd0e94fd6f0c" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "0a84406f5666a7a10abc75d5f52d6198e93e1a9aea5896e007c39fc2bc21065c" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a84406f5666a7a10abc75d5f52d6198e93e1a9aea5896e007c39fc2bc21065c" }
+    { "path": "scripts/check-npm-release.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "3fc149b1d1eb0373f02c3b099c88fe83b5d09c30cf8b3f50e14211c7606578a1" },
+    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "31f74d1dbaa32e0dc421d92fc92018371a357ae523fb3c22ef57f108189391c0" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "51f4e56400d384d13aec0afe49cdbab273e83e1f215ec9fc71aefd1082bbfbc0" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "51f4e56400d384d13aec0afe49cdbab273e83e1f215ec9fc71aefd1082bbfbc0" },
+    { "path": "scripts/release-workflow.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "2efd147a93e8b6142fbd31f9cd1bdf11376821b4ea613e62441851878bedbf1b" }
   ]
 }

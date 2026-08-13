@@ -10,6 +10,7 @@ test("top-level allowlist includes sanitized history and excludes internal runti
   assert.equal(isPublicSourcePath("AGENTS.md"), true);
   assert.equal(isPublicSourcePath("benchmarks/agent-first-run/README.md"), true);
   assert.equal(isPublicSourcePath("docs/local-runtime.md"), true);
+  assert.equal(isPublicSourcePath("docs/npm-release.md"), true);
   assert.equal(isPublicSourcePath("docs/plan.md"), true);
   assert.equal(isPublicSourcePath("packages/server/src/index.ts"), true);
   assert.equal(isPublicSourcePath("init-repo/.claude/skills/localapp/SKILL.md"), true);
@@ -157,13 +158,13 @@ test("source gate rejects private test identities and internal domains", () => {
   }
 });
 
-test("source gate permits the canonical public repository URL but not the owner identity elsewhere", () => {
+test("source gate permits canonical public repository and npm identities but not the owner identity elsewhere", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-public-canonical-repo-"));
   try {
     fs.mkdirSync(path.join(directory, "packages/localapp"), { recursive: true });
     fs.writeFileSync(
       path.join(directory, "packages/localapp/package.json"),
-      `${JSON.stringify({ repository: "https://github.com/Patodo/LocalApp.git" })}\n`,
+      `${JSON.stringify({ name: "@patodo/localapp", repository: "https://github.com/Patodo/LocalApp.git" })}\n`,
     );
     assert.deepEqual(scanPublicSource(directory), []);
     fs.writeFileSync(path.join(directory, "packages/localapp/owner.txt"), "owner=patodo\n");
