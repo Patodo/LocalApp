@@ -8,7 +8,7 @@
     { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
     { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
     { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
-    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "19a5892a291df26b59710e714b1ade4559dfdf7c86fc550592093585df722cd9" },
+    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "e18329d8d2eb20623f6e5e23a5aef03179a051ae5e5c77c868b6ad005b63a9b5" },
     { "path": "packages/server/src/routes/device-control.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "570b1f02b1df63ab956605b24ded8b0bc5b3df6d6ca732315a657b6b547fde14" },
     { "path": "packages/server/src/routes/device-notifications.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "5ab094359f0f0750be2f507205a514a91723636f3d1799a17209df7c4b6c314f" },
     { "path": "packages/server/tests/config-store.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "e6e207d15266ed1cacfa2ab9dbf0e68139cfbacaba2df2e1bc4e0ebb944c8b11" },
