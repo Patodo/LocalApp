@@ -6,11 +6,12 @@
 
 ## Summary
 
-LocalApp is distributed to end users as one npm package named `localapp`.
-Installing that package provides the `localapp` command, the canonical Node.js
-Server, the Server-hosted Web control plane, the application-development
-toolchain, the builtin application template, and the small operating-system
-adapters required for `localapp://` activation and native notifications.
+LocalApp is distributed to end users as one npm package named
+`@patodo/localapp`. Installing that package provides the `localapp` command,
+the canonical Node.js Server, the Server-hosted Web control plane, the
+application-development toolchain, the builtin application template, and the
+small operating-system adapters required for `localapp://` activation and
+native notifications.
 
 There is no Desktop product, Tauri application, tray, WebView, or second local
 backend. On a personal computer, `localapp server` starts the canonical Server
@@ -70,16 +71,18 @@ synchronization, generic Device Actions, and local-only data ownership.
 
 ### Public package
 
-The publishable package is named `localapp`:
+The publishable package is named `@patodo/localapp`:
 
 ```bash
-npm install --global localapp
+npm install --global @patodo/localapp
 localapp server
 ```
 
-`npx localapp ...` and a project-local `devDependency` are also supported. The
-package declares Node.js 24 or newer and publishes one public binary named
-`localapp`.
+`npx --package @patodo/localapp localapp ...` and a project-local
+`devDependency` are also supported. The package declares Node.js 24 or newer
+and publishes one public binary named `localapp`. The npm scope does not change
+the CLI, `localapp://` scheme, runtime directories, Git tag, or release asset
+names.
 
 The repository may keep focused workspace packages such as Server Core and the
 SDKs for source-code ownership and tests. They are build inputs, not additional
@@ -481,7 +484,8 @@ the package never discovers legacy local data on its own.
 
 ## Acceptance Criteria
 
-- `npm install --global localapp` is the only product installation required.
+- `npm install --global @patodo/localapp` is the only product installation
+  required.
 - The installed package exposes one `localapp` binary and requires no Rust,
   Tauri, Electron, or second Server package at runtime.
 - `localapp server` idempotently installs and starts a per-user daemon; the same

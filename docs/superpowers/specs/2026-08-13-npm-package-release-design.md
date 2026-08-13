@@ -5,8 +5,8 @@
 
 ## Objective
 
-Publish the existing unscoped public package as `localapp`. Users install one
-artifact with `npm install --global localapp` and invoke the `localapp` binary.
+Publish the public package as `@patodo/localapp`. Users install one artifact
+with `npm install --global @patodo/localapp` and invoke the `localapp` binary.
 The package contains the TypeScript CLI, canonical Server, builtin application
 template, and the verified native adapter matrix. It does not publish separate
 platform packages, a Tauri application, or another Server package.
@@ -32,7 +32,7 @@ release workflow.
 The public package identity is fixed as:
 
 ```text
-name: localapp
+name: @patodo/localapp
 binary: localapp
 initial version: 0.1.0
 registry: https://registry.npmjs.org/
@@ -72,8 +72,10 @@ release check.
 
 One reusable release checker accepts a tarball path and fails closed unless:
 
-- the filename, manifest name, manifest version, and requested Git tag agree;
-- the package name is exactly `localapp` and the binary is exactly `localapp`;
+- the filename remains `localapp-<version>.tgz`, and its version agrees with
+  the manifest version and requested Git tag;
+- the package name is exactly `@patodo/localapp` and the binary is exactly
+  `localapp`;
 - README, LICENSE, runtime, template, Server entrypoint, and artifact manifest
   are present;
 - the native adapter manifest contains exactly the supported release targets;
@@ -103,8 +105,9 @@ before creating its tag.
 - If npm reports that the version already exists, the artifact is not
   republished. The maintainer verifies the existing version or creates a new
   patch release.
-- Package-name rejection or policy review stops the release; it does not
-  silently switch the public identity to a scoped package.
+- npm rejected the unscoped `localapp` name because it is too similar to the
+  existing `local-app` package. The approved public identity is therefore
+  `@patodo/localapp`; release tooling must not fall back to another name.
 
 ## Documentation and verification
 
@@ -117,8 +120,8 @@ non-publishing behavior of the checker.
 The post-publication acceptance is:
 
 ```bash
-npm view localapp@<version>
-npm install --global localapp@<version>
+npm view @patodo/localapp@<version>
+npm install --global @patodo/localapp@<version>
 localapp --version
 localapp server
 localapp server status
@@ -126,3 +129,12 @@ localapp server status
 
 The first public release is complete only after npm reports the expected
 version and a clean installation can start the packaged Server.
+
+## Stable product names
+
+The npm registry identity is the only scoped name. The executable remains
+`localapp`; the custom URL scheme remains `localapp://`; daemon, support and
+data directories remain named `localapp`; the Git tag remains `v<version>`;
+and the GitHub Release tarball remains `localapp-<version>.tgz`. This avoids a
+registry policy constraint leaking into operating-system integration or the
+application package protocol.
