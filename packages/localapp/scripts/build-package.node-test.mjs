@@ -49,6 +49,7 @@ test("packed product exposes one localapp binary without workspace references", 
   assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.1.0");
   assert.equal(await fs.stat(path.join(result.outputDirectory, "template/runtime/server-core/dist/index.js")).then(() => true, () => false), true);
   assert.equal(artifact.schemaVersion, 2);
+  assert.equal(artifact.name, "@patodo/localapp");
   assert.equal(artifact.bootstrapEntrypoint, "runtime/bootstrap/localapp-daemon-bootstrap.mjs");
   assert.equal(artifact.files.some((entry) => entry.path === artifact.entrypoint), true);
   assert.equal(artifact.files.some((entry) => entry.path === artifact.bootstrapEntrypoint), true);

@@ -29,7 +29,7 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
     ]);
   });
 
-  await t.test("accepts the exact public package and runs npm dry-run", async () => {
+  await t.test("accepts only the exact scoped public package and runs npm dry-run", async () => {
     const tarball = await createFixture("valid");
     const calls = [];
     const result = await checkNpmRelease({
@@ -37,11 +37,12 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
       expectedTag: "v0.1.0",
       runNpmDryRun: async (candidate) => calls.push(candidate),
     });
-    assert.deepEqual(result, { name: "localapp", version: "0.1.0", targets: expectedTargets });
+    assert.deepEqual(result, { name: "@patodo/localapp", version: "0.1.0", targets: expectedTargets });
     assert.deepEqual(calls, [tarball]);
   });
 
   for (const [name, mutate, message, expectedTag = "v0.1.0"] of [
+    ["rejects the unscoped package name", (value) => { value.packageJson.name = "localapp"; }, /package name/i],
     ["rejects a wrong package name", (value) => { value.packageJson.name = "other"; }, /package name/i],
     ["rejects a tag and version mismatch", () => {}, /tag.*version/i, "v0.2.0"],
     ["rejects a missing README", (value) => { value.omit.add("README.md"); }, /README\.md/],
@@ -90,7 +91,7 @@ async function createFixture(name, mutate = () => {}) {
     omit: new Set(),
     targets: [...expectedTargets],
     packageJson: {
-      name: "localapp",
+      name: "@patodo/localapp",
       version: "0.1.0",
       description: "Local-first application platform and unified Server CLI",
       license: "MIT",
