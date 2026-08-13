@@ -39,6 +39,7 @@ const ALLOWED_PREFIXES = [
   "docs/open-source-release.md",
   "docs/plan.md",
   "docs/windows-local-release.md",
+  "examples/",
   "init-repo/",
   "openspec/changes/archive/",
   "openspec/config.yaml",
@@ -54,7 +55,7 @@ const DENIED_PREFIXES = [
 const DENIED_EXTENSIONS = new Set([
   ".7z", ".apk", ".app", ".appimage", ".bz2", ".cab", ".deb", ".dmg", ".dll",
   ".dylib", ".exe", ".gz", ".img", ".iso", ".jar", ".msi", ".node", ".pfx",
-  ".pkg", ".rar", ".rpm", ".so", ".tar", ".tgz", ".war", ".whl", ".xz", ".zip",
+  ".pdf", ".pkg", ".png", ".rar", ".rpm", ".so", ".tar", ".tgz", ".war", ".whl", ".xz", ".zip",
   ".zst",
 ]);
 const SAFE_CREDENTIAL_MARKERS = [
@@ -68,6 +69,10 @@ const SAFE_CREDENTIAL_MARKERS = [
 const PRIVATE_IDENTITY_MARKERS = ["pato" + "do"];
 const SCAN_BASELINE_PATH = "scripts/public-source-scan-baseline.json";
 const CANONICAL_PUBLIC_REPOSITORY_URL = /(?:git\+)?https:\/\/github\.com\/Patodo\/LocalApp(?:\.git|#readme|\/issues)?/g;
+const IMMUTABLE_MEDIA_FIXTURES = new Map([
+  ["examples/resume-manager/fixtures/portrait.png", "a9999e0d435c0ae65cfc4987617d991876f72a16d2ddab4298e444d8312bfee4"],
+  ["examples/resume-manager/fixtures/resume.pdf", "bed8453aa5427a7c08f64ed32e1bb19537c665b9c0737f2b1ac63958e0882511"],
+]);
 
 export function isPublicSourcePath(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -103,12 +108,14 @@ export function scanPublicSource(directory) {
     if (stat.size > MAX_SOURCE_FILE_BYTES) {
       violations.push({ path: relativePath, rule: "FILE_TOO_LARGE" });
     }
-    if (DENIED_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) {
+    const bytes = fs.readFileSync(absolutePath);
+    const isReviewedMediaFixture = IMMUTABLE_MEDIA_FIXTURES.get(relativePath)
+      === createHash("sha256").update(bytes).digest("hex");
+    if (!isReviewedMediaFixture && DENIED_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) {
       violations.push({ path: relativePath, rule: "RELEASE_BINARY_EXTENSION" });
     }
 
-    const bytes = fs.readFileSync(absolutePath);
-    if (hasExecutableMagic(bytes)) {
+    if (!isReviewedMediaFixture && hasExecutableMagic(bytes)) {
       violations.push({ path: relativePath, rule: "RELEASE_BINARY_MAGIC" });
     }
     if (bytes.includes(0)) continue;
@@ -181,8 +188,10 @@ function createSourceManifest(directory, commitSha) {
 }
 
 function verifySnapshot(directory) {
+  const env = snapshotVerificationEnvironment(directory, process.env);
+  fs.mkdirSync(env.TMPDIR, { recursive: true });
   for (const [command, args] of snapshotVerificationCommands()) {
-    const result = spawnSync(command, args, { cwd: directory, stdio: "inherit" });
+    const result = spawnSync(command, args, { cwd: directory, env, stdio: "inherit" });
     if (result.status !== 0) throw new Error(`snapshot verification failed: ${command} ${args.join(" ")}`);
   }
 }
@@ -197,6 +206,7 @@ export function snapshotVerificationCommands() {
     ["pnpm", ["-C", "packages/server-core", "test"]],
     ["pnpm", ["-C", "packages/web", "build"]],
     ["pnpm", ["-C", "packages/web", "test"]],
+    ["pnpm", ["build:real-apps"]],
     ["pnpm", ["-C", "packages/server", "build"]],
     ["pnpm", ["-C", "packages/server", "test"]],
     ["pnpm", ["-C", "packages/localapp", "build"]],
@@ -206,6 +216,16 @@ export function snapshotVerificationCommands() {
     ["pnpm", ["-C", "init-repo", "test"]],
     ["openspec", ["validate", "--all", "--strict"]],
   ];
+}
+
+export function snapshotVerificationEnvironment(directory, baseEnvironment = process.env) {
+  const temporaryDirectory = path.join(directory, "tmp/public-source-verification");
+  return {
+    ...baseEnvironment,
+    TMPDIR: temporaryDirectory,
+    TMP: temporaryDirectory,
+    TEMP: temporaryDirectory,
+  };
 }
 
 function scanText(relativePath, text, violations) {
@@ -281,6 +301,8 @@ function hasExecutableMagic(bytes) {
   const firstFour = bytes.subarray(0, 4).toString("hex");
   const prefix = bytes.subarray(0, 8).toString("hex");
   return bytes.subarray(0, 4).toString("ascii") === "\x7fELF"
+    || bytes.subarray(0, 4).toString("ascii") === "%PDF"
+    || prefix === "89504e470d0a1a0a"
     || bytes.subarray(0, 2).toString("ascii") === "MZ"
     || ["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe"].includes(firstFour)
     || prefix.startsWith("1f8b")

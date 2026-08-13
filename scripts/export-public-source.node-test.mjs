@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { isPublicSourcePath, scanPublicSource, snapshotVerificationCommands } from "./export-public-source.mjs";
+import { isPublicSourcePath, scanPublicSource, snapshotVerificationCommands, snapshotVerificationEnvironment } from "./export-public-source.mjs";
 
 test("top-level allowlist includes sanitized history and excludes internal runtime data and release binaries", () => {
   assert.equal(isPublicSourcePath("AGENTS.md"), true);
@@ -14,6 +14,8 @@ test("top-level allowlist includes sanitized history and excludes internal runti
   assert.equal(isPublicSourcePath("packages/server/src/index.ts"), true);
   assert.equal(isPublicSourcePath("init-repo/.claude/skills/localapp/SKILL.md"), true);
   assert.equal(isPublicSourcePath("openspec/specs/cli-tool/spec.md"), true);
+  assert.equal(isPublicSourcePath("examples/skill-market/src/device-action.ts"), true);
+  assert.equal(isPublicSourcePath("examples/resume-manager/fixtures/resume.pdf"), true);
   assert.equal(isPublicSourcePath(".agents/skills/opsx-apply/SKILL.md"), false);
   assert.equal(isPublicSourcePath("openspec/changes/archive/old/design.md"), true);
   assert.equal(isPublicSourcePath("openspec/changes/in-progress/design.md"), false);
@@ -33,6 +35,7 @@ test("snapshot verification uses the unified package and no replaced Rust or Des
     "pnpm -C packages/server-core test",
     "pnpm -C packages/web build",
     "pnpm -C packages/web test",
+    "pnpm build:real-apps",
     "pnpm -C packages/server build",
     "pnpm -C packages/server test",
     "pnpm -C packages/localapp build",
@@ -42,6 +45,15 @@ test("snapshot verification uses the unified package and no replaced Rust or Des
     "pnpm -C init-repo test",
     "openspec validate --all --strict",
   ]);
+});
+
+test("snapshot verification keeps temporary files inside the isolated snapshot", () => {
+  const root = path.join(path.sep, "isolated", "source");
+  const environment = snapshotVerificationEnvironment(root, { PATH: "tools" });
+  assert.equal(environment.PATH, "tools");
+  assert.equal(environment.TMPDIR, path.join(root, "tmp/public-source-verification"));
+  assert.equal(environment.TMP, environment.TMPDIR);
+  assert.equal(environment.TEMP, environment.TMPDIR);
 });
 
 test("source gate rejects unquoted environment-style credentials", () => {
@@ -234,6 +246,28 @@ test("source gate rejects archive and installer extensions and magic", () => {
         "RELEASE_BINARY_MAGIC",
       ],
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("source gate accepts only the immutable checked-in media fixtures", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-public-media-"));
+  try {
+    for (const relativePath of [
+      "examples/resume-manager/fixtures/portrait.png",
+      "examples/resume-manager/fixtures/resume.pdf",
+    ]) {
+      const destination = path.join(directory, relativePath);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(new URL(`../${relativePath}`, import.meta.url), destination);
+    }
+    assert.deepEqual(scanPublicSource(directory), []);
+    fs.appendFileSync(path.join(directory, "examples/resume-manager/fixtures/resume.pdf"), "changed");
+    assert.deepEqual(scanPublicSource(directory).map(({ rule }) => rule), [
+      "RELEASE_BINARY_EXTENSION",
+      "RELEASE_BINARY_MAGIC",
+    ]);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
