@@ -12,6 +12,12 @@ const testRoot = path.join(projectDirectory, "tmp/task-1-package-test");
 const packageDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 
+test("CLI bundle resolves both Server contracts from source without prebuilt dist", async () => {
+  const source = await fs.readFile(path.join(packageDirectory, "scripts/build-package.mjs"), "utf8");
+  assert.match(source, /"@localapp\/server\/app-package-api": path\.join\(projectDirectory, "packages\/server\/src\/app-package-api\.ts"\)/);
+  assert.match(source, /"@localapp\/server\/device-action-ticket": path\.join\(projectDirectory, "packages\/server\/src\/device-action-ticket\.ts"\)/);
+});
+
 test("Windows sync command builder uses explicit cmd.exe invocation for a spaced special-character path", () => {
   const { buildSyncInvocation } = require("../src/template/sync-template-command.cjs");
   const executable = "C:\\Program Files\\Local & App!^(test)\\localapp.cmd";
