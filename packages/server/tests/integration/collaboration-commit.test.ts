@@ -95,9 +95,7 @@ describe("collaboration commit API", () => {
     });
   }
 
-  async function readCommittedEvent(response: Response): Promise<any> {
-    expect(response.status).toBe(200);
-    const reader = response.body!.getReader();
+  async function readCommittedEvent(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<any> {
     const decoder = new TextDecoder();
     let buffer = "";
     const deadline = Date.now() + 1_500;
@@ -261,7 +259,10 @@ describe("collaboration commit API", () => {
   it("提交成功后向同 app/resource 订阅者广播 committed event", async () => {
     const pageName = "collab-commit-event";
     await setupPage(pageName);
-    const events = fetch(`${baseUrl}/serve/${owner}/${pageName}/api/collaboration/events?resource=tasks`);
+    const events = await fetch(`${baseUrl}/serve/${owner}/${pageName}/api/collaboration/events?resource=tasks`);
+    expect(events.status).toBe(200);
+    const reader = events.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain(": connected");
 
     const res = await commit(pageName, {
       resource: "tasks",
@@ -272,7 +273,7 @@ describe("collaboration commit API", () => {
     });
     expect(res.status).toBe(200);
 
-    await expect(readCommittedEvent(await events)).resolves.toMatchObject({
+    await expect(readCommittedEvent(reader)).resolves.toMatchObject({
       type: "collab:operation_committed",
       data: {
         appOwner: owner,
