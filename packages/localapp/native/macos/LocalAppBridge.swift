@@ -354,7 +354,10 @@ private func parseExactStringObject(_ raw: String) -> [String: String]? {
 private func registerBridge(configPath: String) -> Bool {
   guard safeAbsolutePath(configPath), loadConfiguration(at: configPath) != nil else { return false }
   guard setBridgePreferenceValue(configPath) else { return false }
-  return LSRegisterURL(bridgeBundleURL(), true) == noErr
+  guard LSRegisterURL(bridgeBundleURL(), true) == noErr,
+        let identifier = bridgeBundle().bundleIdentifier
+  else { return false }
+  return LSSetDefaultHandlerForURLScheme("localapp" as CFString, identifier as CFString) == noErr
 }
 
 private func loadConfiguration(at path: String) -> BridgeConfiguration? {

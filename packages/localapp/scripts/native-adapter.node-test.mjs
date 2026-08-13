@@ -167,6 +167,11 @@ test("macOS notifications stage attachments without consuming immutable release 
   assert.doesNotMatch(source, /UNNotificationAttachment\(identifier: "localapp-icon", url: URL\(fileURLWithPath: envelope\.iconPath\)\)/);
 });
 
+test("macOS registration makes the packaged bridge the default localapp Scheme handler", async () => {
+  const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/macos/LocalAppBridge.swift"), "utf8");
+  assert.match(source, /LSSetDefaultHandlerForURLScheme\("localapp" as CFString, identifier as CFString\) == noErr/);
+});
+
 test("Windows helper preserves argv, has an explicit application path, and keeps browser opening outside Job ownership", async () => {
   const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/windows/src/main.rs"), "utf8");
   assert.doesNotMatch(source, /collect::<Vec<_>>\(\)\.join\(" "\)/);
