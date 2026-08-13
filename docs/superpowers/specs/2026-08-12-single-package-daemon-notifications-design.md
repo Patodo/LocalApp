@@ -240,6 +240,22 @@ URL contains only protocol version, canonical source origin, action ID, and a
 high-entropy one-time nonce. It never contains the script, dependencies,
 cookies, API Keys, or action input.
 
+Scheme activation is required only when the source application is hosted by a
+different Server. When a daemon-managed Server is listening on loopback and
+hosts the application that creates the action, it is already the current
+computer's execution authority. That Server claims the action through the same
+private Device Control activation service before returning the creation
+response. The response contains an exact same-origin confirmation URL instead
+of a Scheme URL, and the SDK navigates to that page when first-use or expanded
+permissions require trust. Existing trust may proceed directly to execution.
+
+A Server is eligible for this local fast path only when it has a daemon-issued
+Device Control token, has no non-loopback public URL, and its canonical source
+origin is loopback. Application code never receives the control token and
+cannot grant trust. Standalone, LAN, proxied, and remote Servers continue to
+return `localapp://`; the computer whose operating system handles that Scheme
+remains the execution target.
+
 The platform adapter forwards the complete URL to the daemon's private IPC
 endpoint. The daemon strictly parses and size-checks it, converts it to the
 existing activation ticket, and forwards only that ticket to the canonical

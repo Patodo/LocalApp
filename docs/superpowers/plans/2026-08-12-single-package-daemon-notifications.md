@@ -968,16 +968,16 @@ Expected: every command exits 0 with all generated state below repository `tmp/`
 
 - [ ] **Step 5: Verify SKILL marketplace through the in-app Browser**
 
-Implementation note: the formal Browser journey reaches `等待本机激活`, but the
-in-app Browser security policy blocks automated external-Scheme navigation. Do
-not bypass this with shell activation or a direct API. The deterministic suite
-covers ticket/trust/execution; the final Browser-to-LaunchServices observation
-requires one user click on this computer.
+Implementation note: a daemon-managed loopback Server uses the local fast path,
+so the in-app Browser must reach the same-origin Device Actions confirmation
+page without invoking an external Scheme. Remote and standalone Server sources
+continue to require `localapp://`; do not bypass that Browser security boundary
+with shell activation or a direct API.
 
 Read and use `browser:control-in-app-browser`. Open the formal packaged Server
 SKILL marketplace URL, log in, select the fixture SKILL, click install, follow
-the real `localapp://` activation on this computer, approve first-publisher
-trust in the local Web page, and observe source-page success. Verify
+the same-origin confirmation URL, approve first-publisher trust in the local
+Web page, and observe successful execution. Verify
 `tmp/single-package-acceptance/installed-skills/<skill>/SKILL.md` and its digest.
 Repeat identical permissions without a prompt and expanded permissions with a
 new prompt. Capture DOM and console state after each transition.
@@ -1019,13 +1019,66 @@ adapter target, notification result, Browser console state, and test counts in
 the verification document. Stop every acceptance process while preserving the
 explicit evidence directories below `tmp/`.
 
+### Task 14: Add the daemon-loopback Device Action fast path
+
+**Files:**
+- Modify: `packages/server/src/routes/device-actions.ts`
+- Modify: `packages/server/src/routes/device-control.ts`
+- Modify: `packages/server/tests/integration/two-server-device-action.test.ts`
+- Modify: `packages/server/tests/integration/device-actions.test.ts`
+- Modify: `packages/sdk-core/src/desktop.ts`
+- Modify: `packages/sdk-core/tests/device.test.ts`
+- Modify: `packages/server/tests/e2e-unified/real-apps.spec.ts`
+
+**Interfaces:**
+- Consumes: the existing protocol-v2 activation ticket and private Device
+  Control activation service.
+- Produces: a creation response whose `activationUrl` is either the canonical
+  same-origin confirmation URL for daemon-managed loopback or the canonical
+  `localapp://` URL for every other source.
+
+- [ ] **Step 1: Add failing Server integration tests**
+
+Assert that a daemon-managed loopback creation is internally claimed and
+returns `/my/device-actions/?requestId=<id>`, while a Server without a Device
+Control token continues to return `localapp://` and remains pending.
+
+- [ ] **Step 2: Add failing SDK tests**
+
+Assert that the SDK navigates only an exact same-origin confirmation URL and
+continues to click an anchor for a canonical `localapp://` activation URL.
+
+- [ ] **Step 3: Implement one shared activation service**
+
+Extract the claim, trust lookup, and execution transition currently owned by
+the private activation route. Reuse it from both the control-token route and
+the loopback creation path; do not duplicate execution or trust policy.
+
+- [ ] **Step 4: Implement strict SDK activation dispatch**
+
+Accept only the canonical Scheme URL or the exact same-origin confirmation URL
+for the returned request ID. Navigate the current tab for local confirmation;
+preserve native Scheme activation for remote sources.
+
+- [ ] **Step 5: Run focused and package regressions**
+
+Run the Server Device Action integration tests, SDK tests, TypeScript builds,
+`pnpm test:localapp-package`, and `pnpm test:real-apps`.
+
+- [ ] **Step 6: Rebuild the acceptance package and verify in Browser**
+
+Install the new tarball under `tmp/single-package-acceptance`, start the same
+daemon, use the formal SKILL market URL, approve the action on the same-origin
+Device Actions page, and verify the installed fixture bytes and digest.
+
 ## Plan Self-Review
 
 - Spec coverage: Tasks 1–6 cover the one-package TypeScript development
   toolchain; Tasks 7–8 cover daemon and Scheme; Tasks 9–11 cover durable native
   notifications and Web settings; Task 12 removes the replaced products; Task
   13 covers guidance, both applications, native notification, Browser evidence,
-  commit, and push.
+  commit, and push; Task 14 adds the local fast path without weakening the
+  remote Scheme boundary.
 - Placeholder scan: every implementation step names concrete files,
   interfaces, tests, commands, outcomes, and commit scope; no deferred product
   behavior is hidden behind an unspecified follow-up.
