@@ -110,7 +110,6 @@ if ($env:LOCALAPP_BUILD_WINDOWS_RELEASE_DOT_SOURCE_ONLY -ne "1") {
   Assert-WindowsX64
   Assert-Toolchain
   if (!$SkipInstall) { Invoke-External "pnpm" @("install", "--frozen-lockfile") }
-  Invoke-External "pnpm" @("-C", "packages/localapp", "build")
   Invoke-External "pnpm" @("-C", "packages/localapp", "build:native")
   $destination = if ([IO.Path]::IsPathRooted($OutputDirectory)) { $OutputDirectory } else { Join-Path $RepositoryRoot $OutputDirectory }
   Copy-NativeAdapterArtifact $NativeSourceDirectory $destination

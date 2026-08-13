@@ -13,6 +13,7 @@ const powerShell = process.platform === "win32" ? "powershell.exe" : "pwsh";
 test("Windows release surface names only the native adapter artifact", () => {
   assert.match(source, /packages[\\/]localapp/);
   assert.match(source, /build:native/);
+  assert.doesNotMatch(source, /@\("-C", "packages\/localapp", "build"\)/);
   assert.match(source, /win32-x64/);
   assert.doesNotMatch(source, /packages[\\/](?:cli|desktop)|Tauri|NSIS|build:cli|localapp-server/i);
 });
