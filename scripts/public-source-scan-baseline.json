@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "exceptions": [
-    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "ec46c921443eead6fae9ab1b3c73a66c76827588e31fa0d381dd5112cf81b9b9" },
+    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "cefc6b8273cfaab58ceeaa6d458b6bfe575227bd27fbd8df5c75530abf51ac39" },
     { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
     { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
     { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
-    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "34774bcb1a5ea0ca3752938fcd8e4f7cb8e2953220b76a56dcc38ad6dca69a32" },
+    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1d067f65d0b3c120c721ab0c14fc30116e2fefd8cdc68834407fbd1c86f7e5a1" },
     { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
     { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
     { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
@@ -17,7 +17,7 @@
     { "path": "packages/server/tests/integration/dev-routes.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b612098d2c36303917a599b5a267f62133e50c96adc62795929792524434f6e3" },
     { "path": "packages/server/tests/integration/device-notifications.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "43773390344539bdb5c54bf6b01070fba9c3b615f9148ae3e7801341ea314887" },
     { "path": "packages/server/tests/integration/homepage-redirect.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "bec85414573f4384dbae274c6804daad8024a547aa23b413b487352843c5ec7b" },
-    { "path": "packages/server/tests/integration/peers.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1cc0727431b3e382ea053ab21fadc1d061d59b991061666a6f838aeb55a2eef6" },
+    { "path": "packages/server/tests/integration/peers.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ff6a1e130c39cc84daf4228f66629fb1be5a462943e68701132430471b027ad7" },
     { "path": "packages/server/tests/integration/setup-flow.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b971b752615f0f171c14d23243748aff4c97dd7fd68be5ebf87ed5f23befc925" },
     { "path": "packages/server/tests/integration/system-settings.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "187cd7eefcba4f44cb3476a0aedd73832f9c2207cdf13b8b2a7c98f8b9a045b3" },
     { "path": "packages/server/tests/process-tree.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "2030b9baf1f03ac533a7f64d5ff6d4e8d90f6d8a3f6e729c98863d345643ba53" },
