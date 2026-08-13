@@ -20,7 +20,12 @@ async function stores(now = new Date("2026-08-12T00:00:00.000Z")) {
     now: () => current,
     randomBytes: (size) => Buffer.alloc(size, 11),
   });
-  return { delivery, tickets: new ClickTicketStore(delivery), advance: (date: Date) => { current = date; } };
+  return {
+    delivery,
+    tickets: new ClickTicketStore(delivery),
+    now: () => current,
+    advance: (date: Date) => { current = date; },
+  };
 }
 
 function notification(): DeliveryNotification {
@@ -40,12 +45,12 @@ describe("ClickTicketStore", () => {
   });
 
   it("allows only one winner across independent store instances", async () => {
-    const { delivery } = await stores();
+    const { delivery, now } = await stores();
     await delivery.baseline("local", 0);
     const pending = await delivery.preparePending("local", notification());
     if (pending === null) throw new Error("expected pending delivery");
     await delivery.commitShown("local", 1);
-    const instances = [delivery, ...Array.from({ length: 7 }, () => new DeliveryStore({ statePath: delivery.statePath }))];
+    const instances = [delivery, ...Array.from({ length: 7 }, () => new DeliveryStore({ statePath: delivery.statePath, now }))];
     const results = await Promise.all(instances.map((store) => store.consumeTicket(pending.ticket)));
     expect(results.filter(Boolean)).toEqual([{ kind: "notification", sourceId: "local", notificationId: "n-1" }]);
   });
