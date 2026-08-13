@@ -24,8 +24,8 @@
     { "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65" },
     { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
     { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" },
-    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "67e54715263d53bf8210f92ee9db1fa48981a62a7885b92abd7b9b4ae97729bf" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "5e69d32890077fdf752b7a20f253907445ac7d2f450de7e6c04f5f8e79917904" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "5e69d32890077fdf752b7a20f253907445ac7d2f450de7e6c04f5f8e79917904" }
+    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "98e80ed44c3bf5eca209e70852cfeac6f78914ff7e5f6570d265cd0e94fd6f0c" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "0a84406f5666a7a10abc75d5f52d6198e93e1a9aea5896e007c39fc2bc21065c" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a84406f5666a7a10abc75d5f52d6198e93e1a9aea5896e007c39fc2bc21065c" }
   ]
 }

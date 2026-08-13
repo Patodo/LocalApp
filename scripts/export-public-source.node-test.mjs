@@ -48,7 +48,7 @@ test("snapshot verification keeps temporary files inside the isolated snapshot",
   const root = path.join(path.sep, "isolated", "source");
   const environment = snapshotVerificationEnvironment(root, { PATH: "tools" });
   assert.equal(environment.PATH, "tools");
-  assert.equal(environment.TMPDIR, path.join(root, "tmp/public-source-verification"));
+  assert.equal(environment.TMPDIR, path.join(root, ".tmp"));
   assert.equal(environment.TMP, environment.TMPDIR);
   assert.equal(environment.TEMP, environment.TMPDIR);
 });

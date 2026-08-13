@@ -211,7 +211,7 @@ export function snapshotVerificationCommands() {
 }
 
 export function snapshotVerificationEnvironment(directory, baseEnvironment = process.env) {
-  const temporaryDirectory = path.join(directory, "tmp/public-source-verification");
+  const temporaryDirectory = path.join(directory, ".tmp");
   return {
     ...baseEnvironment,
     TMPDIR: temporaryDirectory,
