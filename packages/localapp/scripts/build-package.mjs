@@ -20,6 +20,10 @@ export async function buildLocalAppPackage(options = {}) {
 
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
+  await Promise.all([
+    fs.copyFile(path.join(projectDirectory, "README.md"), path.join(outputDirectory, "README.md")),
+    fs.copyFile(path.join(projectDirectory, "LICENSE"), path.join(outputDirectory, "LICENSE")),
+  ]);
   await stageBuiltinTemplate({ outputDirectory, version: sourceManifest.version });
   const nativeOutputDirectory = path.join(outputDirectory, "runtime", "native");
   const prebuiltNativeAdaptersDirectory = options.prebuiltNativeAdaptersDirectory ?? process.env.LOCALAPP_PREBUILT_NATIVE_ADAPTERS_DIR;
@@ -66,6 +70,9 @@ export async function buildLocalAppPackage(options = {}) {
     version: sourceManifest.version,
     description: sourceManifest.description,
     license: sourceManifest.license,
+    repository: sourceManifest.repository,
+    homepage: sourceManifest.homepage,
+    bugs: sourceManifest.bugs,
     type: "module",
     bin: { localapp: "bin/localapp.mjs" },
     engines: { node: ">=24" },

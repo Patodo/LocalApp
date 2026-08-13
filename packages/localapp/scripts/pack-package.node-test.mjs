@@ -26,6 +26,14 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   const manifest = JSON.parse(await fs.readFile(path.join(extracted, "package/package.json"), "utf8"));
   assert.equal((await fs.stat(binary)).isFile(), true);
   assert.equal((await fs.stat(path.join(extracted, "package/.localapp-artifact.json"))).isFile(), true);
+  assert.equal((await fs.stat(path.join(extracted, "package/README.md"))).isFile(), true);
+  assert.equal((await fs.stat(path.join(extracted, "package/LICENSE"))).isFile(), true);
+  assert.deepEqual(manifest.repository, {
+    type: "git",
+    url: "git+https://github.com/Patodo/LocalApp.git",
+  });
+  assert.equal(manifest.homepage, "https://github.com/Patodo/LocalApp#readme");
+  assert.deepEqual(manifest.bugs, { url: "https://github.com/Patodo/LocalApp/issues" });
   assert.deepEqual(manifest.dependencies ?? {}, {});
   assert.deepEqual(manifest.devDependencies ?? {}, {});
   assert.deepEqual(manifest.scripts ?? {}, {});

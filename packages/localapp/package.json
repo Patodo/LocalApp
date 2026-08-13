@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "LocalApp command-line interface",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Patodo/LocalApp.git"
+  },
+  "homepage": "https://github.com/Patodo/LocalApp#readme",
+  "bugs": {
+    "url": "https://github.com/Patodo/LocalApp/issues"
+  },
   "type": "module",
   "bin": {
     "localapp": "bin/localapp.mjs"
