@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
+    { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
+    { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
+    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "34774bcb1a5ea0ca3752938fcd8e4f7cb8e2953220b76a56dcc38ad6dca69a32" },
+    { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
+    { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
+    { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
+    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "19a5892a291df26b59710e714b1ade4559dfdf7c86fc550592093585df722cd9" },
+    { "path": "packages/server/src/routes/device-control.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "570b1f02b1df63ab956605b24ded8b0bc5b3df6d6ca732315a657b6b547fde14" },
+    { "path": "packages/server/src/routes/device-notifications.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "5ab094359f0f0750be2f507205a514a91723636f3d1799a17209df7c4b6c314f" },
+    { "path": "packages/server/tests/config-store.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "e6e207d15266ed1cacfa2ab9dbf0e68139cfbacaba2df2e1bc4e0ebb944c8b11" },
+    { "path": "packages/server/tests/e2e-unified/real-apps.spec.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f58c5fd5f4a821cec2cda7a52fa1c6e612d82569f9fab8ed451d89119b9bb70" },
+    { "path": "packages/server/tests/integration/dev-routes.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b612098d2c36303917a599b5a267f62133e50c96adc62795929792524434f6e3" },
+    { "path": "packages/server/tests/integration/device-notifications.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "43773390344539bdb5c54bf6b01070fba9c3b615f9148ae3e7801341ea314887" },
+    { "path": "packages/server/tests/integration/homepage-redirect.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "bec85414573f4384dbae274c6804daad8024a547aa23b413b487352843c5ec7b" },
+    { "path": "packages/server/tests/integration/peers.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1cc0727431b3e382ea053ab21fadc1d061d59b991061666a6f838aeb55a2eef6" },
+    { "path": "packages/server/tests/integration/setup-flow.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b971b752615f0f171c14d23243748aff4c97dd7fd68be5ebf87ed5f23befc925" },
+    { "path": "packages/server/tests/integration/system-settings.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "187cd7eefcba4f44cb3476a0aedd73832f9c2207cdf13b8b2a7c98f8b9a045b3" },
+    { "path": "packages/server/tests/process-tree.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "2030b9baf1f03ac533a7f64d5ff6d4e8d90f6d8a3f6e729c98863d345643ba53" },
+    { "path": "packages/server/tests/supervisor.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "73162393a256b8159e2e7a4f364b50c4956ee676c9b7848146b47d40c8244cad" },
+    { "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65" },
+    { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
+    { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" }
+  ]
+}

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { isPublicSourcePath, scanPublicSource, snapshotVerificationCommands } from "./export-public-source.mjs";
 
 test("top-level allowlist includes sanitized history and excludes internal runtime data and release binaries", () => {
@@ -142,6 +143,52 @@ test("source gate rejects private test identities and internal domains", () => {
       scanPublicSource(directory).map((violation) => violation.rule).sort(),
       ["INTERNAL_DOMAIN", "PRIVATE_TEST_IDENTITY"],
     );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("source gate permits the canonical public repository URL but not the owner identity elsewhere", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-public-canonical-repo-"));
+  try {
+    fs.mkdirSync(path.join(directory, "packages/localapp"), { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "packages/localapp/package.json"),
+      `${JSON.stringify({ repository: "https://github.com/Patodo/LocalApp.git" })}\n`,
+    );
+    assert.deepEqual(scanPublicSource(directory), []);
+    fs.writeFileSync(path.join(directory, "packages/localapp/owner.txt"), "owner=patodo\n");
+    assert.deepEqual(scanPublicSource(directory), [
+      { path: "packages/localapp/owner.txt", rule: "PRIVATE_TEST_IDENTITY" },
+    ]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("source gate suppresses only reviewed violations with an exact file digest", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-public-baseline-"));
+  try {
+    const relativePath = "packages/server/src/example.ts";
+    const absolutePath = path.join(directory, relativePath);
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    const reviewed = 'const apiKey = "actual-production-credential-value";\n';
+    fs.writeFileSync(absolutePath, reviewed);
+    fs.mkdirSync(path.join(directory, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(directory, "scripts/public-source-scan-baseline.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      exceptions: [{
+        path: relativePath,
+        rule: "POSSIBLE_CREDENTIAL",
+        sha256: createHash("sha256").update(reviewed).digest("hex"),
+      }],
+    })}\n`);
+
+    assert.deepEqual(scanPublicSource(directory), []);
+    fs.appendFileSync(absolutePath, "// changed after review\n");
+    assert.deepEqual(scanPublicSource(directory), [
+      { path: relativePath, rule: "POSSIBLE_CREDENTIAL" },
+    ]);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

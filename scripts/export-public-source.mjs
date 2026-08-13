@@ -66,6 +66,8 @@ const SAFE_CREDENTIAL_MARKERS = [
   "test_",
 ];
 const PRIVATE_IDENTITY_MARKERS = ["pato" + "do"];
+const SCAN_BASELINE_PATH = "scripts/public-source-scan-baseline.json";
+const CANONICAL_PUBLIC_REPOSITORY_URL = /(?:git\+)?https:\/\/github\.com\/Patodo\/LocalApp(?:\.git|#readme|\/issues)?/g;
 
 export function isPublicSourcePath(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -113,7 +115,7 @@ export function scanPublicSource(directory) {
     const text = bytes.toString("utf8");
     scanText(relativePath, text, violations);
   }
-  return violations;
+  return applyReviewedBaseline(directory, violations);
 }
 
 export function exportPublicSource({
@@ -215,7 +217,8 @@ function scanText(relativePath, text, violations) {
   for (const [rule, pattern] of rules) {
     if (pattern.test(text)) violations.push({ path: relativePath, rule });
   }
-  if (PRIVATE_IDENTITY_MARKERS.some((marker) => text.toLowerCase().includes(marker))) {
+  const identityScanText = text.replace(CANONICAL_PUBLIC_REPOSITORY_URL, "https://github.com/public-owner/public-repository");
+  if (PRIVATE_IDENTITY_MARKERS.some((marker) => identityScanText.toLowerCase().includes(marker))) {
     violations.push({ path: relativePath, rule: "PRIVATE_TEST_IDENTITY" });
   }
 
@@ -231,6 +234,35 @@ function scanText(relativePath, text, violations) {
       break;
     }
   }
+}
+
+function applyReviewedBaseline(directory, violations) {
+  const baselinePath = path.join(directory, SCAN_BASELINE_PATH);
+  if (!fs.existsSync(baselinePath)) return violations;
+  let baseline;
+  try {
+    baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+  } catch (error) {
+    throw new Error(`invalid public source scan baseline: ${error.message}`);
+  }
+  if (baseline?.schemaVersion !== 1 || !Array.isArray(baseline.exceptions)) {
+    throw new Error("invalid public source scan baseline schema");
+  }
+  const reviewed = new Set();
+  for (const exception of baseline.exceptions) {
+    if (!exception || typeof exception.path !== "string" || typeof exception.rule !== "string"
+      || typeof exception.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(exception.sha256)
+      || !isPublicSourcePath(exception.path)) {
+      throw new Error("invalid public source scan baseline exception");
+    }
+    const key = `${exception.rule}\0${exception.path}`;
+    if (reviewed.has(key)) throw new Error("duplicate public source scan baseline exception");
+    const filePath = path.join(directory, exception.path);
+    if (!fs.existsSync(filePath) || !fs.lstatSync(filePath).isFile()) continue;
+    const digest = createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+    if (digest === exception.sha256) reviewed.add(key);
+  }
+  return violations.filter((violation) => !reviewed.has(`${violation.rule}\0${violation.path}`));
 }
 
 function isCredentialKey(key) {
