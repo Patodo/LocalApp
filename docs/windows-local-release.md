@@ -44,13 +44,12 @@ adapter 失败不得降低 Server 的认证和权限边界。Scheme 或通知不
 
 ## 生成与检查 npm tgz
 
-在仓库根目录使用明确的仓库内临时目录：
+在仓库根目录使用 root `pnpm package:localapp` wrapper；它会在明确的仓库内临时目录
+生成规范的 `localapp-<version>.tgz`：
 
 ```powershell
 $artifactRoot = Join-Path (Get-Location) "tmp\localapp-package"
-New-Item -ItemType Directory -Force $artifactRoot | Out-Null
-pnpm -C packages/localapp build:package
-npm pack .\packages\localapp --pack-destination $artifactRoot
+pnpm package:localapp
 ```
 
 发布前必须从全新的目录安装生成的 tgz，而不是引用 workspace：

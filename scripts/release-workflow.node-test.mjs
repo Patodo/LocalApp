@@ -76,6 +76,12 @@ test("public installation guidance uses the scoped registry package while retain
   assert.doesNotMatch(dockerSmoke, /\/usr\/local\/lib\/node_modules\/localapp/);
 });
 
+test("Windows local package guidance produces and installs the canonical release filename", () => {
+  assert.match(windowsReleaseGuide, /pnpm package:localapp/);
+  assert.match(windowsReleaseGuide, /npm install \.\.\\localapp-package\\localapp-<version>\.tgz/);
+  assert.doesNotMatch(windowsReleaseGuide, /npm pack \.\\packages\\localapp/);
+});
+
 test("the release image is loaded and smoke tested before its first push", () => {
   assert.match(release, /^  image:[\s\S]*actions\/download-artifact@v4[\s\S]*name: localapp-release[\s\S]*path: tmp\/localapp-package/m);
   const load = release.indexOf("load: true");

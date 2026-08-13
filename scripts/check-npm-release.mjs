@@ -17,7 +17,7 @@ const requiredFiles = [
   "template/package.json",
 ];
 
-export async function checkNpmRelease({ tarballPath, expectedTag, runNpmDryRun = defaultNpmDryRun }) {
+export async function checkNpmRelease({ tarballPath, expectedTag, releaseTargetsPath, runNpmDryRun = defaultNpmDryRun }) {
   if (typeof tarballPath !== "string" || tarballPath.length === 0) throw new Error("tarball path is required");
   if (typeof expectedTag !== "string" || expectedTag.length === 0) throw new Error("release tag is required");
   const resolvedTarball = path.resolve(tarballPath);
@@ -40,8 +40,13 @@ export async function checkNpmRelease({ tarballPath, expectedTag, runNpmDryRun =
     for (const relative of requiredFiles) await requireRegularFile(packageRoot, relative);
 
     const packageJson = await readJson(path.join(packageRoot, "package.json"), "package.json");
-    validatePackageManifest(packageJson, expectedTag);
-    const releaseTargets = await readJson(path.join(projectDirectory, "packages/shared/release-targets.json"), "release target manifest");
+    const releaseTargets = await readJson(releaseTargetsPath ?? path.join(projectDirectory, "packages/shared/release-targets.json"), "release target manifest");
+    const npmPackage = readNpmPackageTarget(releaseTargets);
+    validatePackageManifest(packageJson, expectedTag, npmPackage);
+    const expectedTarballBasename = releaseTarballBasename(npmPackage.filenameTemplate, packageJson.version);
+    if (path.basename(resolvedTarball) !== expectedTarballBasename) {
+      throw new Error(`release tarball filename must be ${expectedTarballBasename}`);
+    }
     const expectedTargets = sortedTargets(releaseTargets.nativeAdapters, "release target manifest");
     const artifact = await readJson(path.join(packageRoot, ".localapp-artifact.json"), ".localapp-artifact.json");
     const nativeManifest = await readJson(path.join(packageRoot, "runtime/native/adapter-manifest.json"), "native adapter manifest");
@@ -58,8 +63,10 @@ export async function checkNpmRelease({ tarballPath, expectedTag, runNpmDryRun =
   }
 }
 
-function validatePackageManifest(manifest, expectedTag) {
-  if (manifest.name !== "@patodo/localapp") throw new Error(`package name must be @patodo/localapp, received ${String(manifest.name)}`);
+function validatePackageManifest(manifest, expectedTag, npmPackage) {
+  if (manifest.name !== npmPackage.name) {
+    throw new Error(`release target package name ${npmPackage.name} does not match package manifest ${String(manifest.name)}`);
+  }
   if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
     throw new Error("package version must be a valid release version");
   }
@@ -77,6 +84,25 @@ function validatePackageManifest(manifest, expectedTag) {
     || !sameObject(manifest.bugs, { url: "https://github.com/Patodo/LocalApp/issues" })) {
     throw new Error("published package metadata is incomplete");
   }
+}
+
+function readNpmPackageTarget(releaseTargets) {
+  const npmPackage = releaseTargets?.npmPackage;
+  if (!npmPackage || Array.isArray(npmPackage) || typeof npmPackage.name !== "string" || npmPackage.name.trim() === "") {
+    throw new Error("release target npm package name is invalid");
+  }
+  if (typeof npmPackage.filenameTemplate !== "string"
+    || npmPackage.filenameTemplate.split("{version}").length !== 2
+    || !/^[A-Za-z0-9._+{}-]+\.tgz$/.test(npmPackage.filenameTemplate)) {
+    throw new Error("release target npm package filename template is invalid");
+  }
+  return npmPackage;
+}
+
+function releaseTarballBasename(filenameTemplate, version) {
+  const filename = filenameTemplate.replace("{version}", version);
+  if (path.basename(filename) !== filename) throw new Error("release target npm package filename template is invalid");
+  return filename;
 }
 
 async function listArchive(tarball) {

@@ -41,6 +41,35 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
     assert.deepEqual(calls, [tarball]);
   });
 
+  await t.test("rejects a candidate renamed away from the release target filename", async () => {
+    const tarball = await createFixture("renamed-candidate");
+    const renamedTarball = path.join(testRoot, "renamed-0.1.0.tgz");
+    await fs.rename(tarball, renamedTarball);
+
+    await assert.rejects(
+      checkNpmRelease({ tarballPath: renamedTarball, expectedTag: "v0.1.0", runNpmDryRun: async () => {} }),
+      /tarball filename/i,
+    );
+  });
+
+  await t.test("rejects a package manifest that drifts from the shared npm target", async () => {
+    const tarball = await createFixture("target-manifest-drift");
+    const releaseTargetsPath = path.join(testRoot, "target-manifest-drift-release-targets.json");
+    const releaseTargets = JSON.parse(await fs.readFile(path.join(projectDirectory, "packages/shared/release-targets.json"), "utf8"));
+    releaseTargets.npmPackage.name = "@patodo/other-localapp";
+    await fs.writeFile(releaseTargetsPath, `${JSON.stringify(releaseTargets)}\n`);
+
+    await assert.rejects(
+      checkNpmRelease({
+        tarballPath: tarball,
+        expectedTag: "v0.1.0",
+        releaseTargetsPath,
+        runNpmDryRun: async () => {},
+      }),
+      /release target.*package manifest/i,
+    );
+  });
+
   for (const [name, mutate, message, expectedTag = "v0.1.0"] of [
     ["rejects the unscoped package name", (value) => { value.packageJson.name = "localapp"; }, /package name/i],
     ["rejects a wrong package name", (value) => { value.packageJson.name = "other"; }, /package name/i],
@@ -129,7 +158,7 @@ async function createFixture(name, mutate = () => {}) {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.writeFile(destination, contents);
   }
-  const tarball = path.join(testRoot, `${name}.tgz`);
+  const tarball = path.join(fixtureRoot, "localapp-0.1.0.tgz");
   const packed = await run("tar", ["-czf", tarball, "-C", fixtureRoot, "package"]);
   assert.equal(packed.code, 0, packed.stderr);
   return tarball;
