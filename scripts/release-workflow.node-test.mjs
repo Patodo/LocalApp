@@ -19,6 +19,14 @@ test("release gates one npm tarball behind source and native-adapter verificatio
   assert.doesNotMatch(release, /packages\/cli|@localapp\/desktop|tauri|nsis|desktop-windows|kind:\s*desktop/i);
 });
 
+test("release validates npm identity without publishing to npm", () => {
+  assert.match(release, /expected_tag="v\$\{version\}"/);
+  assert.match(release, /GITHUB_REF_TYPE[\s\S]*GITHUB_REF_NAME[\s\S]*expected_tag/);
+  assert.match(release, /node scripts\/check-npm-release\.mjs[\s\\]*--tarball[\s\S]*--tag/);
+  assert.doesNotMatch(release, /NPM_TOKEN|NODE_AUTH_TOKEN|id-token:\s*write/i);
+  assert.doesNotMatch(release, /npm\s+publish/);
+});
+
 test("ordinary CI uses Node 24 and delegates native boundaries to package scripts", () => {
   assert.match(ci, /NODE_VERSION: "24"/);
   assert.match(ci, /pnpm -C packages\/localapp test/);

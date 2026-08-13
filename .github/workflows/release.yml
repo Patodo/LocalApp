@@ -152,6 +152,19 @@ jobs:
             exit 1
           fi
 
+      - name: Validate npm release candidate
+        shell: bash
+        run: |
+          version="$(node -p "require('./packages/localapp/package.json').version")"
+          expected_tag="v${version}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "release tag ${GITHUB_REF_NAME} must equal ${expected_tag}" >&2
+            exit 1
+          fi
+          node scripts/check-npm-release.mjs \
+            --tarball "tmp/localapp-package/localapp-${version}.tgz" \
+            --tag "${expected_tag}"
+
       - name: Generate release manifest and checksums
         shell: bash
         run: |
