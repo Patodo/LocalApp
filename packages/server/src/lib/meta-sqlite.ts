@@ -429,12 +429,12 @@ export async function initMetaDb(
       native_updated_at TEXT
     )
   `);
-  db.run("INSERT OR IGNORE INTO device_notification_state (singleton, generation) VALUES (1, 0)");
   {
     const columns = db.prepare("PRAGMA table_info(device_notification_state)");
     const names: string[] = [];
     while (columns.step()) names.push(String((columns.getAsObject() as { name: string }).name));
     columns.free();
+    if (!names.includes("generation")) db.run(`ALTER TABLE device_notification_state ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0 AND generation <= ${Number.MAX_SAFE_INTEGER})`);
     if (!names.includes("quiet_hours_start")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_start TEXT");
     if (!names.includes("quiet_hours_end")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_end TEXT");
     if (!names.includes("quiet_hours_timezone")) db.run("ALTER TABLE device_notification_state ADD COLUMN quiet_hours_timezone TEXT");
@@ -444,6 +444,7 @@ export async function initMetaDb(
     if (!names.includes("adapter_version")) db.run("ALTER TABLE device_notification_state ADD COLUMN adapter_version TEXT");
     if (!names.includes("native_updated_at")) db.run("ALTER TABLE device_notification_state ADD COLUMN native_updated_at TEXT");
   }
+  db.run("INSERT OR IGNORE INTO device_notification_state (singleton, generation) VALUES (1, 0)");
   db.run(`
     CREATE TABLE IF NOT EXISTS device_notification_sources (
       id TEXT PRIMARY KEY,

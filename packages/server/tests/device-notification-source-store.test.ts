@@ -35,6 +35,22 @@ describe("device notification source schema", () => {
     expect(getDb().exec("SELECT COUNT(*) FROM device_notification_state")[0]?.values).toEqual([[1]]);
   });
 
+  it("upgrades a legacy notification state table before reading its generation", async () => {
+    await fs.mkdir(fixtureRoot, { recursive: true });
+    await initMetaDb(fixtureRoot);
+    getDb().run("DROP TABLE device_notification_state");
+    getDb().run(`
+      CREATE TABLE device_notification_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
+      )
+    `);
+    getDb().run("INSERT INTO device_notification_state (singleton) VALUES (1)");
+    closeMetaDb();
+
+    await expect(initMetaDb(fixtureRoot)).resolves.toBeUndefined();
+    expect(getDb().exec("SELECT generation FROM device_notification_state WHERE singleton = 1")[0]?.values).toEqual([[0]]);
+  });
+
   it("rolls back the source and dedicated key when atomic publication fails before rename", async () => {
     await fs.mkdir(fixtureRoot, { recursive: true });
     let renames = 0;
