@@ -23,6 +23,9 @@
     { "path": "packages/server/tests/supervisor.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "73162393a256b8159e2e7a4f364b50c4956ee676c9b7848146b47d40c8244cad" },
     { "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65" },
     { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
-    { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" }
+    { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" },
+    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "ddcd1358107ac925af4cd52b8e42357c7285ca163830cde638a7781abfb3b34a" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "02ad7808e951fa7ed07f8085224fa77d42f31d88670184fba3046087bc92f908" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "02ad7808e951fa7ed07f8085224fa77d42f31d88670184fba3046087bc92f908" }
   ]
 }
