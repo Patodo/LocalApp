@@ -84,6 +84,53 @@ test("detects a tarball changed after manifest generation", () => {
   }
 });
 
+test("rejects a manifest tampered to name the unscoped npm package", () => {
+  const { directory } = fixture();
+  try {
+    const result = buildReleaseManifest({
+      assetsDir: directory,
+      baseUrl: "https://releases.example/v1.2.3",
+      version: "1.2.3",
+    });
+    const manifest = JSON.parse(fs.readFileSync(result.manifestPath, "utf8"));
+    manifest.assets[0].package = "localapp";
+    fs.writeFileSync(result.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    assert.throws(() => verifyReleaseOutputs({
+      assetsDir: directory,
+      manifestPath: result.manifestPath,
+      checksumsPath: result.checksumsPath,
+    }), /npm package/i);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects a manifest tampered to name a tarball for another release version", () => {
+  const { directory, filename } = fixture();
+  try {
+    const result = buildReleaseManifest({
+      assetsDir: directory,
+      baseUrl: "https://releases.example/v1.2.3",
+      version: "1.2.3",
+    });
+    const replacementFilename = "localapp-1.2.4.tgz";
+    fs.renameSync(path.join(directory, filename), path.join(directory, replacementFilename));
+    const manifest = JSON.parse(fs.readFileSync(result.manifestPath, "utf8"));
+    manifest.assets[0].filename = replacementFilename;
+    fs.writeFileSync(result.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.writeFileSync(result.checksumsPath, `${manifest.assets[0].sha256}  ${replacementFilename}\n`);
+
+    assert.throws(() => verifyReleaseOutputs({
+      assetsDir: directory,
+      manifestPath: result.manifestPath,
+      checksumsPath: result.checksumsPath,
+    }), /npm filename/i);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("accepts complete SemVer and rejects malformed versions", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-semver-"));
   try {

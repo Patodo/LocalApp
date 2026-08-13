@@ -75,6 +75,14 @@ export function verifyReleaseOutputs({ assetsDir, manifestPath, checksumsPath })
   if (asset.kind !== "npm" || asset.os !== "any" || asset.arch !== "any" || asset.signature !== "not-applicable") {
     throw new Error("release manifest product asset must be the platform-neutral npm package");
   }
+  const targetConfig = readTargetConfig();
+  if (asset.package !== targetConfig.npmPackage.name) {
+    throw new Error("release manifest npm package does not match the release target");
+  }
+  const expectedFilename = targetConfig.npmPackage.filenameTemplate.replace("{version}", asset.version);
+  if (asset.filename !== expectedFilename) {
+    throw new Error("release manifest npm filename does not match the release target");
+  }
   if (!SHA256_PATTERN.test(asset.sha256) || checksum[2] !== asset.filename || checksum[1] !== asset.sha256) {
     throw new Error(`release asset integrity mismatch: ${asset.filename}`);
   }
