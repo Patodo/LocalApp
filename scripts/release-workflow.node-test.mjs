@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 const release = fs.readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
@@ -7,6 +9,7 @@ const ci = fs.readFileSync(new URL("../.github/workflows/ci.yml", import.meta.ur
 const windows = fs.readFileSync(new URL("../.github/workflows/native-windows.yml", import.meta.url), "utf8");
 const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
 const dockerSmoke = fs.readFileSync(new URL("./docker-release-smoke.sh", import.meta.url), "utf8");
+const projectTmp = new URL("../tmp/", import.meta.url).pathname;
 
 test("release gates one npm tarball behind source and native-adapter verification", () => {
   assert.match(release, /NODE_VERSION: "24"/);
@@ -60,4 +63,74 @@ test("the release image is loaded and smoke tested before its first push", () =>
   assert.ok(smoke > load, "release image must be smoke tested after loading");
   assert.ok(push > smoke, "release image must not be pushed before checks pass");
   assert.doesNotMatch(release, /push:\s*true/);
+});
+
+test("Docker smoke cleanup removes container-owned state before host cleanup", () => {
+  fs.mkdirSync(projectTmp, { recursive: true });
+  const root = fs.mkdtempSync(path.join(projectTmp, "docker-smoke-test-"));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+command="$1"
+shift
+case "$command" in
+  run)
+    arguments=" $* "
+    if [[ "$arguments" == *" --entrypoint localapp "* ]]; then
+      echo "localapp 0.1.0"
+    elif [[ "$arguments" == *" -d "* ]]; then
+      for ((index=1; index<=$#; index++)); do
+        if [[ "\${!index}" == "-v" ]]; then
+          next=$((index + 1))
+          host_dir="\${!next%%:*}"
+          mkdir -p "$host_dir/.verification/sessions"
+          touch "$host_dir/.verification/sessions/container-owned"
+          break
+        fi
+      done
+      echo "container-id"
+    elif [[ "$arguments" == *" --entrypoint sh "* ]]; then
+      for ((index=1; index<=$#; index++)); do
+        if [[ "\${!index}" == "-v" ]]; then
+          next=$((index + 1))
+          host_dir="\${!next%%:*}"
+          /bin/rm -rf "$host_dir"/* "$host_dir"/.[!.]* "$host_dir"/..?* 2>/dev/null || true
+          break
+        fi
+      done
+    fi
+    ;;
+  port) echo "127.0.0.1:43123" ;;
+  exec)
+    if [[ " $* " == *" localapp --version "* ]]; then
+      echo "localapp 0.1.0"
+    fi
+    ;;
+  rm) ;;
+esac
+`);
+  fs.writeFileSync(path.join(bin, "curl"), "#!/usr/bin/env bash\nexit 0\n");
+  fs.writeFileSync(path.join(bin, "rm"), `#!/usr/bin/env bash
+set -euo pipefail
+target="\${!#}"
+if find "$target" -mindepth 1 -print -quit | grep -q .; then
+  echo "host cleanup encountered container-owned state" >&2
+  exit 1
+fi
+/bin/rmdir "$target"
+`);
+  for (const name of ["docker", "curl", "rm"]) {
+    fs.chmodSync(path.join(bin, name), 0o755);
+  }
+
+  try {
+    execFileSync("bash", [new URL("./docker-release-smoke.sh", import.meta.url).pathname, "localapp:test"], {
+      cwd: root,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      stdio: "pipe",
+    });
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
 });

@@ -8,6 +8,11 @@ state_dir="${PWD}/tmp/docker-release-smoke-${suffix}"
 
 cleanup() {
   docker rm -f "${server_container}" >/dev/null 2>&1 || true
+  docker run --rm --entrypoint sh \
+    -v "${state_dir}:/app/data" \
+    "${image}" \
+    -c 'find /app/data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' \
+    >/dev/null 2>&1 || true
   rm -rf "${state_dir}"
 }
 trap cleanup EXIT
