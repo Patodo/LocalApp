@@ -354,9 +354,17 @@ private func parseExactStringObject(_ raw: String) -> [String: String]? {
 private func registerBridge(configPath: String) -> Bool {
   guard safeAbsolutePath(configPath), loadConfiguration(at: configPath) != nil else { return false }
   guard setBridgePreferenceValue(configPath) else { return false }
-  guard LSRegisterURL(bridgeBundleURL(), true) == noErr,
-        let identifier = bridgeBundle().bundleIdentifier
-  else { return false }
+  guard LSRegisterURL(bridgeBundleURL(), true) == noErr else { return false }
+  if #available(macOS 12.0, *) {
+    let completed = DispatchSemaphore(value: 0)
+    var succeeded = false
+    NSWorkspace.shared.setDefaultApplication(at: bridgeBundle().bundleURL, toOpenURLsWithScheme: "localapp") { error in
+      succeeded = error == nil
+      completed.signal()
+    }
+    return completed.wait(timeout: .now() + 5) == .success && succeeded
+  }
+  guard let identifier = bridgeBundle().bundleIdentifier else { return false }
   return LSSetDefaultHandlerForURLScheme("localapp" as CFString, identifier as CFString) == noErr
 }
 

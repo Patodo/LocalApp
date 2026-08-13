@@ -169,7 +169,7 @@ test("macOS notifications stage attachments without consuming immutable release 
 
 test("macOS registration makes the packaged bridge the default localapp Scheme handler", async () => {
   const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/macos/LocalAppBridge.swift"), "utf8");
-  assert.match(source, /LSSetDefaultHandlerForURLScheme\("localapp" as CFString, identifier as CFString\) == noErr/);
+  assert.match(source, /setDefaultApplication\(at: bridgeBundle\(\)\.bundleURL, toOpenURLsWithScheme: "localapp"\)/);
 });
 
 test("Windows helper preserves argv, has an explicit application path, and keeps browser opening outside Job ownership", async () => {
