@@ -70,7 +70,10 @@ profile/API Key 安装到同一远端 Server。正式 `/<owner>/device-notes/` U
    不同步数据库、文件、用户或权限。
 2. `resume-manager` 先在源端创建一条测试简历记录并上传一份 PDF 与一张图片，再执行
    `--with-data --confirm-app resume-manager`。目标端先自动备份，然后整体替换该应用数据库
-   与文件；用户、权限及平台数据仍不替换。
+   与文件；每次成功替换只生成一份安全备份，且同步结果返回可追踪的 `backupId`。数据包在
+   导入时将数据库文本字段中的应用对象 key、内容 URL 和 JSON 内嵌内容 URL 从源 owner
+   namespace 重写到目标 API Key 用户的 namespace，并将 backend contract 明确声明的记录
+   所有者字段转交给目标应用所有者；用户、权限及平台数据仍不替换。
 
 同步后核对应用名称不变、远端所有者正确、同步任务完成、附件字节一致，并验证远端正式
 应用页面中的 PDF/图片预览和下载。

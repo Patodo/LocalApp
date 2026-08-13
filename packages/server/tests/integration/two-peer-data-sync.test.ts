@@ -8,6 +8,7 @@ import { buildServer } from "../../src/server.js";
 import { closeMetaDb } from "../../src/lib/meta-sqlite.js";
 import { installAppPackage } from "../../src/lib/app-installer.js";
 import { inspectAppPackage, writeAppPackage } from "../../src/lib/app-package.js";
+import { AppDataError } from "../../src/lib/app-data-errors.js";
 import { createAppDataExport } from "../../src/lib/app-data-service.js";
 import { AppSyncTarget } from "../../src/lib/app-sync-target.js";
 import { SyncSessionStore } from "../../src/lib/sync-session-store.js";
@@ -24,6 +25,7 @@ describe("application-plus-data peer synchronization", () => {
   let dataDir: string;
   let adminCookie: string;
   let targetCookie: string;
+  let peerId: string;
   let stop: () => Promise<void>;
 
   beforeAll(async () => {
@@ -55,6 +57,16 @@ describe("application-plus-data peer synchronization", () => {
     adminCookie = await login("localadmin", "localadmin");
     await provisionUser("target-owner", "target-password");
     targetCookie = await login("target-owner", "target-password");
+    const apiKey = await createApiKey(targetCookie);
+    const peer = await request("/api/peers", {
+      method: "POST",
+      headers: { Cookie: adminCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "data-target", baseUrl, apiKey, acceptInsecureHttp: true }),
+    });
+    expect(peer.response.status).toBe(201);
+    peerId = String(peer.body.data.id);
+    const checked = await request(`/api/peers/${peerId}/check`, { method: "POST", headers: { Cookie: adminCookie } });
+    expect(checked.response.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -76,25 +88,16 @@ describe("application-plus-data peer synchronization", () => {
     await putObject("target-owner/notes/target.txt", Buffer.from("target-file"), "text/plain");
     await putObject("localadmin/notes/source.txt", Buffer.from("source-file"), "text/plain");
 
-    const apiKey = await createApiKey(targetCookie);
-    const peer = await request("/api/peers", {
-      method: "POST",
-      headers: { Cookie: adminCookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "data-target", baseUrl, apiKey, acceptInsecureHttp: true }),
-    });
-    expect(peer.response.status).toBe(201);
-    const checked = await request(`/api/peers/${peer.body.data.id}/check`, { method: "POST", headers: { Cookie: adminCookie } });
-    expect(checked.response.status).toBe(200);
-
     const started = await request("/api/me/apps/notes/sync", {
       method: "POST",
       headers: { Cookie: adminCookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId: peer.body.data.id, withData: true, confirmation: "notes" }),
+      body: JSON.stringify({ peerId, withData: true, confirmation: "notes" }),
     });
     expect(started.response.status).toBe(202);
     const job = await waitForJob(String(started.body.data.id));
     expect(job.status).toBe("completed");
     expect(job.withData).toBe(true);
+    expect(job.backupId).toMatch(/^[0-9a-f-]{36}$/);
 
     const targetMeta = readPageMeta(dataDir, "target-owner", "notes");
     expect(targetMeta).toMatchObject({ currentAppVersion: "2.0.0", userId: "target-owner" });
@@ -102,8 +105,72 @@ describe("application-plus-data peer synchronization", () => {
       .toEqual([{ id: "source", value: "source-data", upgraded: 1 }]);
     expect((await getObject("target-owner/notes/source.txt"))?.body.toString()).toBe("source-file");
     expect(await getObject("target-owner/notes/target.txt")).toBeNull();
-    expect(fs.readdirSync(path.join(dataDir, "target-owner", "notes", "backups")).some((file) => file.endsWith(".zip"))).toBe(true);
+    expect(fs.readdirSync(path.join(dataDir, "target-owner", "notes", "backups")).filter((file) => file.endsWith(".zip"))).toHaveLength(1);
     expect((await request("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "target-owner", password: "target-password" }) })).response.status).toBe(200);
+  });
+
+  it("returns the import-created safety backup ID for the first app-and-data synchronization", async () => {
+    const first = await packageFixture("first-sync", "1.0.0", [
+      ["001_init.sql", "CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO records VALUES ('source', 'first-source-data');"],
+    ]);
+    await install(first, "localadmin");
+    await putObject("localadmin/first-sync/source.txt", Buffer.from("first-source-file"), "text/plain");
+
+    const started = await request("/api/me/apps/first-sync/sync", {
+      method: "POST",
+      headers: { Cookie: adminCookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ peerId, withData: true, confirmation: "first-sync" }),
+    });
+    expect(started.response.status).toBe(202);
+    const job = await waitForJob(String(started.body.data.id));
+    expect(job).toMatchObject({ status: "completed", withData: true });
+    expect(job.backupId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const targetDir = path.join(dataDir, "target-owner", "first-sync");
+    expect(readPageMeta(dataDir, "target-owner", "first-sync")).toMatchObject({ currentAppVersion: "1.0.0" });
+    expect(await sqlRows(path.join(targetDir, "app.db"), "SELECT id, value FROM records"))
+      .toEqual([{ id: "source", value: "first-source-data" }]);
+    expect((await getObject("target-owner/first-sync/source.txt"))?.body.toString()).toBe("first-source-file");
+    expect(fs.existsSync(path.join(targetDir, "backups", `${job.backupId}.zip`))).toBe(true);
+  });
+
+  it("removes partially written objects when the first app-and-data synchronization fails", async () => {
+    // Break caught: deleting only the newly installed page directory leaves target-namespace objects written before an import failure.
+    const first = await packageFixture("first-failure", "1.0.0", [
+      ["001_init.sql", "CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT NOT NULL);"],
+    ]);
+    await install(first, "localadmin");
+    await putObject("localadmin/first-failure/source.txt", Buffer.from("source-file"), "text/plain");
+    const sourceMeta = readPageMeta(dataDir, "localadmin", "first-failure")!;
+    const exported = await createAppDataExport({
+      pageDir: path.join(dataDir, "localadmin", "first-failure"),
+      application: { owner: "localadmin", name: "first-failure", version: sourceMeta.currentVersion },
+      archiveApplication: { owner: "target-owner", name: "first-failure", version: sourceMeta.currentVersion },
+    });
+    const packageMeta = await inspectAppPackage(first);
+    const sessions = new SyncSessionStore({ dataDir, rootDir: path.join(dataDir, ".staging", `sync-first-failure-${crypto.randomUUID()}`) });
+    const target = new AppSyncTarget(dataDir, sessions, {
+      importData: async () => {
+        await putObject("target-owner/first-failure/transient.txt", Buffer.from("must-be-removed"), "text/plain");
+        throw new Error("injected first import failure");
+      },
+    });
+    const dataSize = fs.statSync(exported.archivePath).size;
+    const session = target.create({
+      id: crypto.randomUUID(), ownerId: "target-owner", mode: "app-and-data", appName: "first-failure",
+      appVersion: packageMeta.version, packageDigest: packageMeta.digest, packageSize: fs.statSync(first).size,
+      dataDigest: await sha256File(exported.archivePath), dataSize,
+    });
+    try {
+      await sessions.receivePackage({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(first), contentLength: fs.statSync(first).size });
+      await sessions.receiveData({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(exported.archivePath), contentLength: dataSize });
+      await expect(target.commit(session.id, "target-owner")).rejects.toThrow("injected first import failure");
+    } finally {
+      exported.cleanup();
+    }
+    expect(sessions.getOwned(session.id, "target-owner")?.status).toBe("failed");
+    expect(readPageMeta(dataDir, "target-owner", "first-failure")).toBeNull();
+    expect(await getObject("target-owner/first-failure/transient.txt")).toBeNull();
   });
 
   it("requires the exact app-name confirmation and keeps target state after a failed replacement", async () => {
@@ -132,9 +199,16 @@ describe("application-plus-data peer synchronization", () => {
     const packageMeta = await inspectAppPackage(v3);
     const dataDigest = await sha256File(exported.archivePath);
     const dataSize = fs.statSync(exported.archivePath).size;
+    const targetDatabaseDigest = await sha256File(path.join(dataDir, "target-owner", "notes", "app.db"));
     const sessions = new SyncSessionStore({ dataDir, rootDir: path.join(dataDir, ".staging", `sync-failure-${crypto.randomUUID()}`) });
+    const targetPageDir = path.join(dataDir, "target-owner", "notes");
     const target = new AppSyncTarget(dataDir, sessions, {
-      importData: async () => { throw new Error("injected data replacement failure"); },
+      importData: async () => {
+        fs.copyFileSync(path.join(dataDir, "localadmin", "notes", "app.db"), path.join(targetPageDir, "app.db"));
+        await putObject("target-owner/notes/source.txt", Buffer.from("replacement-file"), "text/plain");
+        await putObject("target-owner/notes/transient.txt", Buffer.from("must-be-removed"), "text/plain");
+        throw new AppDataError("APP_DATA_ROLLBACK_FAILED", "injected inner rollback failure");
+      },
     });
     const session = target.create({
       id: crypto.randomUUID(), ownerId: "target-owner", mode: "app-and-data", appName: "notes",
@@ -144,7 +218,7 @@ describe("application-plus-data peer synchronization", () => {
     try {
       await sessions.receivePackage({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(v3), contentLength: fs.statSync(v3).size });
       await sessions.receiveData({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(exported.archivePath), contentLength: dataSize });
-      await expect(target.commit(session.id, "target-owner")).rejects.toThrow("injected data replacement failure");
+      await expect(target.commit(session.id, "target-owner")).rejects.toMatchObject({ code: "APP_DATA_IMPORT_FAILED" });
     } finally {
       exported.cleanup();
     }
@@ -152,8 +226,58 @@ describe("application-plus-data peer synchronization", () => {
     expect(readPageMeta(dataDir, "target-owner", "notes")).toMatchObject({ currentAppVersion: "2.0.0" });
     expect(await sqlRows(path.join(dataDir, "target-owner", "notes", "app.db"), "SELECT id, value, upgraded FROM records"))
       .toEqual([{ id: "source", value: "source-data", upgraded: 1 }]);
+    expect(await sha256File(path.join(dataDir, "target-owner", "notes", "app.db"))).toBe(targetDatabaseDigest);
+    expect(await sqlRows(path.join(dataDir, "target-owner", "notes", "app.db"), "SELECT name FROM pragma_table_info('records') WHERE name = 'latest'"))
+      .toEqual([]);
     expect((await getObject("target-owner/notes/source.txt"))?.body.toString()).toBe("source-file");
+    expect(await getObject("target-owner/notes/transient.txt")).toBeNull();
     expect(fs.readdirSync(path.join(dataDir, "target-owner", "notes", "backups")).filter((file) => file.endsWith(".zip")).length).toBeGreaterThan(0);
+  });
+
+  it("restores files and database absence when the previous application had no database", async () => {
+    const oldPackage = await packageFixture("no-db", "0.9.0", []);
+    const newPackage = await packageFixture("no-db", "1.0.0", [
+      ["001_init.sql", "CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO records VALUES ('source', 'new-data');"],
+    ]);
+    await install(oldPackage, "target-owner");
+    await install(newPackage, "localadmin");
+    await putObject("target-owner/no-db/old.txt", Buffer.from("old-file"), "text/plain");
+    await putObject("localadmin/no-db/new.txt", Buffer.from("new-file"), "text/plain");
+    const sourceMeta = readPageMeta(dataDir, "localadmin", "no-db")!;
+    const exported = await createAppDataExport({
+      pageDir: path.join(dataDir, "localadmin", "no-db"),
+      application: { owner: "localadmin", name: "no-db", version: sourceMeta.currentVersion },
+      archiveApplication: { owner: "target-owner", name: "no-db", version: sourceMeta.currentVersion },
+    });
+    const packageMeta = await inspectAppPackage(newPackage);
+    const sessions = new SyncSessionStore({ dataDir, rootDir: path.join(dataDir, ".staging", `sync-no-db-${crypto.randomUUID()}`) });
+    const targetDir = path.join(dataDir, "target-owner", "no-db");
+    const target = new AppSyncTarget(dataDir, sessions, {
+      importData: async () => {
+        fs.copyFileSync(path.join(dataDir, "localadmin", "no-db", "app.db"), path.join(targetDir, "app.db"));
+        await putObject("target-owner/no-db/new.txt", Buffer.from("new-file"), "text/plain");
+        await putObject("target-owner/no-db/transient.txt", Buffer.from("transient"), "text/plain");
+        throw new Error("injected no-db replacement failure");
+      },
+    });
+    const dataSize = fs.statSync(exported.archivePath).size;
+    const session = target.create({
+      id: crypto.randomUUID(), ownerId: "target-owner", mode: "app-and-data", appName: "no-db",
+      appVersion: packageMeta.version, packageDigest: packageMeta.digest, packageSize: fs.statSync(newPackage).size,
+      dataDigest: await sha256File(exported.archivePath), dataSize,
+    });
+    try {
+      await sessions.receivePackage({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(newPackage), contentLength: fs.statSync(newPackage).size });
+      await sessions.receiveData({ id: session.id, ownerId: "target-owner", stream: fs.createReadStream(exported.archivePath), contentLength: dataSize });
+      await expect(target.commit(session.id, "target-owner")).rejects.toThrow("injected no-db replacement failure");
+    } finally {
+      exported.cleanup();
+    }
+    expect(readPageMeta(dataDir, "target-owner", "no-db")).toMatchObject({ currentAppVersion: "0.9.0" });
+    expect(fs.existsSync(path.join(targetDir, "app.db"))).toBe(false);
+    expect((await getObject("target-owner/no-db/old.txt"))?.body.toString()).toBe("old-file");
+    expect(await getObject("target-owner/no-db/new.txt")).toBeNull();
+    expect(await getObject("target-owner/no-db/transient.txt")).toBeNull();
   });
 
   async function packageFixture(name: string, version: string, migrations: Array<[string, string]>): Promise<string> {

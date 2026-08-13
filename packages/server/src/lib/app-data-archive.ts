@@ -20,8 +20,9 @@ export type AppDataArchiveManifest = {
   formatVersion: 1;
   createdAt: string;
   application: { owner: string; name: string; version: number };
+  sourceApplication?: { owner: string; name: string };
   database: { path: "database/app.db"; size: number; sha256: string; schemaFingerprint: string };
-  files: Array<{ path: string; objectKey: string; contentType?: string; size: number; sha256: string }>;
+  files: Array<{ path: string; objectKey: string; sourceObjectKey?: string; contentType?: string; size: number; sha256: string }>;
 };
 
 type ExtractedEntry = { path: string; size: number; sha256: string };
@@ -154,6 +155,7 @@ export async function createDataArchive(input: {
       files.push({
         path: entryPath,
         objectKey,
+        ...(objectKey !== object.key ? { sourceObjectKey: object.key } : {}),
         ...(stored.contentType || object.contentType ? { contentType: stored.contentType ?? object.contentType } : {}),
         size: actualSize,
         sha256: hash.digest("hex"),
@@ -165,6 +167,9 @@ export async function createDataArchive(input: {
       formatVersion: 1,
       createdAt: new Date().toISOString(),
       application: input.application,
+      ...(sourceApplication.owner !== input.application.owner || sourceApplication.name !== input.application.name
+        ? { sourceApplication }
+        : {}),
       database: databaseEntry,
       files,
     };
@@ -302,7 +307,7 @@ function assertEntryMatches(entry: ExtractedEntry | undefined, expected: { size:
 export async function extractAndValidateDataArchive(input: {
   archivePath: string;
   stagingDir: string;
-  expectedApplication: { owner: string; name: string; maxVersion: number };
+  expectedApplication: { owner: string; name: string; maxVersion?: number };
   limits: ArchiveLimits;
 }): Promise<{ manifest: AppDataArchiveManifest; databasePath: string; files: Array<{ path: string; objectKey: string; contentType?: string }> }> {
   if (fs.statSync(input.archivePath).size > input.limits.maxCompressedBytes) {
@@ -319,9 +324,6 @@ export async function extractAndValidateDataArchive(input: {
     if (manifest.application.owner !== input.expectedApplication.owner || manifest.application.name !== input.expectedApplication.name) {
       throw new AppDataError("APP_ARCHIVE_IDENTITY_MISMATCH", "Data archive belongs to another application");
     }
-    if (manifest.application.version > input.expectedApplication.maxVersion) {
-      throw new AppDataError("APP_ARCHIVE_VERSION_TOO_NEW", "Data archive was created by a newer application version");
-    }
     if (manifest.database.path !== "database/app.db") {
       throw new AppDataError("APP_ARCHIVE_MANIFEST_INVALID", "Archive database path is invalid");
     }
@@ -337,12 +339,23 @@ export async function extractAndValidateDataArchive(input: {
         throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Archive object mapping is invalid: ${file.objectKey}`);
       }
       if (objectKeys.has(file.objectKey)) throw new AppDataError("APP_ARCHIVE_MANIFEST_INVALID", `Duplicate object key: ${file.objectKey}`);
+      if (file.sourceObjectKey !== undefined) {
+        const source = manifest.sourceApplication;
+        if (!source || !appObjectKeyAllowed(file.sourceObjectKey, source.owner, source.name)) {
+          throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Archive source object mapping is invalid: ${file.sourceObjectKey}`);
+        }
+      }
       if (filePaths.has(file.path)) throw new AppDataError("APP_ARCHIVE_MANIFEST_INVALID", `Duplicate file path: ${file.path}`);
       objectKeys.add(file.objectKey);
       filePaths.add(file.path);
       expectedEntries.add(file.path);
       const entry = assertEntryMatches(extracted.get(file.path), file, file.path);
-      return { path: entry.path, objectKey: file.objectKey, ...(file.contentType ? { contentType: file.contentType } : {}) };
+      return {
+        path: entry.path,
+        objectKey: file.objectKey,
+        ...(file.sourceObjectKey ? { sourceObjectKey: file.sourceObjectKey } : {}),
+        ...(file.contentType ? { contentType: file.contentType } : {}),
+      };
     });
     for (const entryName of extracted.keys()) {
       if (!expectedEntries.has(entryName)) throw new AppDataError("APP_ARCHIVE_UNDECLARED_ENTRY", `Archive entry is not declared: ${entryName}`);

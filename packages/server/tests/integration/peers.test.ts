@@ -76,7 +76,7 @@ describe("peer connections", () => {
     expect(checked.status).toBe(200);
     const body = await checked.json();
     expect(body.data.verifiedUser).toMatchObject({ id: "localadmin", name: "localadmin" });
-    expect(body.data.protocolVersion).toBe(1);
+    expect(body.data.protocolVersion).toBe(2);
     expect(body.data.transferLimits.maxPackageBytes).toBeGreaterThan(0);
     expect(body.data.verifiedAt).toEqual(expect.any(String));
     expect(JSON.stringify(body)).not.toContain(getTestApiKey());

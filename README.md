@@ -92,7 +92,7 @@ localapp app sync --target local --peer company
 localapp app sync --target local --peer company --with-data --confirm-app my-app
 ```
 
-默认只同步应用包、manifest、migration 和 backend contract；显式 `--with-data` 才会整体替换目标端应用数据库与文件，并在目标端失败时回滚。功能验收统一使用 Server 返回的正式应用 URL 和应用内 Browser。
+默认只同步应用包、manifest、migration 和 backend contract；显式 `--with-data` 才会先创建一份可追踪安全备份，再整体替换目标端应用数据库与文件，并在目标端失败时回滚。跨用户同步时，数据中的应用对象 key 和内容 URL 会重写到目标 API Key 用户的应用 namespace，backend contract 声明的记录所有者字段会转交给目标应用所有者；同步结果返回 `backupId`。功能验收统一使用 Server 返回的正式应用 URL 和应用内 Browser。
 
 ## 运行模型
 

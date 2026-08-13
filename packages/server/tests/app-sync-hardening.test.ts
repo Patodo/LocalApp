@@ -13,6 +13,8 @@ import { closeMetaDb, initMetaDb } from "../src/lib/meta-sqlite.js";
 import type { PeerStore } from "../src/lib/peer-store.js";
 import { SyncJobStore, type SyncJobStatus } from "../src/lib/sync-job-store.js";
 import { SyncSessionStore } from "../src/lib/sync-session-store.js";
+import { initContentStorage } from "../src/lib/s3-client.js";
+import type { ServerConfig } from "../src/lib/config.js";
 
 describe("peer synchronization concurrency, deadlines, and cancellation", () => {
   const roots: string[] = [];
@@ -132,13 +134,16 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
 
   it("retries commit after response loss and polls the persisted target outcome", async () => {
     let commitCalls = 0;
+    let createdSession: Record<string, unknown> = {};
     const harness = await sourceHarness((request, response) => {
-      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") return json(response, 201, {});
+      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") {
+        void readJsonRequest(request).then((body) => { createdSession = body; json(response, 201, {}); }); return;
+      }
       if (request.method === "PUT") { request.resume(); request.on("end", () => json(response, 200, {})); return; }
       if (request.method === "POST" && request.url?.endsWith("/commit")) {
         commitCalls += 1;
         if (commitCalls === 1) { request.socket.destroy(); return; }
-        return json(response, 200, { success: true, data: { session: { status: "completed" } } });
+        return json(response, 200, successfulCommit(createdSession));
       }
       response.writeHead(404).end();
     }, { uploadTimeoutMs: 200, commitTimeoutMs: 800, commitRetryDelayMs: 10 });
@@ -188,13 +193,16 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
 
   it("lets the target arbitrate cancellation at the activating boundary", async () => {
     let deleteCalls = 0;
+    let createdSession: Record<string, unknown> = {};
     let releaseCommit!: () => void;
     const commitGate = new Promise<void>((resolve) => { releaseCommit = resolve; });
     const harness = await sourceHarness((request, response) => {
-      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") return json(response, 201, {});
+      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") {
+        void readJsonRequest(request).then((body) => { createdSession = body; json(response, 201, {}); }); return;
+      }
       if (request.method === "PUT") { request.resume(); request.on("end", () => json(response, 200, {})); return; }
       if (request.method === "POST" && request.url?.endsWith("/commit")) {
-        void commitGate.then(() => json(response, 200, {})); return;
+        void commitGate.then(() => json(response, 200, successfulCommit(createdSession))); return;
       }
       if (request.method === "DELETE") { deleteCalls += 1; return json(response, 409, { code: "SYNC_CANNOT_CANCEL" }); }
       response.writeHead(404).end();
@@ -225,6 +233,56 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     expect(deleteCalls).toBe(1);
   });
 
+  it("marks a successful HTTP status with an invalid commit envelope as recovery-required", async () => {
+    const harness = await sourceHarness((request, response) => {
+      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") return json(response, 201, {});
+      if (request.method === "PUT") { request.resume(); request.on("end", () => json(response, 200, {})); return; }
+      if (request.method === "POST" && request.url?.endsWith("/commit")) return json(response, 200, { success: true });
+      response.writeHead(404).end();
+    }, { uploadTimeoutMs: 200, commitTimeoutMs: 400, commitRetryDelayMs: 5 });
+    const job = await harness.source.start(harness.input);
+    const terminal = await waitForStatus(harness.jobs, job.id, new Set(["recovery-required"]), 500);
+    expect(terminal.error).toContain("commit response is invalid");
+  });
+
+  it("rejects a non-v4 target backup ID as an unverifiable commit outcome", async () => {
+    // Break caught: accepting UUID versions that the backup API cannot read records an unusable recovery handle.
+    let createdSession: Record<string, unknown> = {};
+    const harness = await sourceHarness((request, response) => {
+      if (request.method === "POST" && request.url === "/api/peer/sync-sessions") {
+        void readJsonRequest(request).then((body) => { createdSession = body; json(response, 201, {}); }); return;
+      }
+      if (request.method === "PUT") { request.resume(); request.on("end", () => json(response, 200, {})); return; }
+      if (request.method === "POST" && request.url?.endsWith("/commit")) {
+        const committed = successfulCommit(createdSession);
+        committed.data.backupId = "123e4567-e89b-12d3-a456-426614174000";
+        return json(response, 200, committed);
+      }
+      response.writeHead(404).end();
+    }, { uploadTimeoutMs: 200, commitTimeoutMs: 400, commitRetryDelayMs: 5 });
+    const job = await harness.source.start({
+      ...harness.input,
+      withData: true,
+      confirmation: "sync-app",
+    });
+    const terminal = await waitForStatus(harness.jobs, job.id, new Set(["recovery-required"]), 500);
+    expect(terminal.error).toContain("valid safety backup ID");
+  });
+
+  it("rejects peer protocol 1 before starting an application data transfer", async () => {
+    let requests = 0;
+    const harness = await sourceHarness((_request, response) => {
+      requests += 1;
+      response.writeHead(500).end();
+    }, { uploadTimeoutMs: 200, commitTimeoutMs: 400 }, { protocolVersion: 1, verifiedUserId: "target-owner" });
+    await expect(harness.source.start({
+      ...harness.input,
+      withData: true,
+      confirmation: "sync-app",
+    })).rejects.toMatchObject({ code: "PEER_PROTOCOL_UNSUPPORTED", statusCode: 409 });
+    expect(requests).toBe(0);
+  });
+
   function tempRoot(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-sync-hardening-"));
     roots.push(root);
@@ -241,9 +299,17 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
   async function sourceHarness(
     handler: http.RequestListener,
     options: { uploadTimeoutMs: number; commitTimeoutMs: number; commitRetryDelayMs?: number },
+    peerOverrides: { protocolVersion?: number; verifiedUserId?: string | null } = {},
   ) {
     const dataDir = tempRoot();
     await initMetaDb(dataDir);
+    await initContentStorage({
+      dataDir,
+      minioEndpoint: "127.0.0.1:1",
+      minioAccessKey: "none",
+      minioSecretKey: "none",
+      minioBucket: "test",
+    } as ServerConfig);
     const packagePath = await packageFixture(dataDir);
     await installAppPackage({ dataDir, ownerId: "owner", packagePath });
     const server = http.createServer(handler);
@@ -251,13 +317,44 @@ describe("peer synchronization concurrency, deadlines, and cancellation", () => 
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("test server did not bind");
-    const peers = { loadForCheck: () => ({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "secret" }) } as PeerStore;
+    const peers = { loadForCheck: () => ({
+      id: "peer", baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "secret", connectionVersion: 1,
+      protocolVersion: peerOverrides.protocolVersion ?? 2,
+      verifiedUserId: peerOverrides.verifiedUserId ?? "target-owner",
+    }) } as PeerStore;
     const jobs = new SyncJobStore();
     const source = new AppSyncSource(dataDir, jobs, peers, options);
     sources.push(source);
     return { source, jobs, input: { ownerId: "owner", appName: "sync-app", peerId: "peer", withData: false as const } };
   }
 });
+
+function successfulCommit(sessionInput: Record<string, unknown>) {
+  const syncId = String(sessionInput.id ?? "");
+  const appName = String(sessionInput.appName ?? "");
+  const appVersion = String(sessionInput.appVersion ?? "");
+  const packageDigest = String(sessionInput.packageDigest ?? "");
+  return {
+    success: true,
+    data: {
+      session: {
+        id: syncId,
+        status: "completed",
+        appName,
+        appVersion,
+        packageDigest,
+      },
+      outcome: { name: appName, appVersion, digest: packageDigest },
+      backupId: null,
+    },
+  };
+}
+
+async function readJsonRequest(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+}
 
 function failRootDirectoryFsync(rootDir: string, message: string): { calls: () => number; restore: () => void } {
   const descriptors = new Map<number, string>();
@@ -287,6 +384,7 @@ async function packageFixture(dataDir: string): Promise<string> {
     files: [
       { path: "manifest.json", content: Buffer.from(JSON.stringify({ name: "sync-app", platformVersion: "^1.0" })) },
       { path: "dist/index.html", content: Buffer.from("sync") },
+      { path: "migrations/001_init.sql", content: Buffer.from("CREATE TABLE records (id TEXT PRIMARY KEY);") },
     ],
   });
   return outputPath;

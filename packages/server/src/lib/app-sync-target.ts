@@ -1,21 +1,28 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import initSqlJs from "sql.js";
 import { AppInstallError, installAppPackage, rollbackAppVersion, verifyInstalledAppVersion, type InstallAppPackageInput, type InstallOutcome } from "./app-installer.js";
 import { inspectAppPackage } from "./app-package.js";
 import { AppDataError } from "./app-data-errors.js";
-import { createAppBackup, importAppData, restoreAppBackup } from "./app-data-service.js";
+import { createAppBackup, importAppData, restoreAppBackupExact } from "./app-data-service.js";
 import { getPageDir, readPageMeta } from "../plugins/storage.js";
 import type { AppDataIdentity } from "./app-data-service.js";
 import { removeDirRecursive } from "./file-utils.js";
 import { SyncSessionError, SyncSessionStore, type SyncSessionRecord } from "./sync-session-store.js";
 
+export interface SyncCommitResult {
+  session: SyncSessionRecord;
+  outcome: InstallOutcome;
+  backupId: string | null;
+}
+
 export class AppSyncTarget {
-  private readonly commits = new Map<string, Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }>>();
+  private readonly commits = new Map<string, Promise<SyncCommitResult>>();
   private readonly install: (input: InstallAppPackageInput) => Promise<InstallOutcome>;
   private readonly createBackup: typeof createAppBackup;
   private readonly importData: typeof importAppData;
-  private readonly restoreBackup: typeof restoreAppBackup;
+  private readonly restoreBackup: typeof restoreAppBackupExact;
   private readonly rollbackVersion: typeof rollbackAppVersion;
 
   constructor(
@@ -25,14 +32,14 @@ export class AppSyncTarget {
       install?: (input: InstallAppPackageInput) => Promise<InstallOutcome>;
       createBackup?: typeof createAppBackup;
       importData?: typeof importAppData;
-      restoreBackup?: typeof restoreAppBackup;
+      restoreBackup?: typeof restoreAppBackupExact;
       rollbackVersion?: typeof rollbackAppVersion;
     } = {},
   ) {
     this.install = options.install ?? installAppPackage;
     this.createBackup = options.createBackup ?? createAppBackup;
     this.importData = options.importData ?? importAppData;
-    this.restoreBackup = options.restoreBackup ?? restoreAppBackup;
+    this.restoreBackup = options.restoreBackup ?? restoreAppBackupExact;
     this.rollbackVersion = options.rollbackVersion ?? rollbackAppVersion;
   }
 
@@ -53,11 +60,19 @@ export class AppSyncTarget {
     return this.sessions.create(input);
   }
 
-  async commit(id: string, ownerId: string): Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }> {
+  async commit(id: string, ownerId: string): Promise<SyncCommitResult> {
     const session = this.sessions.getOwned(id, ownerId);
     if (!session) return Promise.reject(new SyncSessionError("SYNC_SESSION_NOT_FOUND", "Synchronization session not found", 404));
     if (session.status === "completed" && session.outcome) {
-      return Promise.resolve({ session, outcome: session.outcome as unknown as InstallOutcome });
+      const { backupId, ...outcome } = session.outcome;
+      return Promise.resolve({
+        session,
+        outcome: outcome as unknown as InstallOutcome,
+        backupId: typeof backupId === "string" ? backupId : null,
+      });
+    }
+    if (session.status === "recovery-required") {
+      return Promise.reject(new SyncSessionError("SYNC_RECOVERY_REQUIRED", "Synchronization requires operator recovery", 409));
     }
     const inFlight = this.commits.get(id);
     if (inFlight) return inFlight;
@@ -76,7 +91,7 @@ export class AppSyncTarget {
     return run;
   }
 
-  private async executeCommit(session: SyncSessionRecord, ownerId: string): Promise<{ session: SyncSessionRecord; outcome: InstallOutcome }> {
+  private async executeCommit(session: SyncSessionRecord, ownerId: string): Promise<SyncCommitResult> {
     const id = session.id;
     const packagePath = this.sessions.packagePath(id);
     const inspected = await inspectAppPackage(packagePath);
@@ -86,14 +101,11 @@ export class AppSyncTarget {
     this.sessions.transition(id, ownerId, "committing");
     const pageDir = getPageDir(this.dataDir, ownerId, session.appName);
     const previousMeta = readPageMeta(this.dataDir, ownerId, session.appName);
+    const previousDatabaseExisted = fsExists(path.join(pageDir, "app.db"));
     let safetyBackupId: string | undefined;
     try {
-      if (session.mode === "app-and-data" && previousMeta && fsExists(path.join(pageDir, "app.db"))) {
-        const safety = await this.createBackup(pageDir, {
-          application: pageIdentity(previousMeta, ownerId, session.appName),
-          source: "automatic",
-          reason: "peer-data-sync",
-        });
+      if (session.mode === "app-and-data" && previousMeta) {
+        const safety = await this.createSafetyBackup(pageDir, previousMeta, ownerId, session.appName, previousDatabaseExisted);
         safetyBackupId = safety.id;
       }
       const outcome = await this.install({ dataDir: this.dataDir, ownerId, packagePath, preserveTargetAccess: true });
@@ -102,20 +114,37 @@ export class AppSyncTarget {
         if (!currentMeta) throw new AppDataError("APP_DATABASE_NOT_FOUND", "Application metadata disappeared during data synchronization");
         const versionChanged = !previousMeta || currentMeta.currentVersion !== previousMeta.currentVersion;
         try {
-          await this.importData({
+          if (!previousMeta) {
+            const safety = await this.createSafetyBackup(
+              pageDir, currentMeta, ownerId, session.appName, fsExists(path.join(pageDir, "app.db")),
+            );
+            safetyBackupId = safety.id;
+          }
+          const imported = await this.importData({
             pageDir,
             application: pageIdentity(currentMeta, ownerId, session.appName),
             archivePath: this.sessions.dataPath(id),
             reason: "peer-data-sync",
+            ...(safetyBackupId ? { safetyBackupId } : {}),
           });
+          safetyBackupId ??= imported.safetyBackupId;
         } catch (dataError) {
-          await this.rollbackAfterDataFailure({ pageDir, ownerId, appName: session.appName, previousMeta, safetyBackupId, versionChanged });
-          throw dataError;
+          await this.rollbackAfterDataFailure({
+            pageDir, ownerId, appName: session.appName, previousMeta, currentMeta,
+            safetyBackupId, versionChanged, previousDatabaseExisted,
+          });
+          throw recoveredDataFailure(dataError);
         }
       }
-      return { session: this.sessions.transition(id, ownerId, "completed", { outcome: outcome as unknown as Record<string, unknown> }), outcome };
+      return {
+        session: this.sessions.transition(id, ownerId, "completed", {
+          outcome: { ...outcome, backupId: safetyBackupId ?? null },
+        }),
+        outcome,
+        backupId: safetyBackupId ?? null,
+      };
     } catch (error) {
-      this.sessions.transition(id, ownerId, error instanceof AppInstallError && error.code === "APP_INSTALL_RECOVERY_REQUIRED"
+      this.sessions.transition(id, ownerId, isRecoveryRequired(error)
         ? "recovery-required" : "failed", { error: publicInstallError(error) });
       throw error;
     }
@@ -158,17 +187,24 @@ export class AppSyncTarget {
     ownerId: string;
     appName: string;
     previousMeta: ReturnType<typeof readPageMeta>;
+    currentMeta: NonNullable<ReturnType<typeof readPageMeta>>;
     safetyBackupId?: string;
     versionChanged: boolean;
+    previousDatabaseExisted: boolean;
   }): Promise<void> {
     try {
       if (input.previousMeta && input.safetyBackupId) {
-        const currentMeta = readPageMeta(this.dataDir, input.ownerId, input.appName);
-        await this.restoreBackup(input.pageDir, input.safetyBackupId, {
-          application: pageIdentity(currentMeta ?? input.previousMeta, input.ownerId, input.appName),
-        });
         if (input.versionChanged) await this.rollbackVersion({ dataDir: this.dataDir, ownerId: input.ownerId, name: input.appName });
+        await this.restoreBackup(input.pageDir, input.safetyBackupId, {
+          application: pageIdentity(input.previousMeta, input.ownerId, input.appName),
+        });
+        if (!input.previousDatabaseExisted) fs.rmSync(path.join(input.pageDir, "app.db"), { force: true });
       } else if (!input.previousMeta) {
+        if (input.safetyBackupId) {
+          await this.restoreBackup(input.pageDir, input.safetyBackupId, {
+            application: pageIdentity(input.currentMeta, input.ownerId, input.appName),
+          });
+        }
         removeDirRecursive(input.pageDir);
       } else if (input.versionChanged) {
         await this.rollbackVersion({ dataDir: this.dataDir, ownerId: input.ownerId, name: input.appName });
@@ -183,6 +219,43 @@ export class AppSyncTarget {
       );
     }
   }
+
+  private async createSafetyBackup(
+    pageDir: string,
+    previousMeta: NonNullable<ReturnType<typeof readPageMeta>>,
+    ownerId: string,
+    appName: string,
+    databaseExisted: boolean,
+  ) {
+    const databasePath = path.join(pageDir, "app.db");
+    if (!databaseExisted) {
+      const SQL = await initSqlJs();
+      const database = new SQL.Database();
+      try { fs.writeFileSync(databasePath, Buffer.from(database.export()), { mode: 0o600 }); }
+      finally { database.close(); }
+    }
+    try {
+      return await this.createBackup(pageDir, {
+        application: pageIdentity(previousMeta, ownerId, appName),
+        source: "automatic",
+        reason: "peer-data-sync",
+      });
+    } finally {
+      if (!databaseExisted) fs.rmSync(databasePath, { force: true });
+    }
+  }
+}
+
+function recoveredDataFailure(error: unknown): unknown {
+  return error instanceof AppDataError && error.code === "APP_DATA_ROLLBACK_FAILED"
+    ? new AppDataError("APP_DATA_IMPORT_FAILED", "Application data replacement failed; the target state was restored")
+    : error;
+}
+
+function isRecoveryRequired(error: unknown): boolean {
+  return (error instanceof AppInstallError && error.code === "APP_INSTALL_RECOVERY_REQUIRED")
+    || (error instanceof AppDataError && error.code === "APP_DATA_ROLLBACK_FAILED")
+    || (error instanceof SyncSessionError && error.code === "SYNC_RECOVERY_REQUIRED");
 }
 
 export function targetInstallStatus(error: unknown): number {

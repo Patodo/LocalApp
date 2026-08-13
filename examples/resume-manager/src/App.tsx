@@ -154,7 +154,7 @@ export default function App() {
 
           <Card className="min-w-0">
             <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div><CardTitle>我的候选人</CardTitle><CardDescription>仅显示当前用户创建的简历记录。</CardDescription></div>
+              <div><CardTitle>候选人</CardTitle><CardDescription>普通用户仅显示自己的记录，应用所有者可管理全部记录。</CardDescription></div>
               <Button variant="outline" onClick={() => void refresh()} disabled={busy}>刷新</Button>
             </CardHeader>
             <CardContent className="grid gap-5 xl:grid-cols-[280px_1fr]">

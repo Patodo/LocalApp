@@ -118,17 +118,9 @@ export async function computeSchemaFingerprint(dbPath: string): Promise<string> 
 export async function validateCandidateSchema(input: {
   candidatePath: string;
   migrationsDir: string;
-  archiveVersion: number;
-  currentVersion: number;
+  archiveVersion?: number;
+  currentVersion?: number;
 }): Promise<{ schemaFingerprint: string }> {
-  if (input.archiveVersion > input.currentVersion) {
-    throw new AppDataError("APP_ARCHIVE_VERSION_TOO_NEW", "Data archive was created by a newer application version");
-  }
-
-  if (input.archiveVersion < input.currentVersion) {
-    await applyPendingMigrations({ dbPath: input.candidatePath, migrationsDir: input.migrationsDir });
-  }
-
   const referencePath = path.join(path.dirname(input.candidatePath), `.schema-reference-${crypto.randomUUID()}.db`);
   try {
     await applyPendingMigrations({ dbPath: referencePath, migrationsDir: input.migrationsDir });

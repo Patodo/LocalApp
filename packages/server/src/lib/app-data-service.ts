@@ -8,6 +8,7 @@ import { closeConnectionsForPage } from "./app-db.js";
 import {
   createDataArchive,
   extractAndValidateDataArchive,
+  type AppDataArchiveManifest,
   type ArchiveLimits,
 } from "./app-data-archive.js";
 import { AppDataError } from "./app-data-errors.js";
@@ -87,7 +88,7 @@ async function currentMigrationsDir(pageDir: string, application: AppDataIdentit
   }
 }
 
-function isBackupId(id: string): boolean {
+export function isAppBackupId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 }
 
@@ -128,19 +129,104 @@ async function createArchiveAt(input: {
   storage: AppDataStorage;
 }) {
   closeConnectionsForPage(input.pageDir);
-  const databasePath = path.join(input.pageDir, "app.db");
-  if (!fs.existsSync(databasePath)) throw new AppDataError("APP_DATABASE_NOT_FOUND", "Application database does not exist");
+  const sourceDatabasePath = path.join(input.pageDir, "app.db");
+  if (!fs.existsSync(sourceDatabasePath)) throw new AppDataError("APP_DATABASE_NOT_FOUND", "Application database does not exist");
   const sourceApplication = input.sourceApplication ?? input.application;
   const objects = await input.storage.listAppObjects(sourceApplication.owner, sourceApplication.name);
-  return createDataArchive({
-    outputPath: input.outputPath,
-    databasePath,
-    application: input.application,
-    sourceApplication,
-    objects,
-    openObject: input.storage.openObject,
-    limits: input.limits,
-  });
+  const crossOwner = sourceApplication.owner !== input.application.owner || sourceApplication.name !== input.application.name;
+  const databasePath = crossOwner
+    ? path.join(operationDir(input.pageDir), `export-database-${crypto.randomUUID()}.db`)
+    : sourceDatabasePath;
+  try {
+    if (crossOwner) {
+      fs.copyFileSync(sourceDatabasePath, databasePath);
+      await rebaseDatabaseReferences(databasePath, {
+        sourceApplication,
+        targetApplication: input.application,
+        objectMappings: objects.map((object) => ({
+          source: object.key,
+          target: rebaseObjectKey(object.key, sourceApplication, input.application),
+        })),
+        identityColumns: declaredIdentityColumns(input.pageDir, input.application.version),
+      });
+    }
+    return await createDataArchive({
+      outputPath: input.outputPath,
+      databasePath,
+      application: input.application,
+      sourceApplication,
+      objects,
+      openObject: input.storage.openObject,
+      limits: input.limits,
+    });
+  } finally {
+    if (crossOwner) fs.rmSync(databasePath, { force: true });
+  }
+}
+
+function rebaseObjectKey(
+  key: string,
+  source: Pick<AppDataIdentity, "owner" | "name">,
+  target: Pick<AppDataIdentity, "owner" | "name">,
+): string {
+  const appPrefix = `${source.owner}/${source.name}/`;
+  const issuePrefix = `issues/${source.owner}/${source.name}/`;
+  if (key.startsWith(appPrefix)) return `${target.owner}/${target.name}/${key.slice(appPrefix.length)}`;
+  if (key.startsWith(issuePrefix)) return `issues/${target.owner}/${target.name}/${key.slice(issuePrefix.length)}`;
+  throw new AppDataError("APP_ARCHIVE_OBJECT_KEY_INVALID", `Object key is outside the application namespace: ${key}`);
+}
+
+function declaredIdentityColumns(pageDir: string, version: number): Array<{ table: string; column: string }> {
+  const resourcesDir = path.join(pageDir, "versions", `v${version}`, "backend", "resources");
+  if (!fs.existsSync(resourcesDir)) return [];
+  const result = new Map<string, { table: string; column: string }>();
+  for (const entry of fs.readdirSync(resourcesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const resourceDir = path.join(resourcesDir, entry.name);
+    const schemaPath = path.join(resourceDir, "schema.json");
+    try {
+      const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as {
+        name?: unknown;
+        business?: { ownerField?: unknown };
+      };
+      if (typeof schema.name !== "string") throw new Error("resource name is missing");
+      const ownerField = typeof schema.business?.ownerField === "string" ? schema.business.ownerField : undefined;
+      if (ownerField) result.set(`${schema.name}\0${ownerField}`, { table: schema.name, column: ownerField });
+      for (const contractName of ["queries.json", "mutations.json"] as const) {
+        const contractPath = path.join(resourceDir, contractName);
+        if (!fs.existsSync(contractPath)) continue;
+        const contract = JSON.parse(fs.readFileSync(contractPath, "utf8")) as Record<string, unknown>;
+        const definitions = contract[contractName === "queries.json" ? "queries" : "mutations"];
+        if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) continue;
+        for (const definition of Object.values(definitions)) {
+          if (!definition || typeof definition !== "object" || Array.isArray(definition)) continue;
+          const record = definition as Record<string, unknown>;
+          const security = record.security && typeof record.security === "object" && !Array.isArray(record.security)
+            ? record.security as Record<string, unknown>
+            : {};
+          const config = security.config && typeof security.config === "object" && !Array.isArray(security.config)
+            ? security.config as Record<string, unknown>
+            : {};
+          if (security.mode === "generated" && typeof config.identityField === "string") {
+            result.set(`${schema.name}\0${config.identityField}`, { table: schema.name, column: config.identityField });
+          }
+          const systemParams = Array.isArray(security.systemParams) ? security.systemParams : [];
+          const dependsOnCurrentUser = systemParams.includes("currentUserId")
+            || (typeof record.sql === "string" && record.sql.includes(":currentUserId"));
+          if (security.mode === "custom" && dependsOnCurrentUser && !ownerField) {
+            throw new AppDataError(
+              "APP_DATA_IDENTITY_CONTRACT_REQUIRED",
+              `Resource ${schema.name} must declare business.ownerField before cross-owner data synchronization`,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof AppDataError) throw error;
+      throw new AppDataError("APP_DATA_IDENTITY_CONTRACT_INVALID", `Cannot read identity contract for resource ${entry.name}`);
+    }
+  }
+  return [...result.values()];
 }
 
 async function createManagedBackupUnlocked(input: {
@@ -176,7 +262,7 @@ async function createManagedBackupUnlocked(input: {
 }
 
 function readBackupMetadata(pageDir: string, id: string): AppBackup | null {
-  if (!isBackupId(id)) return null;
+  if (!isAppBackupId(id)) return null;
   const metaPath = backupMetaPath(pageDir, id);
   if (!fs.existsSync(metaPath)) return null;
   try {
@@ -262,16 +348,132 @@ async function prepareArchive(input: {
   const prepared = await extractAndValidateDataArchive({
     archivePath: input.archivePath,
     stagingDir: input.stagingDir,
-    expectedApplication: { owner: input.application.owner, name: input.application.name, maxVersion: input.application.version },
+    expectedApplication: { owner: input.application.owner, name: input.application.name },
     limits: input.limits,
   });
+  await rebaseCandidateDatabase(prepared.databasePath, prepared.manifest, declaredIdentityColumns(input.pageDir, input.application.version));
   await validateCandidateSchema({
     candidatePath: prepared.databasePath,
     migrationsDir: await currentMigrationsDir(input.pageDir, input.application),
-    archiveVersion: prepared.manifest.application.version,
-    currentVersion: input.application.version,
   });
   return prepared;
+}
+
+async function rebaseCandidateDatabase(
+  databasePath: string,
+  manifest: AppDataArchiveManifest,
+  identityColumns: Array<{ table: string; column: string }>,
+): Promise<void> {
+  const source = manifest.sourceApplication ?? manifest.application;
+  const target = manifest.application;
+  if (source.owner === target.owner && source.name === target.name && identityColumns.length === 0) return;
+  await rebaseDatabaseReferences(databasePath, {
+    sourceApplication: source,
+    targetApplication: target,
+    objectMappings: manifest.files.flatMap((file) => file.sourceObjectKey
+      ? [{ source: file.sourceObjectKey, target: file.objectKey }]
+      : []),
+    identityColumns,
+  });
+}
+
+async function rebaseDatabaseReferences(
+  databasePath: string,
+  input: {
+    sourceApplication: { owner: string; name: string };
+    targetApplication: { owner: string; name: string };
+    objectMappings: Array<{ source: string; target: string }>;
+    identityColumns: Array<{ table: string; column: string }>;
+  },
+): Promise<void> {
+  const replacements = new Map<string, string>();
+  for (const mapping of input.objectMappings) {
+    replacements.set(mapping.source, mapping.target);
+    const sourcePrefix = `${input.sourceApplication.owner}/${input.sourceApplication.name}/`;
+    const targetPrefix = `${input.targetApplication.owner}/${input.targetApplication.name}/`;
+    if (mapping.source.startsWith(sourcePrefix) && mapping.target.startsWith(targetPrefix)) {
+      replacements.set(
+        `/serve/${sourcePrefix}api/content/${mapping.source.slice(sourcePrefix.length)}`,
+        `/serve/${targetPrefix}api/content/${mapping.target.slice(targetPrefix.length)}`,
+      );
+    }
+  }
+  const SQL = await initSqlJs();
+  const db = new SQL.Database(fs.readFileSync(databasePath));
+  try {
+    const result = db.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+    const tables = (result[0]?.values ?? []).map((row) => String(row[0]));
+    db.run("BEGIN IMMEDIATE");
+    try {
+      for (const table of tables) {
+        const columns = db.exec(`PRAGMA table_info(${quoteSqlIdentifier(table)})`)[0]?.values ?? [];
+        for (const column of columns) {
+          const name = String(column[1]);
+          const declaredType = String(column[2]).toUpperCase();
+          if (declaredType.length > 0 && !declaredType.includes("TEXT") && !declaredType.includes("CHAR") && !declaredType.includes("CLOB")) continue;
+          const tableId = quoteSqlIdentifier(table);
+          const columnId = quoteSqlIdentifier(name);
+          const values = db.exec(`SELECT DISTINCT ${columnId} FROM ${tableId} WHERE typeof(${columnId}) = 'text'`)[0]?.values ?? [];
+          for (const row of values) {
+            const current = String(row[0]);
+            const next = rebaseTextValue(current, replacements);
+            if (next !== current) db.run(`UPDATE ${tableId} SET ${columnId} = ? WHERE ${columnId} = ?`, [next, current]);
+          }
+        }
+      }
+      for (const identity of input.identityColumns) {
+        const tableId = quoteSqlIdentifier(identity.table);
+        const columnId = quoteSqlIdentifier(identity.column);
+        db.run(`UPDATE ${tableId} SET ${columnId} = ? WHERE ${columnId} IS NOT NULL`, [input.targetApplication.owner]);
+      }
+      db.run("COMMIT");
+    } catch (error) {
+      db.run("ROLLBACK");
+      throw error;
+    }
+    fs.writeFileSync(databasePath, Buffer.from(db.export()), { mode: 0o600 });
+  } finally {
+    db.close();
+  }
+}
+
+function rebaseTextValue(value: string, replacements: ReadonlyMap<string, string>): string {
+  const exact = replacements.get(value);
+  if (exact !== undefined) return exact;
+  const candidate = value.trimStart();
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return value;
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    const rebased = rebaseJsonValue(parsed, replacements);
+    return rebased.changed ? JSON.stringify(rebased.value) : value;
+  } catch {
+    return value;
+  }
+}
+
+function rebaseJsonValue(value: unknown, replacements: ReadonlyMap<string, string>): { value: unknown; changed: boolean } {
+  if (typeof value === "string") {
+    const next = replacements.get(value);
+    return next === undefined ? { value, changed: false } : { value: next, changed: true };
+  }
+  if (Array.isArray(value)) {
+    const children = value.map((entry) => rebaseJsonValue(entry, replacements));
+    return { value: children.map((entry) => entry.value), changed: children.some((entry) => entry.changed) };
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const entries = Object.entries(value).map(([key, entry]) => {
+      const child = rebaseJsonValue(entry, replacements);
+      changed ||= child.changed;
+      return [key, child.value];
+    });
+    return { value: Object.fromEntries(entries), changed };
+  }
+  return { value, changed: false };
+}
+
+function quoteSqlIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 export async function createAppDataExport(input: {
@@ -318,6 +520,7 @@ export async function importAppData(input: {
   application: AppDataIdentity;
   archivePath: string;
   reason: string;
+  safetyBackupId?: string;
   limits?: ArchiveLimits;
   storage?: AppDataStorage;
 }): Promise<{ databaseSize: number; fileCount: number; fileSize: number; safetyBackupId: string }> {
@@ -329,14 +532,17 @@ export async function importAppData(input: {
     const rollbackDir = path.join(operationDir(input.pageDir), `rollback-${token}`);
     try {
       const prepared = await prepareArchive({ ...input, limits, stagingDir });
-      const safety = await createManagedBackupUnlocked({
-        pageDir: input.pageDir,
-        application: input.application,
-        limits,
-        storage,
-        source: "automatic",
-        reason: input.reason,
-      });
+      const safety = input.safetyBackupId
+        ? readBackupMetadata(input.pageDir, input.safetyBackupId)
+        : await createManagedBackupUnlocked({
+            pageDir: input.pageDir,
+            application: input.application,
+            limits,
+            storage,
+            source: "automatic",
+            reason: input.reason,
+          });
+      if (!safety) throw new AppDataError("APP_BACKUP_NOT_FOUND", "Safety backup not found");
       try {
         await applyPreparedData({ ...input, ...prepared, storage });
       } catch (caught) {
@@ -399,6 +605,42 @@ export async function restoreAppBackup(
     return;
   }
   await replaceAppDatabase(pageDir, fs.readFileSync(getAppBackupPath(pageDir, id)), `restore:${id}`, { ...options, application });
+}
+
+export async function restoreAppBackupExact(
+  pageDir: string,
+  id: string,
+  options: { application: AppDataIdentity; limits?: ArchiveLimits; storage?: AppDataStorage },
+): Promise<void> {
+  const backup = getAppBackup(pageDir, id);
+  const limits = options.limits ?? DEFAULT_ARCHIVE_LIMITS;
+  const storage = options.storage ?? defaultStorage;
+  await withAppDataMaintenance(pageDir, async () => {
+    if (backup.format === "legacy-db") {
+      const bytes = fs.readFileSync(getAppBackupPath(pageDir, id));
+      await validateSqlite(bytes);
+      const candidatePath = path.join(operationDir(pageDir), `exact-restore-${crypto.randomUUID()}.db`);
+      try {
+        fs.writeFileSync(candidatePath, bytes, { mode: 0o600 });
+        swapDatabaseFile(pageDir, candidatePath);
+      } finally {
+        fs.rmSync(candidatePath, { force: true });
+      }
+      return;
+    }
+    const stagingDir = path.join(operationDir(pageDir), `exact-restore-${crypto.randomUUID()}`);
+    try {
+      const prepared = await extractAndValidateDataArchive({
+        archivePath: getAppBackupPath(pageDir, id),
+        stagingDir,
+        expectedApplication: { owner: options.application.owner, name: options.application.name },
+        limits,
+      });
+      await applyPreparedData({ pageDir, application: options.application, ...prepared, storage });
+    } finally {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    }
+  });
 }
 
 async function validateSqlite(bytes: Buffer): Promise<void> {

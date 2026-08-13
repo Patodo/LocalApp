@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { computeSchemaFingerprint, validateCandidateSchema } from "../app-data-schema.js";
+import { validateCandidateSchema } from "../app-data-schema.js";
 
 async function createDatabase(filePath: string, sql: string): Promise<void> {
   const SQL = await initSqlJs();
@@ -31,22 +31,24 @@ describe("application data schema validation", () => {
 
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  it("rejects archives created by a newer application version", async () => {
+  it("does not compare peer-local version counters when validating a portable database", async () => {
     const candidatePath = path.join(tmpDir, "newer.db");
-    await createDatabase(candidatePath, "CREATE TABLE anything (id INTEGER)");
+    await createDatabase(candidatePath, [
+      "CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+      "CREATE TABLE tasks (id INTEGER PRIMARY KEY, team_id INTEGER NOT NULL, title TEXT NOT NULL, FOREIGN KEY(team_id) REFERENCES teams(id));",
+      "CREATE INDEX tasks_team_idx ON tasks(team_id);",
+      "CREATE INDEX tasks_open_idx ON tasks(title) WHERE title <> '';",
+    ].join("\n"));
     await expect(validateCandidateSchema({ candidatePath, migrationsDir, archiveVersion: 3, currentVersion: 2 }))
-      .rejects.toMatchObject({ code: "APP_ARCHIVE_VERSION_TOO_NEW" });
+      .resolves.toMatchObject({ schemaFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) });
   });
 
-  it("migrates an older database and returns a stable fingerprint", async () => {
+  it("rejects a portable database that does not already match the synchronized package schema", async () => {
     const candidatePath = path.join(tmpDir, "older.db");
     await createDatabase(candidatePath, "CREATE TABLE legacy (id INTEGER)");
 
-    const first = await validateCandidateSchema({ candidatePath, migrationsDir, archiveVersion: 1, currentVersion: 2 });
-    const second = await computeSchemaFingerprint(candidatePath);
-
-    expect(first.schemaFingerprint).toBe(second);
-    expect(first.schemaFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    await expect(validateCandidateSchema({ candidatePath, migrationsDir, archiveVersion: 1, currentVersion: 2 }))
+      .rejects.toMatchObject({ code: "APP_DATABASE_SCHEMA_INCOMPATIBLE" });
   });
 
   it("rejects a same-version database missing required structures", async () => {

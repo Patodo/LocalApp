@@ -43,7 +43,7 @@ export interface PeerVerification {
   transferLimits: Record<string, number>;
 }
 
-export type PeerCheckTarget = { id: string; baseUrl: string; apiKey: string; connectionVersion: number; verifiedUserId: string | null };
+export type PeerCheckTarget = { id: string; baseUrl: string; apiKey: string; connectionVersion: number; verifiedUserId: string | null; protocolVersion: number | null };
 export type RecordVerificationResult = { kind: "updated"; peer: PeerPublic } | { kind: "changed" | "missing" };
 
 export class PeerStore {
@@ -126,6 +126,7 @@ export class PeerStore {
       apiKey: this.secretBox.open(peer.credential, peer.id),
       connectionVersion: peer.connectionVersion,
       verifiedUserId: peer.verifiedUserId,
+      protocolVersion: peer.protocolVersion,
     } : null;
   }
 

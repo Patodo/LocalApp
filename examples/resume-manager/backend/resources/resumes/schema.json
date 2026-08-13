@@ -29,5 +29,8 @@
       "type": "number"
     }
   },
-  "name": "resumes"
+  "name": "resumes",
+  "business": {
+    "ownerField": "created_by"
+  }
 }

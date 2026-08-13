@@ -22,6 +22,9 @@ export async function syncTargetRoutes(app: FastifyInstance, target: AppSyncTarg
       const nameError = validateName(appName);
       if (nameError) throw new SyncSessionError("APP_NAME_INVALID", nameError, 400);
       const mode = body?.mode === "app-only" || body?.mode === "app-and-data" ? body.mode : invalidMode();
+      if (body?.protocolVersion !== 2) {
+        throw new SyncSessionError("SYNC_PROTOCOL_UNSUPPORTED", "Peer synchronization protocol 2 is required", 409);
+      }
       const session = target.create({
         id: requiredString(body?.id, "id"), ownerId,
         mode,
@@ -68,7 +71,7 @@ export async function syncTargetRoutes(app: FastifyInstance, target: AppSyncTarg
     if (!ownerId) return;
     try {
       const result = await target.commit(request.params.id, ownerId);
-      return { success: true, data: { session: publicSession(result.session), outcome: result.outcome } };
+      return { success: true, data: { session: publicSession(result.session), outcome: result.outcome, backupId: result.backupId } };
     } catch (error) { return targetError(reply, error); }
   });
 

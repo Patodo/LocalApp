@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { inspectAppPackage } from "./app-package.js";
-import { createAppDataExport } from "./app-data-service.js";
+import { createAppDataExport, isAppBackupId } from "./app-data-service.js";
 import { PeerStore } from "./peer-store.js";
 import { SyncJobStore, type SyncJobRecord, type SyncJobStatus } from "./sync-job-store.js";
 import { getPageDir, readPageMeta } from "../plugins/storage.js";
@@ -18,6 +18,7 @@ const PEER_ERROR_CODES = new Set([
   "SYNC_SESSION_CONFLICT", "SYNC_SESSION_NOT_FOUND", "SYNC_PACKAGE_TOO_LARGE", "SYNC_PACKAGE_SIZE_MISMATCH",
   "SYNC_PACKAGE_DIGEST_MISMATCH", "SYNC_PACKAGE_METADATA_MISMATCH", "SYNC_PACKAGE_REQUIRED", "SYNC_CANNOT_CANCEL",
   "SYNC_COMMIT_IN_PROGRESS", "SYNC_RECOVERY_REQUIRED", "SYNC_DATA_REQUIRED", "SYNC_DATA_NOT_EXPECTED",
+  "SYNC_PROTOCOL_UNSUPPORTED",
   "SYNC_DATA_TOO_LARGE", "SYNC_DATA_SIZE_MISMATCH", "SYNC_DATA_DIGEST_MISMATCH", "SYNC_DATA_CONFLICT",
   "APP_ARCHIVE_LIMIT_EXCEEDED", "APP_ARCHIVE_IDENTITY_MISMATCH", "APP_ARCHIVE_VERSION_TOO_NEW",
   "APP_ARCHIVE_MANIFEST_INVALID", "APP_ARCHIVE_FORMAT_UNSUPPORTED", "APP_ARCHIVE_INVALID_PATH",
@@ -74,6 +75,9 @@ export class AppSyncSource {
       if (input.withData && !target.verifiedUserId) {
         throw new SyncSourceError(409, "Peer must be checked before application data can be synchronized", "PEER_NOT_VERIFIED");
       }
+      if (input.withData && (target.protocolVersion ?? 0) < 2) {
+        throw new SyncSourceError(409, "Peer protocol 2 or newer is required for application data synchronization", "PEER_PROTOCOL_UNSUPPORTED");
+      }
       let dataDigest: string | undefined;
       let dataSize: number | undefined;
       if (input.withData) {
@@ -91,7 +95,7 @@ export class AppSyncSource {
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({
-          id: syncId, mode: input.withData ? "app-and-data" : "app-only", appName: input.appName, appVersion: active.appVersion,
+          id: syncId, protocolVersion: 2, mode: input.withData ? "app-and-data" : "app-only", appName: input.appName, appVersion: active.appVersion,
           packageDigest: active.digest, packageSize: active.size,
           ...(input.withData ? { dataDigest, dataSize } : {}),
         }),
@@ -215,12 +219,21 @@ export class AppSyncSource {
           method: "POST", signal: deadline.signal,
         });
         if (response.ok) {
-          this.change(jobId, "completed");
+          let backupId: string | null;
+          try {
+            backupId = await validatedCommitBackupId(response, job);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Target commit response is invalid";
+            this.change(jobId, "recovery-required", message);
+            return;
+          }
+          this.change(jobId, "completed", undefined, backupId ?? undefined);
           return;
         }
         const error = await sourceResponseError(response);
         if (error.code !== "SYNC_COMMIT_IN_PROGRESS") {
-          this.change(jobId, error.code === "APP_INSTALL_RECOVERY_REQUIRED" ? "recovery-required" : "failed", error.message);
+          this.change(jobId, ["APP_INSTALL_RECOVERY_REQUIRED", "SYNC_RECOVERY_REQUIRED", "APP_DATA_ROLLBACK_FAILED"].includes(error.code)
+            ? "recovery-required" : "failed", error.message);
           return;
         }
         lastError = error;
@@ -240,11 +253,38 @@ export class AppSyncSource {
     return this.change(id, "failed", error instanceof SyncSourceError ? error.message : "Synchronization failed");
   }
 
-  private change(id: string, status: SyncJobStatus, error?: string): SyncJobRecord {
-    const job = this.jobs.transition(id, status, error);
+  private change(id: string, status: SyncJobStatus, error?: string, backupId?: string): SyncJobRecord {
+    const job = this.jobs.transition(id, status, error, backupId);
     this.events(id).emit("status", job);
     return job;
   }
+}
+
+async function validatedCommitBackupId(response: Response, job: SyncJobRecord): Promise<string | null> {
+  const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (body?.success !== true || !isRecord(body.data)) throw new Error("Target commit response is invalid");
+  const session = body.data.session;
+  const outcome = body.data.outcome;
+  if (!isRecord(session) || session.id !== job.syncId || session.status !== "completed"
+    || session.appName !== job.appName || session.appVersion !== job.appVersion
+    || session.packageDigest !== job.packageDigest || !isRecord(outcome)
+    || outcome.name !== job.appName || outcome.appVersion !== job.appVersion
+    || outcome.digest !== job.packageDigest) {
+    throw new Error("Target commit response does not match the synchronization job");
+  }
+  const backupId = body.data.backupId;
+  if (job.withData) {
+    if (typeof backupId !== "string" || !isAppBackupId(backupId)) {
+      throw new Error("Target data synchronization did not return a valid safety backup ID");
+    }
+    return backupId;
+  }
+  if (backupId !== null) throw new Error("Target application-only synchronization returned an unexpected backup ID");
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function activePackage(dataDir: string, ownerId: string, appName: string): Promise<{ path: string; appVersion: string; localVersion: number; digest: string; size: number }> {

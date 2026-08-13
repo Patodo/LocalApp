@@ -104,7 +104,7 @@ describe("application-only peer synchronization", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: crypto.randomUUID(), mode: "app-only", appName: "notes", appVersion: "2.0.0",
+        id: crypto.randomUUID(), protocolVersion: 2, mode: "app-only", appName: "notes", appVersion: "2.0.0",
         packageDigest: "f".repeat(64), packageSize: 1,
       }),
     });
@@ -139,7 +139,7 @@ describe("application-only peer synchronization", () => {
     const oversized = await targetRequest("/api/peer/sync-sessions", targetApiKey, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: crypto.randomUUID(), mode: "app-only", appName: "notes-big", appVersion: "1.0.0",
+        id: crypto.randomUUID(), protocolVersion: 2, mode: "app-only", appName: "notes-big", appVersion: "1.0.0",
         packageDigest: "a".repeat(64), packageSize: MAX_APP_PACKAGE_BYTES + 1,
       }),
     });
@@ -148,6 +148,19 @@ describe("application-only peer synchronization", () => {
     const cancelled = await targetRequest(`/api/peer/sync-sessions/${id}`, targetApiKey, { method: "DELETE" });
     expect(cancelled.response.status).toBe(204);
     expect(fs.existsSync(path.join(dataDir, ".staging", "sync", id))).toBe(false);
+  });
+
+  it("rejects legacy peers before accepting a synchronization session", async () => {
+    const response = await targetRequest("/api/peer/sync-sessions", targetApiKey, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: crypto.randomUUID(), protocolVersion: 1, mode: "app-and-data", appName: "legacy-data",
+        appVersion: "1.0.0", packageDigest: "a".repeat(64), packageSize: 1,
+        dataDigest: "b".repeat(64), dataSize: 1,
+      }),
+    });
+    expect(response.response.status).toBe(409);
+    expect(response.body.code).toBe("SYNC_PROTOCOL_UNSUPPORTED");
   });
 
   it("prunes only expired uncommitted staging and retains completed sessions", async () => {
@@ -434,7 +447,7 @@ describe("application-only peer synchronization", () => {
   function createTargetSession(id: string, digest: string, size: number, appVersion = "9.0.0") {
     return targetRequest("/api/peer/sync-sessions", targetApiKey, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, mode: "app-only", appName: "notes", appVersion, packageDigest: digest, packageSize: size }),
+      body: JSON.stringify({ id, protocolVersion: 2, mode: "app-only", appName: "notes", appVersion, packageDigest: digest, packageSize: size }),
     });
   }
 

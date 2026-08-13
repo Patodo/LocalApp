@@ -6,7 +6,7 @@ export const SYNC_JOB_STATES = [
   "completed", "rolled-back", "failed", "recovery-required",
 ] as const;
 export type SyncJobStatus = typeof SYNC_JOB_STATES[number];
-export type SyncJobHistoryEntry = { status: SyncJobStatus; at: string; error?: string };
+export type SyncJobHistoryEntry = { status: SyncJobStatus; at: string; error?: string; backupId?: string };
 
 export interface SyncJobRecord {
   id: string;
@@ -20,6 +20,7 @@ export interface SyncJobRecord {
   packageSize: number | null;
   dataDigest: string | null;
   dataSize: number | null;
+  backupId: string | null;
   status: SyncJobStatus;
   history: SyncJobHistoryEntry[];
   error: string | null;
@@ -86,11 +87,11 @@ export class SyncJobStore {
     return required(this.get(id));
   }
 
-  transition(id: string, status: SyncJobStatus, error?: string): SyncJobRecord {
+  transition(id: string, status: SyncJobStatus, error?: string, backupId?: string): SyncJobRecord {
     const current = required(this.get(id));
     if (TERMINAL.has(current.status)) return current;
     const now = new Date().toISOString();
-    const history = [...current.history, { status, at: now, ...(error ? { error } : {}) }];
+    const history = [...current.history, { status, at: now, ...(error ? { error } : {}), ...(backupId ? { backupId } : {}) }];
     getDb().run(
       "UPDATE sync_jobs SET status = ?, history_json = ?, error = ?, updated_at = ?, completed_at = ? WHERE id = ?",
       [status, JSON.stringify(history), error ?? null, now, TERMINAL.has(status) ? now : null, id],
@@ -134,6 +135,7 @@ function fromRow(row: Record<string, unknown>): SyncJobRecord {
     packageSize: row.package_size == null ? null : Number(row.package_size),
     dataDigest: row.data_digest == null ? null : String(row.data_digest),
     dataSize: row.data_size == null ? null : Number(row.data_size),
+    backupId: [...history].reverse().find((entry) => entry.backupId)?.backupId ?? null,
     status: String(row.status) as SyncJobStatus, history, error: row.error == null ? null : String(row.error),
     createdAt: String(row.created_at), updatedAt: String(row.updated_at), completedAt: row.completed_at == null ? null : String(row.completed_at),
   };

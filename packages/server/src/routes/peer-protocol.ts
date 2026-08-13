@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { findUserById, validateApiKey } from "../lib/meta-sqlite.js";
 import { MAX_APP_PACKAGE_BYTES } from "../lib/app-package.js";
 
-const PROTOCOL_VERSION = 1;
+export const PEER_PROTOCOL_VERSION = 2;
 
 export async function peerProtocolRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/peer/capabilities", async (req, reply) => {
@@ -15,7 +15,7 @@ export async function peerProtocolRoutes(app: FastifyInstance): Promise<void> {
     return {
       success: true,
       data: {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: PEER_PROTOCOL_VERSION,
         user: { id: user.id, name: user.name, displayName: user.displayName },
         transferLimits: { maxPackageBytes: MAX_APP_PACKAGE_BYTES },
       },

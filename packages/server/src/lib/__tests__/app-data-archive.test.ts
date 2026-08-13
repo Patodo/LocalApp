@@ -92,6 +92,25 @@ describe("application data archive", () => {
     ]);
   });
 
+  it("records source and target object namespaces when exporting to a peer owner", async () => {
+    const sourceKey = "alice/demo/0123456789abcdef0123.png";
+    const created = await createDataArchive({
+      outputPath: archivePath,
+      databasePath: dbPath,
+      application: { owner: "bob", name: "demo", version: 3 },
+      sourceApplication: { owner: "alice", name: "demo" },
+      objects: [{ key: sourceKey, size: 5 }],
+      openObject: async () => ({ body: Readable.from(Buffer.from("image")), contentType: "image/png" }),
+      limits,
+    });
+
+    expect(created.manifest.sourceApplication).toEqual({ owner: "alice", name: "demo" });
+    expect(created.manifest.files[0]).toMatchObject({
+      sourceObjectKey: sourceKey,
+      objectKey: "bob/demo/0123456789abcdef0123.png",
+    });
+  });
+
   it("rejects a manifest for another application", async () => {
     await createDataArchive({
       outputPath: archivePath,
