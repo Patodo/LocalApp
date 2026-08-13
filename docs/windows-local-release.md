@@ -86,12 +86,15 @@ GitHub Release workflow 合并 Linux x64、macOS arm64、macOS x64 与 Windows x
 adapter 后生成的唯一四平台 tgz。账户准备、tag、checksum、候选包检查、2FA 手动发布
 和发布后验收统一遵循 [npm 发布手册](npm-release.md)，不要从本页直接执行发布命令。
 
-用户安装与升级路径只有 npm：
+用户安装与升级路径只有 npm；registry 包名为 `@patodo/localapp`，安装后的命令仍为
+`localapp`：
 
 ```powershell
-npm install --global localapp@<version>
-npm update --global localapp
+npm install --global @patodo/localapp@<version>
+npm update --global @patodo/localapp
 ```
+
+不进行全局安装时，可使用 `npx --package @patodo/localapp localapp --version` 验证 CLI。
 
 发布后在没有仓库 checkout、没有 pnpm、没有独立 Rust CLI、没有 Tauri/WebView2
 应用的干净 Windows 用户环境复验上述旅程。Node.js 是唯一安装前提；npm 安装后的

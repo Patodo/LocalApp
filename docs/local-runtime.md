@@ -2,14 +2,17 @@
 
 LocalApp 只有一个 Server 实现。它可以作为开发机上的本地 Server、局域网 Server、容器 Server 或公开 Server 运行；监听地址、数据目录和存储配置会变化，但应用、认证、权限和文件 API 保持一致。
 
-用户只安装一个 `localapp` npm 包。个人电脑上运行的是当前操作系统用户的常驻 daemon；容器、NAS、局域网主机或公开服务器使用同一包的前台 Server 模式。项目不再提供 Tauri、托盘、Desktop 窗口或单独的 Rust CLI。
+用户只安装一个 `@patodo/localapp` npm 包，安装后的可执行命令仍为 `localapp`。个人电脑上运行的是当前操作系统用户的常驻 daemon；容器、NAS、局域网主机或公开服务器使用同一包的前台 Server 模式。项目不再提供 Tauri、托盘、Desktop 窗口或单独的 Rust CLI。
 
 ```bash
-npm install --global localapp
+npm install --global @patodo/localapp
 localapp server          # 等同于 localapp server start，注册并启动用户 daemon
 localapp server status
 localapp server run      # 容器/前台运行
 ```
+
+不进行全局安装时，可使用 `npx --package @patodo/localapp localapp --version` 验证当前
+registry 中的 CLI；后续子命令同样始终以 `localapp ...` 运行。
 
 `localapp://` 仍由 npm 包内的极小系统适配器注册。适配器只把 Scheme 激活和系统通知点击送回 daemon；应用托管、信任判断、脚本执行和通知状态仍由统一 Server 负责。
 

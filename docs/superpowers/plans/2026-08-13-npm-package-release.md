@@ -1,5 +1,10 @@
 # LocalApp npm Package Release Implementation Plan
 
+> **Historical status (superseded 2026-08-13):** This completed plan records the
+> former unscoped `localapp` publication design. The active replacement is
+> `docs/superpowers/plans/2026-08-13-scoped-npm-package-release.md`; the task
+> records below remain unchanged for historical accuracy.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Produce a complete, documented, fail-closed first-release flow for publishing the unscoped `localapp` package from the four-platform GitHub Release artifact with maintainer-controlled npm 2FA.

@@ -22,18 +22,19 @@ LocalApp 默认采用 **Named SQL first**。稳定后端能力由 migration、�
 
 ### 1. 安装工具
 
-LocalApp 只发布一个 npm 包；该包提供唯一的 `localapp` CLI、统一 Server、用户
+LocalApp 只发布一个 npm 包 `@patodo/localapp`；该包提供唯一的 `localapp` CLI、统一 Server、用户
 daemon 以及随包分发的按平台 native adapter。个人本地开发和运行不要求先部署
 远端 Server；需要 AI、团队协作或远端发布时，再绑定目标实例：
 
 ```bash
-npm install --global localapp
+npm install --global @patodo/localapp
 localapp server
 localapp server status
 localapp login http://127.0.0.1:<port> --profile local
 ```
 
-固定版本安装可使用 `npm install --global localapp@<version>`。npm registry 中的
+固定版本安装可使用 `npm install --global @patodo/localapp@<version>`；不进行全局安装时，
+可使用 `npx --package @patodo/localapp localapp --version` 检查 CLI。npm registry 中的
 `localapp-<version>.tgz` 是唯一用户发行物；Windows、macOS 和 Linux 的 native
 adapter 是包内受摘要约束的系统集成组件，不是第二个 CLI 或另一套运行时。
 

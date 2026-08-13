@@ -44,7 +44,7 @@ docker exec "${server_container}" node --input-type=module --eval "${health_chec
 docker exec "${server_container}" localapp --version | grep -Fq "${version_output}"
 
 if docker exec "${server_container}" sh -c \
-  "find /app /usr/local/lib/node_modules/localapp -type f \( -name 'localapp-cli-*' -o -name '*.msi' -o -name '*-setup.exe' \) -print -quit" \
+  "find /app /usr/local/lib/node_modules/@patodo/localapp -type f \( -name 'localapp-cli-*' -o -name '*.msi' -o -name '*-setup.exe' \) -print -quit" \
   | grep -q .; then
   echo "runtime image contains a replaced CLI or installer artifact" >&2
   exit 1

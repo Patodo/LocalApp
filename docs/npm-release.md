@@ -1,13 +1,13 @@
 # LocalApp npm 发布手册
 
-`localapp` 是唯一面向用户的 npm 包。GitHub Actions 负责在 Linux、macOS Apple
+`@patodo/localapp` 是唯一面向用户的 npm 包，安装后提供的可执行命令仍为 `localapp`。GitHub Actions 负责在 Linux、macOS Apple
 Silicon、macOS Intel 和 Windows 上分别构建 native adapter，再把 CLI、统一 Server、
 内置应用模板和四个平台 adapter 合并为一个 `localapp-<version>.tgz`。首发采用维护者
 手动发布：CI 不保存 npm token，也不执行真实的 `npm publish`。
 
 ## 发布边界
 
-- npm 包名固定为无 scope 的 `localapp`，可执行命令固定为 `localapp`。
+- npm 包名固定为 `@patodo/localapp`，可执行命令固定为 `localapp`。
 - 只允许发布 GitHub Release 中由 CI 生成的四平台 tgz。开发机运行
   `npm run package:localapp` 得到的包只包含当前主机 adapter，不得发布。
 - Git tag 必须严格等于 `v<packages/localapp/package.json 中的 version>`。
@@ -18,11 +18,11 @@ Silicon、macOS Intel 和 Windows 上分别构建 native adapter，再把 CLI、
 ## 1. 准备账户和仓库
 
 维护者需要拥有 npmjs.com 账户、已启用发布操作的双因素认证，并确认自己有权发布
-`localapp`。在首次发布前，名称查询通常返回 `E404`；发布过一次后则应显示当前版本：
+`@patodo/localapp`。在首次发布前，名称查询通常返回 `E404`；发布过一次后则应显示当前版本：
 
 ```bash
 npm config get registry
-npm view localapp name version --registry https://registry.npmjs.org/
+npm view @patodo/localapp name version --registry https://registry.npmjs.org/
 npm login --registry https://registry.npmjs.org/
 npm whoami --registry https://registry.npmjs.org/
 ```
@@ -117,15 +117,16 @@ npm 会按账户设置要求提示输入 2FA OTP。不要把 OTP、session token
 registry 可能需要短暂传播。确认版本和 tarball 后，从仓库内的全新 prefix 安装：
 
 ```bash
-npm view "localapp@${version}" name version dist.tarball dist.integrity \
+npm view "@patodo/localapp@${version}" name version dist.tarball dist.integrity \
   --registry https://registry.npmjs.org/
 acceptance_dir="$PWD/tmp/npm-acceptance-${version}"
 mkdir -p "$acceptance_dir"
-npm install --prefix "$acceptance_dir" --ignore-scripts "localapp@${version}"
+npm install --prefix "$acceptance_dir" --ignore-scripts "@patodo/localapp@${version}"
 PATH="$acceptance_dir/node_modules/.bin:$PATH" localapp --version
 PATH="$acceptance_dir/node_modules/.bin:$PATH" localapp server run --host 127.0.0.1 --port 0
 ```
 
+也可以不安装到全局 prefix，直接执行 `npx --package @patodo/localapp localapp --version`。
 最后一条命令应启动前台 Server；完成冒烟检查后用 `Ctrl-C` 停止。若发布失败且 npm
 未创建该版本，可修复原因后重试同一 tgz；若 registry 已存在该版本，无论内容是否有
 误都不得覆盖，必须提升版本、重新打 tag 并走完整流程。
