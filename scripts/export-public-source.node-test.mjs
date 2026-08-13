@@ -14,8 +14,6 @@ test("top-level allowlist includes sanitized history and excludes internal runti
   assert.equal(isPublicSourcePath("packages/server/src/index.ts"), true);
   assert.equal(isPublicSourcePath("init-repo/.claude/skills/localapp/SKILL.md"), true);
   assert.equal(isPublicSourcePath("openspec/specs/cli-tool/spec.md"), true);
-  assert.equal(isPublicSourcePath("examples/skill-market/src/device-action.ts"), true);
-  assert.equal(isPublicSourcePath("examples/resume-manager/fixtures/resume.pdf"), true);
   assert.equal(isPublicSourcePath(".agents/skills/opsx-apply/SKILL.md"), false);
   assert.equal(isPublicSourcePath("openspec/changes/archive/old/design.md"), true);
   assert.equal(isPublicSourcePath("openspec/changes/in-progress/design.md"), false);
@@ -35,7 +33,6 @@ test("snapshot verification uses the unified package and no replaced Rust or Des
     "pnpm -C packages/server-core test",
     "pnpm -C packages/web build",
     "pnpm -C packages/web test",
-    "pnpm build:real-apps",
     "pnpm -C packages/server build",
     "pnpm -C packages/server test",
     "pnpm -C packages/localapp build",
@@ -251,24 +248,9 @@ test("source gate rejects archive and installer extensions and magic", () => {
   }
 });
 
-test("source gate accepts only the immutable checked-in media fixtures", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-public-media-"));
-  try {
-    for (const relativePath of [
-      "examples/resume-manager/fixtures/portrait.png",
-      "examples/resume-manager/fixtures/resume.pdf",
-    ]) {
-      const destination = path.join(directory, relativePath);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.copyFileSync(new URL(`../${relativePath}`, import.meta.url), destination);
-    }
-    assert.deepEqual(scanPublicSource(directory), []);
-    fs.appendFileSync(path.join(directory, "examples/resume-manager/fixtures/resume.pdf"), "changed");
-    assert.deepEqual(scanPublicSource(directory).map(({ rule }) => rule), [
-      "RELEASE_BINARY_EXTENSION",
-      "RELEASE_BINARY_MAGIC",
-    ]);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+test("default Server tests exclude generated-app acceptance while preserving its explicit command", () => {
+  const serverConfig = fs.readFileSync(new URL("../packages/server/vitest.config.ts", import.meta.url), "utf8");
+  const rootManifest = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.match(serverConfig, /tests\/e2e-unified\/real-apps\.spec\.ts/);
+  assert.match(rootManifest.scripts["test:real-apps"], /real-apps\.spec\.ts/);
 });

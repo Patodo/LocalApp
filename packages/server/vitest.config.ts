@@ -5,6 +5,6 @@ export default defineConfig({
     pool: "forks",
     fileParallelism: false,
     testTimeout: 20_000,
-    exclude: ["**/dist/**", "**/node_modules/**", "tests/e2e-ui/**"],
+    exclude: ["**/dist/**", "**/node_modules/**", "tests/e2e-ui/**", "tests/e2e-unified/real-apps.spec.ts"],
   },
 });

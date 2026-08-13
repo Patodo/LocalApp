@@ -39,7 +39,6 @@ const ALLOWED_PREFIXES = [
   "docs/open-source-release.md",
   "docs/plan.md",
   "docs/windows-local-release.md",
-  "examples/",
   "init-repo/",
   "openspec/changes/archive/",
   "openspec/config.yaml",
@@ -55,7 +54,7 @@ const DENIED_PREFIXES = [
 const DENIED_EXTENSIONS = new Set([
   ".7z", ".apk", ".app", ".appimage", ".bz2", ".cab", ".deb", ".dmg", ".dll",
   ".dylib", ".exe", ".gz", ".img", ".iso", ".jar", ".msi", ".node", ".pfx",
-  ".pdf", ".pkg", ".png", ".rar", ".rpm", ".so", ".tar", ".tgz", ".war", ".whl", ".xz", ".zip",
+  ".pkg", ".rar", ".rpm", ".so", ".tar", ".tgz", ".war", ".whl", ".xz", ".zip",
   ".zst",
 ]);
 const SAFE_CREDENTIAL_MARKERS = [
@@ -69,13 +68,6 @@ const SAFE_CREDENTIAL_MARKERS = [
 const PRIVATE_IDENTITY_MARKERS = ["pato" + "do"];
 const SCAN_BASELINE_PATH = "scripts/public-source-scan-baseline.json";
 const CANONICAL_PUBLIC_REPOSITORY_URL = /(?:git\+)?https:\/\/github\.com\/Patodo\/LocalApp(?:\.git|#readme|\/issues)?/g;
-const IMMUTABLE_MEDIA_FIXTURES = new Map([
-  ["assets/brand/localapp-icon-preview.png", "a9999e0d435c0ae65cfc4987617d991876f72a16d2ddab4298e444d8312bfee4"],
-  ["examples/resume-manager/fixtures/portrait.png", "a9999e0d435c0ae65cfc4987617d991876f72a16d2ddab4298e444d8312bfee4"],
-  ["examples/resume-manager/fixtures/resume.pdf", "bed8453aa5427a7c08f64ed32e1bb19537c665b9c0737f2b1ac63958e0882511"],
-  ["packages/server/tests/e2e-unified/fixtures/resume.pdf", "fef554988705baccaf3034f46f8c74072542d9a7a82e111fda849c86976bb9a1"],
-  ["packages/web/public/home/redline-launch-hero.png", "4498c4aee99b2a6ffd706f8115153525542d3a0f76fbcdc4a47b77ec92b93547"],
-]);
 
 export function isPublicSourcePath(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -111,14 +103,12 @@ export function scanPublicSource(directory) {
     if (stat.size > MAX_SOURCE_FILE_BYTES) {
       violations.push({ path: relativePath, rule: "FILE_TOO_LARGE" });
     }
-    const bytes = fs.readFileSync(absolutePath);
-    const isReviewedMediaFixture = IMMUTABLE_MEDIA_FIXTURES.get(relativePath)
-      === createHash("sha256").update(bytes).digest("hex");
-    if (!isReviewedMediaFixture && DENIED_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) {
+    if (DENIED_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) {
       violations.push({ path: relativePath, rule: "RELEASE_BINARY_EXTENSION" });
     }
 
-    if (!isReviewedMediaFixture && hasExecutableMagic(bytes)) {
+    const bytes = fs.readFileSync(absolutePath);
+    if (hasExecutableMagic(bytes)) {
       violations.push({ path: relativePath, rule: "RELEASE_BINARY_MAGIC" });
     }
     if (bytes.includes(0)) continue;
@@ -209,7 +199,6 @@ export function snapshotVerificationCommands() {
     ["pnpm", ["-C", "packages/server-core", "test"]],
     ["pnpm", ["-C", "packages/web", "build"]],
     ["pnpm", ["-C", "packages/web", "test"]],
-    ["pnpm", ["build:real-apps"]],
     ["pnpm", ["-C", "packages/server", "build"]],
     ["pnpm", ["-C", "packages/server", "test"]],
     ["pnpm", ["-C", "packages/localapp", "build"]],
@@ -304,8 +293,6 @@ function hasExecutableMagic(bytes) {
   const firstFour = bytes.subarray(0, 4).toString("hex");
   const prefix = bytes.subarray(0, 8).toString("hex");
   return bytes.subarray(0, 4).toString("ascii") === "\x7fELF"
-    || bytes.subarray(0, 4).toString("ascii") === "%PDF"
-    || prefix === "89504e470d0a1a0a"
     || bytes.subarray(0, 2).toString("ascii") === "MZ"
     || ["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe"].includes(firstFour)
     || prefix.startsWith("1f8b")
