@@ -37,7 +37,7 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
       expectedTag: "v0.1.0",
       runNpmDryRun: async (candidate) => calls.push(candidate),
     });
-    assert.deepEqual(result, { name: "localapp", version: "0.1.0", targets: expectedTargets });
+    assert.deepEqual(result, { name: "@patodo/localapp", version: "0.1.0", targets: expectedTargets });
     assert.deepEqual(calls, [tarball]);
   });
 
@@ -90,7 +90,7 @@ async function createFixture(name, mutate = () => {}) {
     omit: new Set(),
     targets: [...expectedTargets],
     packageJson: {
-      name: "localapp",
+      name: "@patodo/localapp",
       version: "0.1.0",
       description: "Local-first application platform and unified Server CLI",
       license: "MIT",

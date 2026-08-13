@@ -49,8 +49,10 @@ test("npm-installed sole TypeScript localapp runs its embedded canonical Server 
   await fs.writeFile(path.join(consumerDirectory, "package.json"), '{"name":"isolated-localapp-consumer","private":true}\n');
   const installed = await run("npm", ["install", "--ignore-scripts", tarball], consumerDirectory, process.env, 120_000);
   assert.equal(installed.code, 0, installed.stderr);
-  const cli = path.join(consumerDirectory, "node_modules/localapp/bin/localapp.mjs");
-  const installedManifest = JSON.parse(await fs.readFile(path.join(consumerDirectory, "node_modules/localapp/package.json"), "utf8"));
+  const cli = path.join(consumerDirectory, "node_modules/.bin/localapp");
+  const installedManifest = JSON.parse(await fs.readFile(path.join(consumerDirectory, "node_modules/@patodo/localapp/package.json"), "utf8"));
+  assert.equal(installedManifest.name, "@patodo/localapp");
+  assert.deepEqual(installedManifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(JSON.stringify(installedManifest).includes("workspace:"), false);
   assert.deepEqual(installedManifest.dependencies ?? {}, {});
 

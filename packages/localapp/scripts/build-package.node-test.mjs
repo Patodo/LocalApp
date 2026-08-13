@@ -43,7 +43,7 @@ test("packed product exposes one localapp binary without workspace references", 
   const manifest = JSON.parse(await fs.readFile(path.join(result.outputDirectory, "package.json"), "utf8"));
   const artifact = JSON.parse(await fs.readFile(path.join(result.outputDirectory, ".localapp-artifact.json"), "utf8"));
 
-  assert.equal(manifest.name, "localapp");
+  assert.equal(manifest.name, "@patodo/localapp");
   assert.deepEqual(manifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
   assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.1.0");
@@ -105,7 +105,7 @@ test("packed tarball keeps the builtin runtime available to init", async (t) => 
   t.after(() => fs.rm(projectDirectory, { recursive: true, force: true }));
 
   await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
-  const tarball = path.join(packDirectory, "localapp-0.1.0.tgz");
+  const tarball = path.join(packDirectory, "patodo-localapp-0.1.0.tgz");
   await fs.mkdir(unpackDirectory, { recursive: true });
   await runProcess("tar", ["-xzf", tarball, "-C", unpackDirectory]);
   const packedPackage = path.join(unpackDirectory, "package");
@@ -149,7 +149,7 @@ test("pnpm-packed tarball wrapper handles missing executable and genuine child f
   }
 
   await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
-  await runProcess("tar", ["-xzf", path.join(packDirectory, "localapp-0.1.0.tgz"), "-C", unpackDirectory]);
+  await runProcess("tar", ["-xzf", path.join(packDirectory, "patodo-localapp-0.1.0.tgz"), "-C", unpackDirectory]);
   const wrapper = path.join(unpackDirectory, "package/template/runtime/sync-template.cjs");
 
   const missing = await runNode(wrapper, { PATH: emptyPath });

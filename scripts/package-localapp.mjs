@@ -9,7 +9,12 @@ const packageDirectory = path.join(repositoryRoot, "packages/localapp");
 const outputDirectory = path.join(repositoryRoot, "tmp/localapp-package");
 const stagingDirectory = path.join(repositoryRoot, "tmp/localapp-package-staging");
 const manifest = JSON.parse(await fs.readFile(path.join(packageDirectory, "package.json"), "utf8"));
-const expectedName = `localapp-${manifest.version}.tgz`;
+const releaseTargets = JSON.parse(await fs.readFile(path.join(repositoryRoot, "packages/shared/release-targets.json"), "utf8"));
+const npmPackage = releaseTargets.npmPackage;
+if (npmPackage?.name !== manifest.name || typeof npmPackage.filenameTemplate !== "string") {
+  throw new Error("LocalApp release target does not match the package manifest");
+}
+const expectedName = npmPackage.filenameTemplate.replace("{version}", manifest.version);
 
 await fs.rm(outputDirectory, { recursive: true, force: true });
 await fs.mkdir(outputDirectory, { recursive: true, mode: 0o755 });
@@ -23,9 +28,10 @@ try {
 }
 
 const entries = await fs.readdir(outputDirectory);
-if (entries.length !== 1 || entries[0] !== expectedName) {
+if (entries.length !== 1 || !entries[0].endsWith(".tgz")) {
   throw new Error(`LocalApp packaging produced unexpected artifacts: ${entries.join(", ")}`);
 }
+if (entries[0] !== expectedName) await fs.rename(path.join(outputDirectory, entries[0]), path.join(outputDirectory, expectedName));
 process.stdout.write(`${path.join(outputDirectory, expectedName)}\n`);
 
 function run(command, args, cwd) {

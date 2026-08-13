@@ -61,7 +61,7 @@ describe("release store", () => {
 
     expect(await verifyReleaseArtifact(published.releasePath)).toMatchObject({
       schemaVersion: 2,
-      name: "localapp",
+      name: "@patodo/localapp",
       entrypoint: "bin/localapp.mjs",
       bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs",
     });
@@ -314,7 +314,7 @@ async function writeArtifact(directory: string, marker: string): Promise<string>
   }];
   const values = new Map<string, string>([
     ["bin/localapp.mjs", `#!/usr/bin/env node\nconsole.log(${JSON.stringify(marker)});\n`],
-    ["package.json", `${JSON.stringify({ name: "localapp", version: "0.1.0", bin: { localapp: "bin/localapp.mjs" } })}\n`],
+    ["package.json", `${JSON.stringify({ name: "@patodo/localapp", version: "0.1.0", bin: { localapp: "bin/localapp.mjs" } })}\n`],
     ["runtime/bootstrap/localapp-daemon-bootstrap.mjs", "// stable launcher reads current.json\n"],
     ...[...nativeAssets].map(([assetPath, bytes]) => [`runtime/native/${assetPath}`, bytes] as [string, string]),
     ["runtime/native/adapter-manifest.json", `${JSON.stringify({ schemaVersion: 2, adapters: nativeAdapters }, null, 2)}\n`],
@@ -331,7 +331,7 @@ async function writeArtifact(directory: string, marker: string): Promise<string>
   })).sort((left, right) => left.path.localeCompare(right.path));
   const descriptor = {
     schemaVersion: 2,
-    name: "localapp",
+    name: "@patodo/localapp",
     version: "0.1.0",
     nodeMajor: 24,
     entrypoint: "bin/localapp.mjs",

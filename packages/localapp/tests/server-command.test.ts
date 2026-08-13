@@ -27,7 +27,7 @@ describe("server lifecycle command", () => {
   it.skipIf(process.platform === "win32")("resolves an npm bin symlink to the installed package artifact", async () => {
     const root = await fs.mkdtemp(path.join(process.cwd(), "../../tmp/task-13-entrypoint-"));
     try {
-      const packageRoot = path.join(root, "node_modules/localapp");
+      const packageRoot = path.join(root, "node_modules/@patodo/localapp");
       const binary = path.join(packageRoot, "bin/localapp.mjs");
       const shim = path.join(root, "node_modules/.bin/localapp");
       await fs.mkdir(path.dirname(binary), { recursive: true });

@@ -24,14 +24,16 @@ test("publishes the single localapp npm tarball as the only product asset", () =
       generatedAt: "2026-08-13T00:00:00.000Z",
     });
 
-    assert.deepEqual(result.manifest.assets.map(({ kind, filename: assetFilename, os, arch, signature }) => ({
+    assert.deepEqual(result.manifest.assets.map(({ kind, package: packageName, filename: assetFilename, os, arch, signature }) => ({
       kind,
+      package: packageName,
       filename: assetFilename,
       os,
       arch,
       signature,
     })), [{
       kind: "npm",
+      package: "@patodo/localapp",
       filename,
       os: "any",
       arch: "any",

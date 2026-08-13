@@ -13,7 +13,7 @@ export interface ReleaseArtifactFile {
 
 export interface ReleaseArtifactManifest {
   schemaVersion: 2;
-  name: "localapp";
+  name: "@patodo/localapp";
   version: string;
   nodeMajor: number;
   entrypoint: string;
@@ -149,7 +149,7 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
     "serverEntrypoint", "protocolVersions", "nativeAdapters",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))
-    || value.schemaVersion !== 2 || value.name !== "localapp"
+    || value.schemaVersion !== 2 || value.name !== "@patodo/localapp"
     || typeof value.version !== "string" || !VERSION.test(value.version)
     || value.nodeMajor !== 24
     || typeof value.entrypoint !== "string" || !isSafeRelativeFile(value.entrypoint)
@@ -177,7 +177,7 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
     || (typeof value.serverEntrypoint === "string" && !files.some((entry) => entry.path === value.serverEntrypoint))) throw invalidArtifact();
   const digestDescriptor = {
     schemaVersion: 2 as const,
-    name: "localapp" as const,
+    name: "@patodo/localapp" as const,
     version: value.version,
     nodeMajor: 24,
     entrypoint: value.entrypoint,
@@ -192,7 +192,7 @@ function parseArtifactManifest(value: unknown): ReleaseArtifactManifest {
   if (sha256(Buffer.from(JSON.stringify(digestDescriptor))) !== value.artifactDigest) throw invalidArtifact();
   const descriptor = {
     schemaVersion: 2 as const,
-    name: "localapp" as const,
+    name: "@patodo/localapp" as const,
     version: value.version,
     nodeMajor: 24,
     entrypoint: value.entrypoint,

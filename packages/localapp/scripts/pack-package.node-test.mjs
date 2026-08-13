@@ -28,6 +28,8 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.equal((await fs.stat(path.join(extracted, "package/.localapp-artifact.json"))).isFile(), true);
   assert.equal((await fs.stat(path.join(extracted, "package/README.md"))).isFile(), true);
   assert.equal((await fs.stat(path.join(extracted, "package/LICENSE"))).isFile(), true);
+  assert.equal(manifest.name, "@patodo/localapp");
+  assert.deepEqual(manifest.bin, { localapp: "bin/localapp.mjs" });
   assert.deepEqual(manifest.repository, {
     type: "git",
     url: "git+https://github.com/Patodo/LocalApp.git",
@@ -61,7 +63,7 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   const installedBins = (await fs.readdir(installedBinDirectory)).filter((entry) => !entry.startsWith("."));
   assert.equal(installedBins.length > 0, true);
   assert.equal(installedBins.every((entry) => entry.replace(/\.(?:cmd|ps1)$/i, "") === "localapp"), true);
-  assert.equal(await fs.stat(path.join(installPrefix, "node_modules/localapp/runtime/server/bin/server.mjs")).then(() => true, () => false), true);
+  assert.equal(await fs.stat(path.join(installPrefix, "node_modules/@patodo/localapp/runtime/server/bin/server.mjs")).then(() => true, () => false), true);
 });
 
 async function listFiles(directory, prefix = "") {

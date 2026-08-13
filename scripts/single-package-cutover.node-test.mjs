@@ -31,6 +31,7 @@ test("the repository exposes only the localapp npm product", async () => {
   assert.equal(serverManifest.private, true);
   assert.equal(serverManifest.bin, undefined);
   const localappManifest = await readJson("packages/localapp/package.json");
+  assert.equal(localappManifest.name, "@patodo/localapp");
   assert.deepEqual(localappManifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(Object.values(localappManifest).join("\n").includes("postinstall"), false);
 

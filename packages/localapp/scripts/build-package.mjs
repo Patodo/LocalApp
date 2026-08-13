@@ -67,7 +67,7 @@ export async function buildLocalAppPackage(options = {}) {
   await fs.chmod(path.join(binDirectory, "localapp.mjs"), 0o755);
 
   const packageJson = {
-    name: "localapp",
+    name: sourceManifest.name,
     version: sourceManifest.version,
     description: sourceManifest.description,
     license: sourceManifest.license,
@@ -246,7 +246,7 @@ try {
   const allowedManifestKeys = ["schemaVersion", "name", "version", "nodeMajor", "entrypoint", "bootstrapEntrypoint", "files", "artifactDigest", "bundleDigest", "serverBundleDigest", "serverEntrypoint", "protocolVersions", "nativeAdapters"];
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)
     || Object.keys(manifest).some((key) => !allowedManifestKeys.includes(key))
-    || manifest.schemaVersion !== 2 || manifest.name !== "localapp" || manifest.nodeMajor !== 24
+    || manifest.schemaVersion !== 2 || manifest.name !== "@patodo/localapp" || manifest.nodeMajor !== 24
     || manifest.version !== current.version || manifest.artifactDigest !== current.artifactDigest
     || manifest.entrypoint !== current.entrypoint || manifest.bootstrapEntrypoint !== current.bootstrapEntrypoint
     || !Array.isArray(manifest.files) || manifest.files.length === 0) throw new Error("invalid release manifest");
@@ -265,7 +265,7 @@ try {
     || !files.some((entry) => entry.path === manifest.bootstrapEntrypoint)) throw new Error("noncanonical release files");
   const descriptor = {
     schemaVersion: 2,
-    name: "localapp",
+    name: "@patodo/localapp",
     version: manifest.version,
     nodeMajor: 24,
     entrypoint: manifest.entrypoint,

@@ -1,5 +1,5 @@
 {
-  "name": "localapp",
+  "name": "@patodo/localapp",
   "version": "0.1.0",
   "description": "LocalApp command-line interface",
   "license": "MIT",

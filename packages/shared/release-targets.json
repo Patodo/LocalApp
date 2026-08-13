@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "npmPackage": {
-    "name": "localapp",
+    "name": "@patodo/localapp",
     "filenameTemplate": "localapp-{version}.tgz"
   },
   "nativeAdapters": [
