@@ -12,12 +12,16 @@ import type { OwnedProcess } from "../src/process/process-tree.js";
 
 const repositoryRoot = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(repositoryRoot, "tmp/task-7b-cleanup-failure-tests");
+const packageArtifact = path.join(testRoot, "package-artifact");
 const directories: string[] = [];
 // Intentionally failed cleanup retains the lock's FileHandle. Keep the daemon
 // strongly reachable for this test process so Node does not report a GC-close.
 const retainedDaemons: LocalAppDaemon[] = [];
 
-beforeAll(async () => { await fs.mkdir(testRoot, { recursive: true }); });
+beforeAll(async () => {
+  await fs.mkdir(testRoot, { recursive: true });
+  await buildLocalAppPackage({ outputDirectory: packageArtifact });
+}, 120_000);
 afterEach(async () => {
   vi.unstubAllGlobals();
   await Promise.all(directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -27,10 +31,8 @@ describe("daemon cleanup failures", () => {
   it.skipIf(process.platform === "win32")("uses a distinct per-boot notification token and owns manager cleanup", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "n-"));
     directories.push(root);
-    const artifact = path.join(root, "packed");
-    await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     let environment: NodeJS.ProcessEnv | undefined;
     const terminate = vi.fn(async () => undefined);
@@ -56,9 +58,8 @@ describe("daemon cleanup failures", () => {
 
   it.skipIf(process.platform === "win32")("tears down Server and lock when the initial notification snapshot fails", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "m-")); directories.push(root);
-    const artifact = path.join(root, "packed"); await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     const terminate = vi.fn(async () => undefined);
     const stop = vi.fn(async () => undefined);
@@ -76,9 +77,8 @@ describe("daemon cleanup failures", () => {
 
   it.skipIf(process.platform === "win32")("terminates Server even when notification manager stop rejects", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "s-")); directories.push(root);
-    const artifact = path.join(root, "packed"); await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     const terminate = vi.fn(async () => undefined);
     const failure = new Error("notification stop failed");
@@ -95,10 +95,8 @@ describe("daemon cleanup failures", () => {
   it.skipIf(process.platform === "win32")("retains the startup-owned Server and lock when readiness cleanup rejects", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "startup-"));
     directories.push(root);
-    const artifact = path.join(root, "packed");
-    await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     const failure = new Error("startup tree cleanup failed");
     const terminate = vi.fn(async () => { throw failure; });
     const daemon = new LocalAppDaemon({ layout, readinessTimeoutMs: 20, spawnOwnedProcess: () => silentOwnedProcess(terminate), createNotificationRuntime: noNotificationRuntime });
@@ -114,10 +112,8 @@ describe("daemon cleanup failures", () => {
   it.skipIf(process.platform === "win32")("reports unexpected post-ready Server exit only after owned cleanup", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "u-"));
     directories.push(root);
-    const artifact = path.join(root, "packed");
-    await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     let exit!: () => void;
     const terminate = vi.fn(async () => undefined);
@@ -132,10 +128,8 @@ describe("daemon cleanup failures", () => {
   it.skipIf(process.platform === "win32")("seals a restart in teardown so concurrent stop cannot spawn another Server", async () => {
     const root = await fs.mkdtemp(path.join(testRoot, "r-"));
     directories.push(root);
-    const artifact = path.join(root, "packed");
-    await buildLocalAppPackage({ outputDirectory: artifact });
     const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-    await publishRelease({ sourceDirectory: artifact, layout });
+    await publishRelease({ sourceDirectory: packageArtifact, layout });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
     let releaseTerminate!: () => void;
     const terminate = vi.fn(() => new Promise<void>((resolve) => { releaseTerminate = resolve; }));
@@ -188,10 +182,8 @@ describe("daemon cleanup failures", () => {
 async function startDaemonWithFailingServer() {
   const root = await fs.mkdtemp(path.join(testRoot, "fixture-"));
   directories.push(root);
-  const artifact = path.join(root, "packed");
-  await buildLocalAppPackage({ outputDirectory: artifact });
   const layout = createRuntimeLayout({ supportDir: path.join(root, "support"), runtimeDir: path.join(root, "run"), dataDir: path.join(root, "data") });
-  await publishRelease({ sourceDirectory: artifact, layout });
+  await publishRelease({ sourceDirectory: packageArtifact, layout });
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "ok" }), { status: 200 })));
   const failure = new Error("owned Server cleanup failed");
   const terminate = vi.fn(async () => { throw failure; });

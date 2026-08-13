@@ -82,11 +82,11 @@ mod platform {
             let handle = self.handle.take().ok_or(())?;
             let event = Arc::new(Mutex::new(ActionEvent::Disconnected));
             let captured = Arc::clone(&event);
-            handle.wait_for_action(move |response: &NotificationResponse| {
+            handle.wait_for_response(move |response: &NotificationResponse| {
                 let next = match response {
                     NotificationResponse::Default => ActionEvent::Invoked("default".into()),
                     NotificationResponse::Action(key) => ActionEvent::Invoked(key.clone()),
-                    NotificationResponse::Closed(_) => ActionEvent::Closed,
+                    NotificationResponse::Reply(_) | NotificationResponse::Closed(_) => ActionEvent::Closed,
                 };
                 if let Ok(mut slot) = captured.lock() { *slot = next; }
             }).map_err(|_| ())?;
