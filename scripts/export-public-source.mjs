@@ -70,8 +70,11 @@ const PRIVATE_IDENTITY_MARKERS = ["pato" + "do"];
 const SCAN_BASELINE_PATH = "scripts/public-source-scan-baseline.json";
 const CANONICAL_PUBLIC_REPOSITORY_URL = /(?:git\+)?https:\/\/github\.com\/Patodo\/LocalApp(?:\.git|#readme|\/issues)?/g;
 const IMMUTABLE_MEDIA_FIXTURES = new Map([
+  ["assets/brand/localapp-icon-preview.png", "a9999e0d435c0ae65cfc4987617d991876f72a16d2ddab4298e444d8312bfee4"],
   ["examples/resume-manager/fixtures/portrait.png", "a9999e0d435c0ae65cfc4987617d991876f72a16d2ddab4298e444d8312bfee4"],
   ["examples/resume-manager/fixtures/resume.pdf", "bed8453aa5427a7c08f64ed32e1bb19537c665b9c0737f2b1ac63958e0882511"],
+  ["packages/server/tests/e2e-unified/fixtures/resume.pdf", "fef554988705baccaf3034f46f8c74072542d9a7a82e111fda849c86976bb9a1"],
+  ["packages/web/public/home/redline-launch-hero.png", "4498c4aee99b2a6ffd706f8115153525542d3a0f76fbcdc4a47b77ec92b93547"],
 ]);
 
 export function isPublicSourcePath(filePath) {
