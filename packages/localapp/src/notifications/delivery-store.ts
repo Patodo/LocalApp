@@ -760,7 +760,11 @@ async function reclaimDeadLock(lockPath: string): Promise<boolean> {
   try {
     handle = await fs.open(lockPath, process.platform === "win32" ? "r" : constants.O_RDONLY | constants.O_NOFOLLOW);
     const opened = await handle.stat({ bigint: true });
-    if (!sameIdentity(before, opened)) throw unsafe("Notification delivery lock identity changed");
+    // Another valid owner can release and replace the lock between lstat and
+    // open. Treat that normal turnover as contention; the caller will wait
+    // and retry within its bounded deadline. Unsafe file types, links and
+    // permissions are still rejected before this point.
+    if (!sameIdentity(before, opened)) return false;
     const bytes = await handle.readFile();
     if (bytes.byteLength > 1_024) throw unsafe("Notification delivery lock is invalid");
     const value: unknown = JSON.parse(bytes.toString("utf8"));

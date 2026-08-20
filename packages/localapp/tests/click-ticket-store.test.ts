@@ -28,8 +28,8 @@ async function stores(now = new Date("2026-08-12T00:00:00.000Z")) {
   };
 }
 
-function notification(): DeliveryNotification {
-  return { id: "n-1", sequence: 1, app_owner: "owner", app_name: "app", title: "Title", body: null, url: "/owner/app/", priority: "high", created_at: "2026-08-12T00:00:00.000Z" };
+function notification(sequence = 1): DeliveryNotification {
+  return { id: `n-${sequence}`, sequence, app_owner: "owner", app_name: "app", title: "Title", body: null, url: "/owner/app/", priority: "high", created_at: "2026-08-12T00:00:00.000Z" };
 }
 
 describe("ClickTicketStore", () => {
@@ -47,12 +47,14 @@ describe("ClickTicketStore", () => {
   it("allows only one winner across independent store instances", async () => {
     const { delivery, now } = await stores();
     await delivery.baseline("local", 0);
-    const pending = await delivery.preparePending("local", notification());
-    if (pending === null) throw new Error("expected pending delivery");
-    await delivery.commitShown("local", 1);
     const instances = [delivery, ...Array.from({ length: 7 }, () => new DeliveryStore({ statePath: delivery.statePath, now }))];
-    const results = await Promise.all(instances.map((store) => store.consumeTicket(pending.ticket)));
-    expect(results.filter(Boolean)).toEqual([{ kind: "notification", sourceId: "local", notificationId: "n-1" }]);
+    for (let sequence = 1; sequence <= 12; sequence += 1) {
+      const pending = await delivery.preparePending("local", notification(sequence));
+      if (pending === null) throw new Error("expected pending delivery");
+      await delivery.commitShown("local", sequence);
+      const results = await Promise.all(instances.map((store) => store.consumeTicket(pending.ticket)));
+      expect(results.filter(Boolean)).toEqual([{ kind: "notification", sourceId: "local", notificationId: `n-${sequence}` }]);
+    }
   });
 
   it("supports source-only summary intent and expires without revealing metadata", async () => {
