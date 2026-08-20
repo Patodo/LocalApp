@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "exceptions": [
-    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "0ccc94b7c6f81906e191c899ae3a8b00f8ce4ead5eb42e2022c80ecdd7f0b1f1" },
+    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "ca2500e1d1cd399d45c8001691254b716f25da78e0c481e203f04556c78c667a" },
     { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
     { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
     { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
-    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1f85b18df64d09a7a9760617cd4e1178c263cbccd5c740914756b03bfbedfe86" },
+    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "cb1cc58600417c3c4b869b7d39259fb472a5346db078053a3e2f85ae86f7eac6" },
     { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
     { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
     { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },

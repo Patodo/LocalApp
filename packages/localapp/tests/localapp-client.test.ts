@@ -62,7 +62,7 @@ describe("LocalAppClient", () => {
     // Break caught: requests that omit either authentication or version metadata cannot satisfy the Server contract.
     const platformUrl = await listen(createServer((request, response) => {
       expect(request.headers["x-api-key"]).toBe("valid-key");
-      expect(request.headers["x-cli-version"]).toBe("0.2.0");
+      expect(request.headers["x-cli-version"]).toBe("0.2.1");
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"success":true,"data":{"id":"alice"}}');
     }));
