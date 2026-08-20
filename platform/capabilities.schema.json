@@ -11,6 +11,7 @@
     "content",
     "backend",
     "identity",
+    "collaboration",
     "verification"
   ],
   "properties": {
@@ -123,6 +124,33 @@
         "currentUser": { "type": "boolean" },
         "pageOwner": { "type": "boolean" },
         "groups": { "type": "boolean" }
+      }
+    },
+    "collaboration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordVersioned", "crdt"],
+      "properties": {
+        "recordVersioned": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "crdt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "protocol", "maxDocumentBytes", "awareness", "editingOverlay"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "protocol": { "const": "yjs-v1" },
+            "maxDocumentBytes": { "type": "integer", "minimum": 1024 },
+            "awareness": { "type": "boolean" },
+            "editingOverlay": { "type": "boolean" }
+          }
+        }
       }
     },
     "verification": {

@@ -72,6 +72,12 @@ backend/resources/<resource>/
 - 页面上的缓存与 localStorage 不能替代 Server 权限。
 - 通知先进入 Web 收件箱；应用只创建平台通知，不直接调用系统通知 API。
 
+## 实时协作
+
+普通业务记录优先使用 named SQL；需要 revision 冲突提示时使用 `record-versioned`。文本、富文本、白板等必须自动合并时才启用可选 `@localapp/crdt`，并先阅读 `.claude/skills/localapp-collaboration/SKILL.md`。
+
+CRDT 应用声明 `platformVersion: ^1.3`、`requires.primitives` 和 `manifest.collaboration.resources`。编辑位置通过稳定的 `data-localapp-edit-surface` / `data-localapp-edit-field` 暴露给 Platform Shell；不要自行实现用户身份、Awareness Server 或遮罩层。
+
 ## 文件、图片与 PDF
 
 上传使用 SDK content API，数据库只保存受保护的 file key、文件名、MIME、大小和业务 owner。下载和预览使用 SDK 返回的 authenticated content URL。

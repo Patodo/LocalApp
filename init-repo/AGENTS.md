@@ -31,3 +31,9 @@ Device Action 脚本是当前操作系统用户代码：保持输入校验、路
 - PDF 预览使用模板已固定的 `react-pdf` 与 `pdfjs-dist`，图片预览使用 `yet-another-react-lightbox` 或等价可访问组件，并清理 object URL。
 - 业务状态使用 `manifest.business` 与 named mutation/transition，权限由 Server 后端执行，前端权限组件只负责展示。
 - 应用专属的目录、市场元数据和外部工具适配器属于应用自身，不修改通用 Server 或 Device Action skill。
+
+## 实时协作
+
+普通表单记录继续使用 named SQL 或 `record-versioned` 协作；只有文本、富文本、白板等必须自动合并的内容才使用可选的 `@localapp/crdt`。使用前阅读 `.claude/skills/localapp-collaboration/SKILL.md`，在 manifest 声明 CRDT 资源、`platformVersion: ^1.3` 及所需 primitives。
+
+需要显示“谁正在编辑什么”时，在应用 DOM 上提供稳定的 `data-localapp-edit-surface` / `data-localapp-edit-field`，并通过 provider 发送 editing target。遮罩由 Platform Shell 绘制；应用不要发送 CSS selector、用户身份、颜色，也不要自行实现另一套 presence 服务。

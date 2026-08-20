@@ -48,6 +48,7 @@ import type { BusinessMetadata, CollaborationConfig, RouteAccess } from "../type
 
 const MAX_RETAINED_VERSIONS = 10;
 const INSTALL_TRANSACTION_FILE = ".app-install-transaction.json";
+const CRDT_MIN_PLATFORM_VERSION: [number, number, number] = [1, 3, 0];
 
 interface AppInstallTransaction {
   schemaVersion: 1;
@@ -1052,32 +1053,100 @@ function parseCollaborationConfig(manifest: Record<string, unknown>): Collaborat
   if (!isRecord(record.resources) || Object.keys(record.resources).length === 0) {
     throw new AppInstallError("APP_MANIFEST_INVALID", "collaboration.resources must declare at least one resource when collaboration.enabled is true", 400, "collaboration.resources");
   }
+  if (record.overlay !== undefined && typeof record.overlay !== "boolean") {
+    throw new AppInstallError("APP_MANIFEST_INVALID", "collaboration.overlay must be a boolean", 400, "collaboration.overlay");
+  }
   const resources: NonNullable<CollaborationConfig["resources"]> = {};
   for (const [name, value] of Object.entries(record.resources)) {
     if (!isRecord(value)) {
       throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name} must be an object`, 400, `collaboration.resources.${name}`);
     }
-    if (value.mode !== undefined && value.mode !== "record-versioned") {
-      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.mode only supports record-versioned`, 400, `collaboration.resources.${name}.mode`);
+    const mode = value.mode ?? "record-versioned";
+    if (mode !== "record-versioned" && mode !== "crdt") {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.mode must be record-versioned or crdt`, 400, `collaboration.resources.${name}.mode`);
     }
-    if (typeof value.mutation !== "string" || !value.mutation.trim()) {
-      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.mutation is required`, 400, `collaboration.resources.${name}.mutation`);
+    if (mode === "record-versioned") {
+      if (typeof value.mutation !== "string" || !value.mutation.trim()) {
+        throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.mutation is required`, 400, `collaboration.resources.${name}.mutation`);
+      }
+      if (value.history !== undefined && typeof value.history !== "boolean") {
+        throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.history must be a boolean`, 400, `collaboration.resources.${name}.history`);
+      }
+      resources[name] = {
+        mode: "record-versioned",
+        mutation: value.mutation.trim(),
+        ...(typeof value.history === "boolean" ? { history: value.history } : {}),
+      };
+      continue;
     }
-    if (value.history !== undefined && typeof value.history !== "boolean") {
-      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.history must be a boolean`, 400, `collaboration.resources.${name}.history`);
+
+    const levels = new Set(["public", "authenticated", "owner", "acl"]);
+    const read = value.read ?? "authenticated";
+    const write = value.write ?? "authenticated";
+    if (typeof read !== "string" || !levels.has(read)) {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.read is invalid`, 400, `collaboration.resources.${name}.read`);
+    }
+    if (typeof write !== "string" || !levels.has(write) || write === "public") {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.write cannot be public`, 400, `collaboration.resources.${name}.write`);
+    }
+    if ((read === "acl" || write === "acl") && (!Array.isArray(value.acl) || value.acl.length === 0 || value.acl.some((entry) => typeof entry !== "string" || !entry.trim()))) {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.acl is required for acl access`, 400, `collaboration.resources.${name}.acl`);
+    }
+    const maxCrdtDocumentBytes = PLATFORM_CAPABILITIES.collaboration.crdt.maxDocumentBytes;
+    if (value.maxDocumentBytes !== undefined && (typeof value.maxDocumentBytes !== "number" || !Number.isInteger(value.maxDocumentBytes) || value.maxDocumentBytes < 1024 || value.maxDocumentBytes > maxCrdtDocumentBytes)) {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.maxDocumentBytes must be between 1024 and ${maxCrdtDocumentBytes}`, 400, `collaboration.resources.${name}.maxDocumentBytes`);
+    }
+    if (value.awareness !== undefined && typeof value.awareness !== "boolean") {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.awareness must be a boolean`, 400, `collaboration.resources.${name}.awareness`);
+    }
+    if (value.overlay !== undefined && typeof value.overlay !== "boolean") {
+      throw new AppInstallError("APP_MANIFEST_INVALID", `collaboration.resources.${name}.overlay must be a boolean`, 400, `collaboration.resources.${name}.overlay`);
     }
     resources[name] = {
-      mode: "record-versioned",
-      mutation: value.mutation,
-      ...(typeof value.history === "boolean" ? { history: value.history } : {}),
+      mode: "crdt",
+      read: read as "public" | "authenticated" | "owner" | "acl",
+      write: write as "authenticated" | "owner" | "acl",
+      ...(Array.isArray(value.acl) ? { acl: value.acl.map((entry) => String(entry).trim()) } : {}),
+      ...(typeof value.maxDocumentBytes === "number" ? { maxDocumentBytes: value.maxDocumentBytes } : {}),
+      ...(typeof value.awareness === "boolean" ? { awareness: value.awareness } : {}),
+      ...(typeof value.overlay === "boolean" ? { overlay: value.overlay } : {}),
     };
   }
-  return { enabled: true, resources };
+  validateCrdtManifestRequirements(manifest, record, resources);
+  return { enabled: true, ...(typeof record.overlay === "boolean" ? { overlay: record.overlay } : {}), resources };
+}
+
+function validateCrdtManifestRequirements(
+  manifest: Record<string, unknown>,
+  collaboration: Record<string, unknown>,
+  resources: NonNullable<CollaborationConfig["resources"]>,
+): void {
+  const crdtResources = Object.values(resources).filter((resource) => resource.mode === "crdt");
+  if (crdtResources.length === 0) return;
+  const platformRange = typeof manifest.platformVersion === "string" ? manifest.platformVersion : "";
+  const minimum = minimumVersionForRange(platformRange);
+  if (!minimum || compareVersionTuple(minimum, CRDT_MIN_PLATFORM_VERSION) < 0) {
+    throw new AppInstallError("APP_MANIFEST_INVALID", "CRDT collaboration requires platformVersion ^1.3 or a range with minimum 1.3", 400, "platformVersion");
+  }
+  const requires = isRecord(manifest.requires) ? manifest.requires : undefined;
+  const primitives = Array.isArray(requires?.primitives)
+    ? new Set(requires.primitives.filter((value): value is string => typeof value === "string"))
+    : new Set<string>();
+  if (!primitives.has("crdt")) {
+    throw new AppInstallError("APP_MANIFEST_INVALID", "CRDT collaboration requires requires.primitives to include crdt", 400, "requires.primitives");
+  }
+  const usesOverlay = collaboration.overlay !== false && crdtResources.some((resource) =>
+    resource.awareness !== false && resource.overlay !== false,
+  );
+  if (usesOverlay && !primitives.has("editing-awareness-overlay")) {
+    throw new AppInstallError("APP_MANIFEST_INVALID", "CRDT editing overlay requires requires.primitives to include editing-awareness-overlay", 400, "requires.primitives");
+  }
 }
 
 function validateCollaborationMutations(collaboration: CollaborationConfig | undefined, mutations: Record<string, unknown>): string | null {
   if (!collaboration?.enabled) return null;
   for (const [resourceName, resource] of Object.entries(collaboration.resources ?? {})) {
+    if (resource.mode !== "record-versioned") continue;
     if (!mutations[resource.mutation]) {
       return `collaboration.resources.${resourceName}.mutation references unknown backend mutation: ${resource.mutation}`;
     }
@@ -1099,15 +1168,33 @@ function assertPlatformCompatible(range: string): void {
 function isCompatiblePlatformVersion(range: string, version: string): boolean {
   const trimmed = range.trim();
   if (trimmed.startsWith("^")) {
-    const requiredMajor = parseMajor(trimmed.slice(1));
-    return requiredMajor !== null && requiredMajor === parseMajor(version);
+    const minimum = parseRangeVersion(trimmed.slice(1));
+    const current = parseRangeVersion(version);
+    if (!minimum || !current) return false;
+    const maximum: [number, number, number] = minimum[0] > 0
+      ? [minimum[0] + 1, 0, 0]
+      : minimum[1] > 0 ? [0, minimum[1] + 1, 0] : [0, 0, minimum[2] + 1];
+    return compareVersionTuple(current, minimum) >= 0 && compareVersionTuple(current, maximum) < 0;
   }
-  const bounded = trimmed.match(/^>=\s*(\d+(?:\.\d+)*)\s+<\s*(\d+(?:\.\d+)*)$/);
+  const bounded = trimmed.match(/^>=\s*([^\s,]+)\s*,?\s*<\s*([^\s,]+)$/);
   if (!bounded) return false;
-  const currentMajor = parseMajor(version);
-  const minMajor = parseMajor(bounded[1]);
-  const maxMajor = parseMajor(bounded[2]);
-  return currentMajor !== null && minMajor !== null && maxMajor !== null && currentMajor >= minMajor && currentMajor < maxMajor;
+  const current = parseRangeVersion(version);
+  const minimum = parseRangeVersion(bounded[1]);
+  const maximum = parseRangeVersion(bounded[2]);
+  return current !== null && minimum !== null && maximum !== null
+    && compareVersionTuple(current, minimum) >= 0 && compareVersionTuple(current, maximum) < 0;
+}
+
+function minimumVersionForRange(range: string): [number, number, number] | null {
+  const trimmed = range.trim();
+  if (trimmed.startsWith("^")) return parseRangeVersion(trimmed.slice(1));
+  const bounded = trimmed.match(/^>=\s*([^\s,]+)\s*,?\s*<\s*([^\s,]+)$/);
+  return bounded ? parseRangeVersion(bounded[1]) : null;
+}
+
+function parseRangeVersion(value: string): [number, number, number] | null {
+  const match = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-[0-9A-Za-z.-]+)?$/.exec(value.trim());
+  return match ? [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)] : null;
 }
 
 function requiresBackendSecurity(platformVersion: string): boolean {
@@ -1129,11 +1216,6 @@ function compareVersionTuple(left: [number, number, number], right: [number, num
     if (left[index] !== right[index]) return left[index] - right[index];
   }
   return 0;
-}
-
-function parseMajor(value: string): number | null {
-  const major = Number(value.split(".")[0]);
-  return Number.isInteger(major) ? major : null;
 }
 
 function isMigrationError(error: unknown): error is Error & { filename: string } {

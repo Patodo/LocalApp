@@ -49,6 +49,9 @@ describe("builtin project initialization", () => {
     const packageJson = JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8"));
     expect(packageJson.dependencies["@localapp/server-core"]).toBe("file:./.localapp/runtime/server-core");
     expect(packageJson.dependencies["@localapp/sdk"]).toBe("file:./.localapp/runtime/sdk/core");
+    expect(packageJson.optionalDependencies["@localapp/crdt"]).toBe("file:./.localapp/runtime/sdk/crdt");
+    expect(await exists(path.join(project, ".localapp/runtime/sdk/crdt/src/index.ts"))).toBe(true);
+    expect(await exists(path.join(project, ".claude/skills/localapp-collaboration/SKILL.md"))).toBe(true);
     expect(packageJson.scripts.postinstall).toBe("node .localapp/runtime/sync-template.cjs");
     expect(await exists(path.join(project, ".localapp/runtime/sync-template.cjs"))).toBe(true);
     expect(await fs.readFile(path.join(project, ".npmrc"), "utf8")).toContain("public-hoist-pattern[]=pdfjs-dist");

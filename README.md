@@ -159,7 +159,7 @@ backend/
 - **访问控制**：公开、登录用户、所有者、成员、ACL 和资源级权限。
 - **数据契约**：SQL migration、Named SQL query/mutation、事务 mutation。
 - **文件能力**：应用文件上传、访问控制、归档导入导出。
-- **协作能力**：通知、Issue、评论、指派、在线用户和收藏。
+- **协作能力**：通知、Issue、评论、指派、在线用户、收藏，以及可选 Yjs CRDT 和平台级编辑位置遮罩。
 - **Agent 能力**：初始化模板内置开发规范和 skills，Platform Shell 提供 AI 入口。
 - **应用运维**：版本历史、平台配置、数据备份、下线、恢复出厂设置和删除。
 
@@ -223,6 +223,7 @@ packages/
 ├── sdk-core/     # SDK 核心
 ├── sdk-react/    # React SDK
 ├── sdk-agent/    # Agent/AI SDK
+├── crdt/         # 可选 CRDT provider、React Hook 与 Editing Awareness
 init-repo/        # 应用内置模板、示例契约和 Agent skills
 openspec/specs/   # 平台行为规格
 ```

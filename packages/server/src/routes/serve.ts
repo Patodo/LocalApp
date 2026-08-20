@@ -36,6 +36,7 @@ import {
   type VerificationSessionContext,
 } from "../lib/verification-sessions.js";
 import { isAppOffline } from "../lib/app-lifecycle.js";
+import { handleCrdtAwareness, handleCrdtEvents, handleCrdtSync, handleCrdtUpdate } from "./crdt.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -337,6 +338,22 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
 
         if (restPath === "api/collaboration/events" && req.method === "GET") {
           return handleCollaborationEvents(req, reply, dataDir(), userId, pageName);
+        }
+
+        if (restPath === "api/crdt/sync" && req.method === "POST") {
+          return handleCrdtSync(req, reply, dataDir(), userId, pageName);
+        }
+
+        if (restPath === "api/crdt/update" && req.method === "POST") {
+          return handleCrdtUpdate(req, reply, dataDir(), userId, pageName);
+        }
+
+        if (restPath === "api/crdt/events" && req.method === "GET") {
+          return handleCrdtEvents(req, reply, dataDir(), userId, pageName);
+        }
+
+        if (restPath === "api/crdt/awareness" && req.method === "POST") {
+          return handleCrdtAwareness(req, reply, dataDir(), userId, pageName);
         }
 
         if (restPath === "api/presence/events" && req.method === "GET") {
@@ -774,7 +791,7 @@ async function handleCollaborationCommit(
 
   const meta = readPageMeta(dataDir, userId, pageName);
   const collaborationResource = meta?.collaboration?.enabled ? meta.collaboration.resources?.[resource] : undefined;
-  if (!collaborationResource) {
+  if (!collaborationResource || collaborationResource.mode !== "record-versioned") {
     return reply.status(403).send({ success: false, error: `Collaboration resource is not declared: ${resource}` });
   }
 

@@ -16,7 +16,7 @@ function validateCapabilities(value) {
   if (value.$schema !== "./capabilities.schema.json") throw new Error("capabilities.$schema is invalid");
   if (value.schemaVersion !== 1) throw new Error("capabilities.schemaVersion must be 1");
   if (!/^\d+\.\d+\.\d+$/.test(value.platformVersion)) throw new Error("capabilities.platformVersion must be semver");
-  for (const key of ["content", "backend", "identity", "verification"]) {
+  for (const key of ["content", "backend", "identity", "collaboration", "verification"]) {
     assertObject(value[key], `capabilities.${key}`);
   }
   if (!Number.isInteger(value.content.upload?.maxBytes) || value.content.upload.maxBytes <= 0) {
@@ -30,6 +30,16 @@ function validateCapabilities(value) {
   }
   if (value.backend.hostedActions?.enabled !== false) {
     throw new Error("capabilities.backend.hostedActions must remain disabled while unstable");
+  }
+  if (value.collaboration.recordVersioned?.enabled !== true || value.collaboration.crdt?.enabled !== true) {
+    throw new Error("capabilities.collaboration must enable record-versioned and crdt");
+  }
+  if (value.collaboration.crdt.protocol !== "yjs-v1"
+    || !Number.isInteger(value.collaboration.crdt.maxDocumentBytes)
+    || value.collaboration.crdt.maxDocumentBytes < 1024
+    || value.collaboration.crdt.awareness !== true
+    || value.collaboration.crdt.editingOverlay !== true) {
+    throw new Error("capabilities.collaboration.crdt is invalid");
   }
   if (!Array.isArray(value.verification.identities)) {
     throw new Error("capabilities.verification.identities must be an array");

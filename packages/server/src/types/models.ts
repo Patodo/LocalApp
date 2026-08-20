@@ -176,14 +176,27 @@ export interface NotifyConfig {
   permission?: NotifyPermission;
 }
 
-export interface CollaborationResourceConfig {
+export interface RecordVersionedCollaborationResourceConfig {
   mode: "record-versioned";
   mutation: string;
   history?: boolean;
 }
 
+export interface CrdtCollaborationResourceConfig {
+  mode: "crdt";
+  read?: AccessLevel;
+  write?: Exclude<AccessLevel, "public">;
+  acl?: string[];
+  maxDocumentBytes?: number;
+  awareness?: boolean;
+  overlay?: boolean;
+}
+
+export type CollaborationResourceConfig = RecordVersionedCollaborationResourceConfig | CrdtCollaborationResourceConfig;
+
 export interface CollaborationConfig {
   enabled: boolean;
+  overlay?: boolean;
   resources?: Record<string, CollaborationResourceConfig>;
 }
 

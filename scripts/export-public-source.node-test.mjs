@@ -12,6 +12,7 @@ test("top-level allowlist includes sanitized history and excludes internal runti
   assert.equal(isPublicSourcePath("docs/local-runtime.md"), true);
   assert.equal(isPublicSourcePath("docs/npm-release.md"), true);
   assert.equal(isPublicSourcePath("docs/plan.md"), true);
+  assert.equal(isPublicSourcePath("packages/crdt/src/index.ts"), true);
   assert.equal(isPublicSourcePath("packages/server/src/index.ts"), true);
   assert.equal(isPublicSourcePath("init-repo/.claude/skills/localapp/SKILL.md"), true);
   assert.equal(isPublicSourcePath("openspec/specs/cli-tool/spec.md"), true);
@@ -36,6 +37,8 @@ test("snapshot verification uses the unified package and no replaced Rust or Des
     "pnpm -C packages/web test",
     "pnpm -C packages/server build",
     "pnpm -C packages/server test",
+    "pnpm -C packages/crdt build",
+    "pnpm -C packages/crdt test",
     "pnpm -C packages/localapp build",
     "pnpm -C packages/localapp test",
     "pnpm -C packages/localapp test:native",

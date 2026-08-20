@@ -50,7 +50,8 @@
     "yet-another-react-lightbox": "3.32.1"
   },
   "optionalDependencies": {
-    "@localapp/sdk-agent": "workspace:*"
+    "@localapp/sdk-agent": "workspace:*",
+    "@localapp/crdt": "workspace:*"
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.49",

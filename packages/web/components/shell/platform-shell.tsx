@@ -15,9 +15,20 @@ import { resolveNativeAppResourceBase, resolveNativeAppUrl } from "./app-resourc
 import { readIssueDeepLinkId, readIssueDeepLinkNumber, readIssuesWorkspaceOpen, updateIssueDeepLinkUrl, updateIssueNumberDeepLinkUrl, updateIssuesWorkspaceUrl } from "./issue-deep-link";
 import { listIssues } from "./issue-api";
 import { DEFAULT_ISSUE_LIST_QUERY } from "./issue-list-query";
+import { EditingAwarenessOverlay, type EditingOverlayPeer } from "./editing-awareness-overlay";
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isEditingOverlayPeer(value: unknown): value is EditingOverlayPeer {
+  if (!isObject(value) || typeof value.clientId !== "string" || !isObject(value.user) || !isObject(value.editing)) return false;
+  return typeof value.user.id === "string"
+    && typeof value.user.name === "string"
+    && (value.user.displayName === null || typeof value.user.displayName === "string")
+    && typeof value.user.color === "string"
+    && typeof value.editing.surfaceId === "string"
+    && (value.editing.fieldId === undefined || typeof value.editing.fieldId === "string");
 }
 
 function focusBusyPlatformIssueAttachmentQueue(): boolean {
@@ -84,6 +95,7 @@ type NativeToolRegistry = {
 
 const NATIVE_TOOL_REGISTRY_KEY = "__localapp_platform_tool_registry__";
 const PLATFORM_EDIT_SESSION_REGISTRY_KEY = "__localapp_platform_edit_session_registry__";
+const CRDT_EDITING_AWARENESS_EVENT = "localapp:crdt-editing-awareness";
 
 type NativeRegistryGlobal = typeof globalThis & {
   __localapp_platform_tool_registry__?: NativeToolRegistry | null;
@@ -148,6 +160,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
   const [appLoadError, setAppLoadError] = useState<string | null>(null);
   const [editSession, setEditSession] = useState<PlatformEditSession | null>(null);
   const [presenceSnapshot, setPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
+  const [editingSources, setEditingSources] = useState<Record<string, EditingOverlayPeer[]>>({});
   const [openIssueCount, setOpenIssueCount] = useState<number | null>(null);
   const openIssueCountRequestRef = useRef(0);
   const pagePath = `${userId}/${name}`;
@@ -157,6 +170,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
   const appOnline = metaMatchesCurrentApp && meta.lifecycleStatus === "online";
   const appOffline = metaMatchesCurrentApp && meta.lifecycleStatus === "offline";
   const isOwner = user?.id === userId;
+  const editingPeers = Object.values(editingSources).flat();
 
   const [aiMode, setAiMode] = useState<AiMode>(null);
   const [aiOpen, setAiOpen] = useState(false);
@@ -466,6 +480,29 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
   }, [appOnline, pagePath, ready]);
 
   useEffect(() => {
+    setEditingSources({});
+    if (!ready || !appOnline) return;
+    const onAwareness = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!isObject(detail) || typeof detail.sourceId !== "string" || detail.sourceId.length > 400 || !Array.isArray(detail.peers)) return;
+      const sourceId = detail.sourceId;
+      const peers = detail.peers.filter(isEditingOverlayPeer).slice(0, 128);
+      setEditingSources((current) => {
+        if (peers.length === 0) {
+          if (!(sourceId in current)) return current;
+          const next = { ...current };
+          delete next[sourceId];
+          return next;
+        }
+        if (!(sourceId in current) && Object.keys(current).length >= 128) return current;
+        return { ...current, [sourceId]: peers };
+      });
+    };
+    window.addEventListener(CRDT_EDITING_AWARENESS_EVENT, onAwareness);
+    return () => window.removeEventListener(CRDT_EDITING_AWARENESS_EVENT, onAwareness);
+  }, [appOnline, pagePath, ready]);
+
+  useEffect(() => {
     if (!ready || !appOnline || nativeAppLoadedRef.current === nativeAppLoadKey) return;
     nativeAppLoadedRef.current = nativeAppLoadKey;
     setAppLoadError(null);
@@ -752,6 +789,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
             />
           )}
         </div>
+        {appOnline && <EditingAwarenessOverlay peers={editingPeers} />}
         {showIssues && (
           <IssuesModal
             pagePath={pagePath}

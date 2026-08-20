@@ -118,6 +118,55 @@ describe("manifest.collaboration 贯通（upload → meta.json → /meta API）"
     expect(metaBody.data.collaboration).toBeUndefined();
   });
 
+  it("接受可选 CRDT 资源与平台遮罩配置", async () => {
+    const collaboration = {
+      enabled: true,
+      overlay: true,
+      resources: {
+        documents: {
+          mode: "crdt",
+          read: "authenticated",
+          write: "authenticated",
+          awareness: true,
+          overlay: true,
+          maxDocumentBytes: 5 * 1024 * 1024,
+        },
+      },
+    };
+    const res = await upload("collab-crdt-valid", {
+      platformVersion: "^1.3",
+      requires: { primitives: ["crdt", "editing-awareness-overlay"] },
+      collaboration,
+    });
+    expect(res.status).toBe(200);
+    expect(readMeta("collab-crdt-valid").collaboration).toEqual(collaboration);
+  });
+
+  it("拒绝未声明平台版本和 primitives 的 CRDT 应用", async () => {
+    const res = await upload("collab-crdt-requires-missing", {
+      platformVersion: "^1.2",
+      collaboration: {
+        enabled: true,
+        resources: { documents: { mode: "crdt" } },
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("platformVersion ^1.3");
+  });
+
+  it("拒绝 CRDT 匿名写入配置", async () => {
+    const res = await upload("collab-crdt-public-write", {
+      platformVersion: "^1.3",
+      requires: { primitives: ["crdt", "editing-awareness-overlay"] },
+      collaboration: {
+        enabled: true,
+        resources: { documents: { mode: "crdt", read: "public", write: "public" } },
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("write cannot be public");
+  });
+
   it("缺少 resource mutation 时拒绝上传", async () => {
     const res = await upload("collab-missing-mutation", {
       collaboration: { enabled: true, resources: { tasks: { mode: "record-versioned" } } },

@@ -163,6 +163,54 @@ describe("project checks", () => {
     }));
   });
 
+  it("accepts declared CRDT and editing-awareness platform primitives", async () => {
+    const projectDir = await createProject({
+      mutateManifest: (manifest) => {
+        manifest.platformVersion = "^1.3";
+        (manifest.requires as Record<string, unknown>).primitives = ["crdt", "editing-awareness-overlay"];
+        manifest.collaboration = {
+          enabled: true,
+          resources: { documents: { mode: "crdt" } },
+        };
+      },
+    });
+
+    const report = await checkProject({ projectDir, run: successfulRunner([]) });
+
+    expect(report.success).toBe(true);
+    expect(report.phases.find((phase) => phase.phase === "capabilities")?.status).toBe("passed");
+  });
+
+  it("rejects a CRDT manifest that does not declare its platform primitives", async () => {
+    const projectDir = await createProject({
+      mutateManifest: (manifest) => {
+        manifest.platformVersion = "^1.3";
+        manifest.collaboration = {
+          enabled: true,
+          resources: { documents: { mode: "crdt" } },
+        };
+      },
+    });
+
+    const report = await checkProject({ projectDir, run: successfulRunner([]) });
+
+    expect(report).toMatchObject({ success: false, failedPhase: "capabilities" });
+    expect(report.diagnostics.filter((diagnostic) => diagnostic.code === "CAPABILITY_REQUIREMENT_MISSING")).toHaveLength(2);
+  });
+
+  it("rejects unknown collaboration primitives", async () => {
+    const projectDir = await createProject({
+      mutateManifest: (manifest) => {
+        (manifest.requires as Record<string, unknown>).primitives = ["custom-crdt-transport"];
+      },
+    });
+
+    const report = await checkProject({ projectDir, run: successfulRunner([]) });
+
+    expect(report).toMatchObject({ success: false, failedPhase: "capabilities" });
+    expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "CAPABILITY_PRIMITIVE_UNSUPPORTED" }));
+  });
+
   it("uses the server-core Named SQL backend contract validator", async () => {
     // Break caught: superficial JSON checks can package Named SQL with undeclared parameters that the Server cannot execute.
     const projectDir = await createProject();

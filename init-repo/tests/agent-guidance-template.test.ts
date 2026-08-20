@@ -34,6 +34,20 @@ describe("generated application agent guidance", () => {
     expect(skill).not.toMatch(/SKILL market|skill market|installSkill/i);
   });
 
+  it("ships CRDT collaboration and editing-overlay guidance", () => {
+    const guidance = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
+    const skillPath = path.join(root, ".claude/skills/localapp-collaboration/SKILL.md");
+    expect(fs.existsSync(skillPath)).toBe(true);
+    const skill = fs.readFileSync(skillPath, "utf8");
+    expect(guidance).toContain("@localapp/crdt");
+    expect(fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8")).toContain("localapp-collaboration/SKILL.md");
+    expect(skill).toContain("data-localapp-edit-surface");
+    expect(skill).toContain("data-localapp-edit-field");
+    expect(skill).toContain("editing-awareness-overlay");
+    expect(skill).toContain("pointer-events: none");
+    expect(skill).toContain("不要创建应用私有 WebSocket Server");
+  });
+
   it("distinguishes application content upload from deployment compatibility transport", () => {
     const uploadSkill = fs.readFileSync(
       path.join(root, ".claude/skills/localapp-upload/SKILL.md"),

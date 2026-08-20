@@ -203,6 +203,8 @@ export function snapshotVerificationCommands() {
     ["pnpm", ["-C", "packages/web", "test"]],
     ["pnpm", ["-C", "packages/server", "build"]],
     ["pnpm", ["-C", "packages/server", "test"]],
+    ["pnpm", ["-C", "packages/crdt", "build"]],
+    ["pnpm", ["-C", "packages/crdt", "test"]],
     ["pnpm", ["-C", "packages/localapp", "build"]],
     ["pnpm", ["-C", "packages/localapp", "test"]],
     ["pnpm", ["-C", "packages/localapp", "test:native"]],

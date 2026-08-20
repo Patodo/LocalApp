@@ -4,6 +4,7 @@ import path from "node:path";
 const runtimeTargets: Record<string, string> = {
   "@localapp/app-kit": ".",
   "@localapp/backend": "sdk/backend",
+  "@localapp/crdt": "sdk/crdt",
   "@localapp/sdk": "sdk/core",
   "@localapp/sdk-agent": "sdk/agent",
   "@localapp/sdk-react": "sdk/react",

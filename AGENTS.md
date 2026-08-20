@@ -36,6 +36,12 @@
 
 添加导航栏新功能时，按此原则决定放置位置。
 
+## 实时协作边界
+
+- `@localapp/crdt` 是 builtin template 内的可选包；统一 Server 负责 CRDT 更新的认证、授权、持久化和传输，不要引入应用私有协作后端。
+- Awareness 是短期在线状态，不进入数据库、备份或 peer 数据同步；正式数据与 verification session 必须使用隔离事件 channel。
+- “谁正在编辑什么”的遮罩由 Platform Shell 根据应用声明的 `data-localapp-edit-surface` / `data-localapp-edit-field` 绘制。应用不得传任意 CSS selector、用户身份或颜色，遮罩不得拦截应用交互。
+
 ## 图标使用
 
 项目统一使用 [Lucide](https://lucide.dev/) 图标库：

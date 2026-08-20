@@ -25,6 +25,7 @@ export async function stageBuiltinTemplate({ repositoryRoot, outputDirectory, ve
   await stageRuntimePackage(repositoryRoot, outputDirectory, "sdk-core", "core");
   await stageRuntimePackage(repositoryRoot, outputDirectory, "sdk-react", "react");
   await stageRuntimePackage(repositoryRoot, outputDirectory, "sdk-agent", "agent");
+  await stageRuntimePackage(repositoryRoot, outputDirectory, "crdt", "crdt");
   await stageRuntimePackage(repositoryRoot, outputDirectory, "backend", "backend");
 
   const serverCoreDestination = path.join(outputDirectory, "runtime/server-core");

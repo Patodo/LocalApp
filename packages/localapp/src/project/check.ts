@@ -345,9 +345,40 @@ function validateCapabilities(manifest: ValidatedProjectManifest): CheckDiagnost
     if (identities.get(identity) !== true) diagnostics.push(errorDiagnostic("CAPABILITY_IDENTITY_UNSUPPORTED", "capabilities", `Target platform does not provide identity context ${identity}`, "manifest.json"));
   }
   for (const primitive of manifest.requires.primitives) {
-    diagnostics.push(errorDiagnostic("CAPABILITY_PRIMITIVE_UNSUPPORTED", "capabilities", `Target platform does not declare primitive ${primitive}`, "manifest.json"));
+    const supported = (primitive === "crdt" && PLATFORM_CAPABILITIES.collaboration.crdt.enabled)
+      || (primitive === "editing-awareness-overlay" && PLATFORM_CAPABILITIES.collaboration.crdt.editingOverlay);
+    if (!supported) {
+      diagnostics.push(errorDiagnostic("CAPABILITY_PRIMITIVE_UNSUPPORTED", "capabilities", `Target platform does not declare primitive ${primitive}`, "manifest.json"));
+    }
+  }
+  const collaboration = isRecord(manifest.raw.collaboration) ? manifest.raw.collaboration : undefined;
+  const resources = isRecord(collaboration?.resources) ? collaboration.resources : undefined;
+  const crdtResources = resources
+    ? Object.values(resources).filter((resource) => isRecord(resource) && resource.mode === "crdt")
+    : [];
+  if (collaboration?.enabled === true && crdtResources.length > 0) {
+    if (!manifest.requires.primitives.includes("crdt")) {
+      diagnostics.push(errorDiagnostic("CAPABILITY_REQUIREMENT_MISSING", "capabilities", "CRDT collaboration must declare requires.primitives: crdt", "manifest.json"));
+    }
+    const usesOverlay = collaboration.overlay !== false && crdtResources.some((resource) =>
+      isRecord(resource) && resource.awareness !== false && resource.overlay !== false,
+    );
+    if (usesOverlay && !manifest.requires.primitives.includes("editing-awareness-overlay")) {
+      diagnostics.push(errorDiagnostic("CAPABILITY_REQUIREMENT_MISSING", "capabilities", "CRDT editing overlay must declare requires.primitives: editing-awareness-overlay", "manifest.json"));
+    }
+    const minimum = minimumPlatformVersion(manifest.platformVersion);
+    if (!minimum || compareVersion(minimum, [1, 3, 0]) < 0) {
+      diagnostics.push(errorDiagnostic("CAPABILITY_PLATFORM_VERSION_TOO_LOW", "capabilities", "CRDT collaboration requires platformVersion ^1.3 or a range with minimum 1.3", "manifest.json"));
+    }
   }
   return diagnostics;
+}
+
+function minimumPlatformVersion(range: string): [number, number, number] | null {
+  const trimmed = range.trim();
+  if (trimmed.startsWith("^")) return parseVersion(trimmed.slice(1));
+  const match = /^>=\s*([^\s,]+)\s*,?\s*<\s*([^\s,]+)$/.exec(trimmed);
+  return match ? parseVersion(match[1]) : null;
 }
 
 function parseBackend(value: unknown): ProjectBackendConfig | undefined {

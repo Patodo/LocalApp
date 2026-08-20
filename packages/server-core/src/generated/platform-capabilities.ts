@@ -3,7 +3,7 @@
 export const PLATFORM_CAPABILITIES = {
   "$schema": "./capabilities.schema.json",
   "schemaVersion": 1,
-  "platformVersion": "1.2.0",
+  "platformVersion": "1.3.0",
   "content": {
     "upload": {
       "enabled": true,
@@ -96,6 +96,18 @@ export const PLATFORM_CAPABILITIES = {
     "pageOwner": true,
     "groups": true
   },
+  "collaboration": {
+    "recordVersioned": {
+      "enabled": true
+    },
+    "crdt": {
+      "enabled": true,
+      "protocol": "yjs-v1",
+      "maxDocumentBytes": 16777216,
+      "awareness": true,
+      "editingOverlay": true
+    }
+  },
   "verification": {
     "enabled": true,
     "isolatedDatabase": true,
@@ -112,4 +124,4 @@ export const PLATFORM_CAPABILITIES = {
 
 export type PlatformCapabilities = typeof PLATFORM_CAPABILITIES;
 
-export const PLATFORM_CAPABILITIES_SOURCE_SHA256 = "594d976eace4bcc0d9f031d7f5de1665db55a21043c69c52b1c531eda39c0cda";
+export const PLATFORM_CAPABILITIES_SOURCE_SHA256 = "e31ac24f30db9ad0f310123f063f4ee1f7a8dc0b9759c8b75e6e0a777a15bc0d";
