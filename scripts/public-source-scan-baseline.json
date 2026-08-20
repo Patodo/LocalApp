@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "exceptions": [
-    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "cefc6b8273cfaab58ceeaa6d458b6bfe575227bd27fbd8df5c75530abf51ac39" },
+    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "0ccc94b7c6f81906e191c899ae3a8b00f8ce4ead5eb42e2022c80ecdd7f0b1f1" },
     { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
     { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
     { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
-    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1d067f65d0b3c120c721ab0c14fc30116e2fefd8cdc68834407fbd1c86f7e5a1" },
+    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "1f85b18df64d09a7a9760617cd4e1178c263cbccd5c740914756b03bfbedfe86" },
     { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
     { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
     { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
@@ -26,9 +26,9 @@
     { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
     { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" },
     { "path": "scripts/check-npm-release.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "3fc149b1d1eb0373f02c3b099c88fe83b5d09c30cf8b3f50e14211c7606578a1" },
-    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "31f74d1dbaa32e0dc421d92fc92018371a357ae523fb3c22ef57f108189391c0" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "51f4e56400d384d13aec0afe49cdbab273e83e1f215ec9fc71aefd1082bbfbc0" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "51f4e56400d384d13aec0afe49cdbab273e83e1f215ec9fc71aefd1082bbfbc0" },
+    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "668e769fcffd6a1a8e2127c6dad600bb2dcfe53b4fd7a9ed48ae6fc1e5746918" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29" },
+    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29" },
     { "path": "scripts/release-workflow.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "2efd147a93e8b6142fbd31f9cd1bdf11376821b4ea613e62441851878bedbf1b" }
   ]
 }
