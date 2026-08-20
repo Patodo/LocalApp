@@ -18,7 +18,7 @@ const runtimePath = resolve(
 );
 
 describe("platform capability contract", () => {
-  it("declares the versioned content, backend, identity, and verification contract", async () => {
+  it("declares the versioned content, backend, identity, collaboration, and verification contract", async () => {
     const source = JSON.parse(await readFile(sourcePath, "utf8"));
     const schema = JSON.parse(await readFile(schemaPath, "utf8"));
 
@@ -29,12 +29,13 @@ describe("platform capability contract", () => {
         "content",
         "backend",
         "identity",
+        "collaboration",
         "verification",
       ]),
     );
     expect(source).toMatchObject({
       schemaVersion: 1,
-      platformVersion: "1.2.0",
+      platformVersion: "1.3.0",
       content: {
         upload: {
           enabled: true,
@@ -58,6 +59,16 @@ describe("platform capability contract", () => {
         },
       },
       identity: expect.any(Object),
+      collaboration: {
+        recordVersioned: { enabled: true },
+        crdt: {
+          enabled: true,
+          protocol: "yjs-v1",
+          maxDocumentBytes: 16 * 1024 * 1024,
+          awareness: true,
+          editingOverlay: true,
+        },
+      },
       verification: {
         enabled: true,
         isolatedDatabase: true,
