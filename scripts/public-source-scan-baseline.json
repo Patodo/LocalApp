@@ -1,34 +1,150 @@
 {
   "schemaVersion": 1,
   "exceptions": [
-    { "path": "packages/localapp/scripts/build-package.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "ca2500e1d1cd399d45c8001691254b716f25da78e0c481e203f04556c78c667a" },
-    { "path": "packages/localapp/src/commands/login.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec" },
-    { "path": "packages/localapp/tests/activation-broker.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b" },
-    { "path": "packages/localapp/tests/app-sync.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3" },
-    { "path": "packages/localapp/tests/localapp-client.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "cb1cc58600417c3c4b869b7d39259fb472a5346db078053a3e2f85ae86f7eac6" },
-    { "path": "packages/localapp/tests/login.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695" },
-    { "path": "packages/localapp/tests/native-adapter.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f" },
-    { "path": "packages/localapp/tests/notification-manager.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2" },
-    { "path": "packages/localapp/tests/release-store.test.ts", "rule": "LOCAL_ABSOLUTE_PATH", "sha256": "ed9ad9a4437316e7de6ddb09446dd655837d9ff85eb85c701414f72eb26c45b8" },
-    { "path": "packages/server/src/routes/device-control.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "570b1f02b1df63ab956605b24ded8b0bc5b3df6d6ca732315a657b6b547fde14" },
-    { "path": "packages/server/src/routes/device-notifications.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "5ab094359f0f0750be2f507205a514a91723636f3d1799a17209df7c4b6c314f" },
-    { "path": "packages/server/tests/config-store.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "e6e207d15266ed1cacfa2ab9dbf0e68139cfbacaba2df2e1bc4e0ebb944c8b11" },
-    { "path": "packages/server/tests/e2e-unified/real-apps.spec.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f58c5fd5f4a821cec2cda7a52fa1c6e612d82569f9fab8ed451d89119b9bb70" },
-    { "path": "packages/server/tests/integration/dev-routes.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b612098d2c36303917a599b5a267f62133e50c96adc62795929792524434f6e3" },
-    { "path": "packages/server/tests/integration/device-notifications.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "43773390344539bdb5c54bf6b01070fba9c3b615f9148ae3e7801341ea314887" },
-    { "path": "packages/server/tests/integration/homepage-redirect.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "bec85414573f4384dbae274c6804daad8024a547aa23b413b487352843c5ec7b" },
-    { "path": "packages/server/tests/integration/peers.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "ff6a1e130c39cc84daf4228f66629fb1be5a462943e68701132430471b027ad7" },
-    { "path": "packages/server/tests/integration/setup-flow.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "b971b752615f0f171c14d23243748aff4c97dd7fd68be5ebf87ed5f23befc925" },
-    { "path": "packages/server/tests/integration/system-settings.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "187cd7eefcba4f44cb3476a0aedd73832f9c2207cdf13b8b2a7c98f8b9a045b3" },
-    { "path": "packages/server/tests/process-tree.test.ts", "rule": "POSSIBLE_CREDENTIAL", "sha256": "2030b9baf1f03ac533a7f64d5ff6d4e8d90f6d8a3f6e729c98863d345643ba53" },
-    { "path": "packages/server/tests/supervisor.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "73162393a256b8159e2e7a4f364b50c4956ee676c9b7848146b47d40c8244cad" },
-    { "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65" },
-    { "path": "packages/web/components/peers/peers-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488" },
-    { "path": "packages/web/components/setup/setup-page.test.tsx", "rule": "POSSIBLE_CREDENTIAL", "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72" },
-    { "path": "scripts/check-npm-release.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "3fc149b1d1eb0373f02c3b099c88fe83b5d09c30cf8b3f50e14211c7606578a1" },
-    { "path": "scripts/export-public-source.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "668e769fcffd6a1a8e2127c6dad600bb2dcfe53b4fd7a9ed48ae6fc1e5746918" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29" },
-    { "path": "scripts/export-public-source.node-test.mjs", "rule": "POSSIBLE_CREDENTIAL", "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29" },
-    { "path": "scripts/release-workflow.node-test.mjs", "rule": "PRIVATE_TEST_IDENTITY", "sha256": "2efd147a93e8b6142fbd31f9cd1bdf11376821b4ea613e62441851878bedbf1b" }
+    {
+      "path": "packages/localapp/scripts/build-package.node-test.mjs",
+      "rule": "PRIVATE_TEST_IDENTITY",
+      "sha256": "c33e1271f1265af73dc5802469ffff38dca8359b2c990cf8d9b4f5badee52be8"
+    },
+    {
+      "path": "packages/localapp/src/commands/login.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "0102540c9deb0231c6306f9effd45ed00259a9040d53b69c447a6acc3b1313ec"
+    },
+    {
+      "path": "packages/localapp/tests/activation-broker.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "c222eb3b58bc0facf2b177c5ed46238738c2342f4c42e1e8f7fa669b92da246b"
+    },
+    {
+      "path": "packages/localapp/tests/app-sync.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "6a08896638df36d3ff2ad4d5b0a828c5383bc92d5da459c6dbef86d60ec702c3"
+    },
+    {
+      "path": "packages/localapp/tests/localapp-client.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "a5bebabe72991b0ce23b51d7bd31c37a65ac3b2f82d51f9adb8735cdbe157102"
+    },
+    {
+      "path": "packages/localapp/tests/login.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "ca99231b746bc0e8e0303af03a662e5702e99e3a73b6a1da8fa535665bfca695"
+    },
+    {
+      "path": "packages/localapp/tests/native-adapter.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f"
+    },
+    {
+      "path": "packages/localapp/tests/notification-manager.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "0a356692ee0daa5c89763baa8a4814ca086a9c3b24c84c3abe798dadb16fb6f2"
+    },
+    {
+      "path": "packages/localapp/tests/release-store.test.ts",
+      "rule": "LOCAL_ABSOLUTE_PATH",
+      "sha256": "ed9ad9a4437316e7de6ddb09446dd655837d9ff85eb85c701414f72eb26c45b8"
+    },
+    {
+      "path": "packages/server/src/routes/device-control.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "570b1f02b1df63ab956605b24ded8b0bc5b3df6d6ca732315a657b6b547fde14"
+    },
+    {
+      "path": "packages/server/src/routes/device-notifications.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "5ab094359f0f0750be2f507205a514a91723636f3d1799a17209df7c4b6c314f"
+    },
+    {
+      "path": "packages/server/tests/config-store.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "e6e207d15266ed1cacfa2ab9dbf0e68139cfbacaba2df2e1bc4e0ebb944c8b11"
+    },
+    {
+      "path": "packages/server/tests/e2e-unified/real-apps.spec.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "3f58c5fd5f4a821cec2cda7a52fa1c6e612d82569f9fab8ed451d89119b9bb70"
+    },
+    {
+      "path": "packages/server/tests/integration/dev-routes.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "b612098d2c36303917a599b5a267f62133e50c96adc62795929792524434f6e3"
+    },
+    {
+      "path": "packages/server/tests/integration/device-notifications.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "43773390344539bdb5c54bf6b01070fba9c3b615f9148ae3e7801341ea314887"
+    },
+    {
+      "path": "packages/server/tests/integration/homepage-redirect.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "bec85414573f4384dbae274c6804daad8024a547aa23b413b487352843c5ec7b"
+    },
+    {
+      "path": "packages/server/tests/integration/peers.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "ff6a1e130c39cc84daf4228f66629fb1be5a462943e68701132430471b027ad7"
+    },
+    {
+      "path": "packages/server/tests/integration/setup-flow.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "b971b752615f0f171c14d23243748aff4c97dd7fd68be5ebf87ed5f23befc925"
+    },
+    {
+      "path": "packages/server/tests/integration/system-settings.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "187cd7eefcba4f44cb3476a0aedd73832f9c2207cdf13b8b2a7c98f8b9a045b3"
+    },
+    {
+      "path": "packages/server/tests/process-tree.test.ts",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "2030b9baf1f03ac533a7f64d5ff6d4e8d90f6d8a3f6e729c98863d345643ba53"
+    },
+    {
+      "path": "packages/server/tests/supervisor.node-test.mjs",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "73162393a256b8159e2e7a4f364b50c4956ee676c9b7848146b47d40c8244cad"
+    },
+    {
+      "path": "packages/web/components/device-notifications/device-notifications-page.test.tsx",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65"
+    },
+    {
+      "path": "packages/web/components/peers/peers-page.test.tsx",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488"
+    },
+    {
+      "path": "packages/web/components/setup/setup-page.test.tsx",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72"
+    },
+    {
+      "path": "scripts/check-npm-release.node-test.mjs",
+      "rule": "PRIVATE_TEST_IDENTITY",
+      "sha256": "3fc149b1d1eb0373f02c3b099c88fe83b5d09c30cf8b3f50e14211c7606578a1"
+    },
+    {
+      "path": "scripts/export-public-source.mjs",
+      "rule": "PRIVATE_TEST_IDENTITY",
+      "sha256": "668e769fcffd6a1a8e2127c6dad600bb2dcfe53b4fd7a9ed48ae6fc1e5746918"
+    },
+    {
+      "path": "scripts/export-public-source.node-test.mjs",
+      "rule": "PRIVATE_TEST_IDENTITY",
+      "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29"
+    },
+    {
+      "path": "scripts/export-public-source.node-test.mjs",
+      "rule": "POSSIBLE_CREDENTIAL",
+      "sha256": "4962a560d89bb0dcf2f5128f0657b3e44bb325c4c69c283ba962056a03afbb29"
+    },
+    {
+      "path": "scripts/release-workflow.node-test.mjs",
+      "rule": "PRIVATE_TEST_IDENTITY",
+      "sha256": "2efd147a93e8b6142fbd31f9cd1bdf11376821b4ea613e62441851878bedbf1b"
+    }
   ]
 }
