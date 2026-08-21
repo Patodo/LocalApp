@@ -182,7 +182,9 @@ backend/
 | `localapp sync-template [--quiet]` | 更新 CLI 管理的 runtime 和 Agent skills |
 | `localapp eject-template` | 将托管模板转为应用自行维护（不可逆） |
 
-当前仅支持顶层 `localapp --help`；子命令参数以本表和已安装包文档为准。
+CLI 支持分层帮助：`localapp -h`、`localapp --help`、`localapp help <command>`、
+`localapp <command> --help`，以及 `localapp help app sync` / `localapp app sync -h`
+这类二级子命令帮助。参数错误会同时返回最相关的帮助命令提示。
 
 ## 本地开发
 

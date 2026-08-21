@@ -24,7 +24,7 @@ export async function createIpcServer(options: IpcServerOptions): Promise<IpcSer
   const sockets = new Set<net.Socket>();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket);
-    void serveConnection(socket, options.handle, options.afterResponse, options.timeoutMs ?? DEFAULT_TIMEOUT_MS).finally(() => sockets.delete(socket));
+    void serveConnection(socket, options.handle, options.afterResponse, options.timeoutMs ?? DEFAULT_TIMEOUT_MS, platform).finally(() => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(options.endpoint, () => { server.off("error", reject); resolve(); }); });
   let identity: FileIdentity | undefined;
@@ -37,7 +37,7 @@ export async function createIpcServer(options: IpcServerOptions): Promise<IpcSer
   return { close: () => (closing ??= closeServer(server, sockets, options.endpoint, identity, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)) };
 }
 
-function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"], afterResponse: IpcServerOptions["afterResponse"], timeoutMs: number): Promise<void> {
+function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"], afterResponse: IpcServerOptions["afterResponse"], timeoutMs: number, platform: NodeJS.Platform): Promise<void> {
   return new Promise((resolve) => {
     socket.setNoDelay(true);
     let bytes = Buffer.alloc(0);
@@ -77,14 +77,7 @@ function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"],
     timer.unref?.();
     socket.once("error", close);
     socket.once("close", close);
-    socket.on("data", (chunk: Buffer) => {
-      if (settled || requestEnded || bytes.byteLength + chunk.byteLength > CONTROL_FRAME_LIMIT_BYTES) {
-        if (!settled) fail("IPC_MESSAGE_TOO_LARGE");
-        return;
-      }
-      bytes = Buffer.concat([bytes, chunk]);
-    });
-    socket.once("end", () => {
+    const dispatch = () => {
       requestEnded = true;
       if (settled) return;
       try {
@@ -93,6 +86,22 @@ function serveConnection(socket: net.Socket, handle: IpcServerOptions["handle"],
       } catch (error) {
         fail(typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "IPC_REQUEST_INVALID");
       }
+    };
+    socket.on("data", (chunk: Buffer) => {
+      if (settled || requestEnded || bytes.byteLength + chunk.byteLength > CONTROL_FRAME_LIMIT_BYTES) {
+        if (!settled) fail("IPC_MESSAGE_TOO_LARGE");
+        return;
+      }
+      bytes = Buffer.concat([bytes, chunk]);
+      // Windows named pipes do not surface a client half-close as an
+      // end-of-stream event, so on win32 a complete frame dispatches on its
+      // terminating newline; duplicate-frame validation stays stream-wide
+      // wherever the stream end is observable.
+      if (platform === "win32" && bytes.indexOf(0x0a) >= 0) dispatch();
+    });
+    socket.once("end", () => {
+      if (requestEnded || settled) return;
+      dispatch();
     });
   });
 }

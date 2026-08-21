@@ -51,11 +51,11 @@ mod platform {
     use windows_sys::Win32::System::Registry::{RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ};
     use windows_sys::Win32::System::Threading::{CreateProcessW, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOW, CREATE_SUSPENDED};
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
+    use windows::core::{Error, HSTRING, Interface, PCWSTR, PWSTR};
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
     use windows::Win32::Foundation::PROPERTYKEY;
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -231,7 +231,14 @@ mod platform {
             shell_link.SetIconLocation(PCWSTR(executable_wide.as_ptr()), 0)?;
 
             let property_store: IPropertyStore = shell_link.cast()?;
-            let mut app_id_wide = wide(LOCALAPP_APP_USER_MODEL_ID);
+            // The shortcut property store takes ownership of a VT_LPWSTR value
+            // and releases it with the COM task allocator: the buffer must be
+            // CoTaskMemAlloc'd and must not be freed here, or the release path
+            // double-frees and corrupts the heap.
+            let app_id_wide = wide(LOCALAPP_APP_USER_MODEL_ID);
+            let allocation = unsafe { CoTaskMemAlloc(app_id_wide.len() * std::mem::size_of::<u16>()) };
+            if allocation.is_null() { return Err(Error::from_win32()); }
+            unsafe { std::ptr::copy_nonoverlapping(app_id_wide.as_ptr(), allocation.cast::<u16>(), app_id_wide.len()) };
             let property = PROPVARIANT {
                 Anonymous: PROPVARIANT_0 {
                     Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
@@ -239,7 +246,7 @@ mod platform {
                         wReserved1: 0,
                         wReserved2: 0,
                         wReserved3: 0,
-                        Anonymous: PROPVARIANT_0_0_0 { pwszVal: PWSTR(app_id_wide.as_mut_ptr()) },
+                        Anonymous: PROPVARIANT_0_0_0 { pwszVal: PWSTR(allocation.cast::<u16>()) },
                     }),
                 },
             };

@@ -25,7 +25,11 @@ export function createLinuxSystemdUserService(options: PlatformServiceOptions): 
       return { mode: "service", installed };
     },
     async start(signal?: AbortSignal): Promise<void> {
-      await runServiceCommand(options.run, withAbortSignal({ command: systemctl, args: ["--user", "start", UNIT_NAME] }, signal));
+      // start() is only reached when no daemon answered the control endpoint,
+      // but the previous one may still be draining after a stop: a plain start
+      // is silently dropped while the unit is deactivating, so restart the
+      // unit to replace whatever transition state it is in.
+      await runServiceCommand(options.run, withAbortSignal({ command: systemctl, args: ["--user", "restart", UNIT_NAME] }, signal));
     },
     async stop(): Promise<void> {
       const result = await options.run({ command: systemctl, args: ["--user", "stop", UNIT_NAME] });
@@ -70,8 +74,8 @@ Type=simple
 ExecStart=${systemdQuote(options.nodePath)} ${systemdQuote(options.layout.launcherPath)}
 Restart=on-failure
 RestartSec=2
-StandardOutput=append:${systemdQuote(options.layout.daemonLogPath)}
-StandardError=append:${systemdQuote(options.layout.daemonLogPath)}
+StandardOutput=append:${options.layout.daemonLogPath}
+StandardError=append:${options.layout.daemonLogPath}
 ${environment ? `${environment}\n` : ""}
 [Install]
 WantedBy=default.target

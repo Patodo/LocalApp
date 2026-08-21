@@ -364,7 +364,9 @@ async function verifyHealth(listenUrl: string, timeoutMs: number): Promise<void>
 
 async function readLock(lockPath: string): Promise<{ record: LockRecord; identity: FileIdentity }> {
   const before = await fs.lstat(lockPath, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink() || (Number(before.mode) & 0o077) !== 0) {
+  // NTFS reports plain files with world-writable permission bits, so those
+  // bits prove nothing on win32 and must not fail the stale-lock read.
+  if (!before.isFile() || before.isSymbolicLink() || (process.platform !== "win32" && (Number(before.mode) & 0o077) !== 0)) {
     throw lifecycleError("daemon_lock_invalid", "The LocalApp daemon lock is unsafe");
   }
   let value: unknown;

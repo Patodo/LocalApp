@@ -1,4 +1,5 @@
 import { LocalAppArgumentError, parseLocalAppArgs } from "./cli/args.js";
+import { helpHint, renderHelp } from "./cli/help.js";
 import { defaultCliIo, type CliIo, writeStructuredError } from "./cli/output.js";
 import { login } from "./commands/login.js";
 import { logout } from "./commands/logout.js";
@@ -18,6 +19,7 @@ import { runDev } from "./commands/dev.js";
 import { runServerCommand, runServerForeground } from "./commands/server.js";
 import { LocalAppDaemon } from "./daemon/daemon.js";
 import { createRuntimeLayout } from "./daemon/runtime-layout.js";
+import { verifyWindowsRuntimeOwnership } from "./daemon/windows-identity.js";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -28,7 +30,7 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
     if (command.kind === "version") {
       io.stdout(`localapp ${await loadPackageVersion()}\n`);
     } else if (command.kind === "help") {
-      io.stdout("Usage: localapp <command>\n");
+      io.stdout(renderHelp(command.topic));
     } else if (command.kind === "login") {
       return login(command, io);
     } else if (command.kind === "logout") {
@@ -78,7 +80,10 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
         runtimeDir: process.env.LOCALAPP_RUNTIME_DIR,
         dataDir: process.env.LOCALAPP_DATA_DIR,
       });
-      const daemon = new LocalAppDaemon({ layout });
+      const daemon = new LocalAppDaemon({
+        layout,
+        ...(layout.platform === "win32" ? { verifyWindowsCurrentUser: () => verifyWindowsRuntimeOwnership(layout) } : {}),
+      });
       const stop = () => { void daemon.stop().catch(() => undefined); };
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
@@ -91,6 +96,7 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       writeStructuredError(io, {
         code: error.code,
         message: error.message,
+        ...(error instanceof LocalAppArgumentError ? { hint: helpHint(argv) } : {}),
         ...(error instanceof LocalAppArgumentError && error.option !== undefined ? { option: error.option } : {}),
       });
       return 1;

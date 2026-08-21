@@ -4,10 +4,17 @@ import { runLocalApp } from "../main.js";
 
 describe("parseLocalAppArgs", () => {
   it.each([
-    ["help with no arguments", [], { kind: "help" }],
-    ["help command", ["help"], { kind: "help" }],
-    ["help flag", ["--help"], { kind: "help" }],
-    ["short help flag", ["-h"], { kind: "help" }],
+    ["help with no arguments", [], { kind: "help", topic: "root" }],
+    ["help command", ["help"], { kind: "help", topic: "root" }],
+    ["help flag", ["--help"], { kind: "help", topic: "root" }],
+    ["short help flag", ["-h"], { kind: "help", topic: "root" }],
+    ["explicit server help", ["help", "server"], { kind: "help", topic: "server" }],
+    ["explicit nested help", ["help", "app", "sync"], { kind: "help", topic: "app-sync" }],
+    ["server help flag", ["server", "--help"], { kind: "help", topic: "server" }],
+    ["server action short help", ["server", "run", "-h"], { kind: "help", topic: "server-run" }],
+    ["app help flag", ["app", "--help"], { kind: "help", topic: "app" }],
+    ["app command help flag", ["app", "install", "--help"], { kind: "help", topic: "app-install" }],
+    ["command help after an argument", ["init", "example", "-h"], { kind: "help", topic: "init" }],
     ["version command", ["version"], { kind: "version" }],
     ["version flag", ["--version"], { kind: "version" }],
     ["short version flag", ["-V"], { kind: "version" }],
@@ -56,7 +63,7 @@ describe("parseLocalAppArgs", () => {
     ["package build marker omitted", ["build"], "build requires --package"],
     ["missing app action", ["app"], "Unknown app command:"],
     ["missing app sync peer", ["app", "sync"], "app sync requires --peer"],
-    ["extra help argument", ["help", "extra"], "Unexpected argument: extra"],
+    ["unknown help topic", ["help", "extra"], "Unknown help topic: extra"],
   ])("rejects %s", (_description, argv, message) => {
     expect(() => parseLocalAppArgs(argv as string[])).toThrow(message);
   });
@@ -73,7 +80,36 @@ describe("parseLocalAppArgs", () => {
       error: {
         code: "invalid_arguments",
         option: "--unknown",
+        hint: "Run 'localapp server --help' for usage.",
       },
     });
+  });
+
+  it("points unknown nested commands to their parent help", async () => {
+    let stderr = "";
+
+    await expect(runLocalApp(["app", "unknown"], {
+      stdout: () => undefined,
+      stderr: (value) => { stderr += value; },
+    })).resolves.toBe(1);
+
+    expect(JSON.parse(stderr).error.hint).toBe("Run 'localapp app --help' for usage.");
+  });
+
+  it.each([
+    [["-h"], ["Commands:", "server [start]", "app install"]],
+    [["server", "run", "--help"], ["localapp server run [options]", "--data-dir <path>", "--host <address>"]],
+    [["help", "app", "sync"], ["localapp app sync --peer <name>", "--with-data", "--confirm-app <name>"]],
+  ])("prints useful help for %j", async (argv, expected) => {
+    let stdout = "";
+    let stderr = "";
+
+    await expect(runLocalApp(argv, {
+      stdout: (value) => { stdout += value; },
+      stderr: (value) => { stderr += value; },
+    })).resolves.toBe(0);
+
+    expect(stderr).toBe("");
+    for (const text of expected) expect(stdout).toContain(text);
   });
 });

@@ -1,5 +1,7 @@
+import { resolveHelpTopic, type LocalAppHelpTopic } from "./help.js";
+
 export type LocalAppCommand =
-  | { kind: "help" }
+  | { kind: "help"; topic: LocalAppHelpTopic }
   | { kind: "version" }
   | { kind: "server-start" }
   | { kind: "server-run"; dataDir?: string; host?: string; port?: number }
@@ -29,27 +31,30 @@ export class LocalAppArgumentError extends Error {
 export function parseLocalAppArgs(argv: string[]): LocalAppCommand {
   const args = [...argv];
   const command = args.shift();
-  if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+  if (command === undefined) return help("root");
+  if (command === "help") return parseHelp(args);
+  if (command === "--help" || command === "-h") {
     requireNoArguments(args);
-    return { kind: "help" };
+    return help("root");
   }
   if (command === "version" || command === "--version" || command === "-V") {
+    if (hasHelp(args)) return help("version");
     requireNoArguments(args);
     return { kind: "version" };
   }
 
   switch (command) {
     case "server": return parseServer(args);
-    case "init": return parseInit(args);
-    case "check": return parseCheck(args);
-    case "build": return parseBuild(args);
-    case "login": return parseLogin(args);
-    case "logout": return parseProfileCommand(args, "logout");
-    case "whoami": return parseProfileCommand(args, "whoami");
+    case "init": return hasHelp(args) ? help("init") : parseInit(args);
+    case "check": return hasHelp(args) ? help("check") : parseCheck(args);
+    case "build": return hasHelp(args) ? help("build") : parseBuild(args);
+    case "login": return hasHelp(args) ? help("login") : parseLogin(args);
+    case "logout": return hasHelp(args) ? help("logout") : parseProfileCommand(args, "logout");
+    case "whoami": return hasHelp(args) ? help("whoami") : parseProfileCommand(args, "whoami");
     case "app": return parseApp(args);
-    case "dev": requireNoArguments(args); return { kind: "dev" };
-    case "sync-template": return parseSyncTemplate(args);
-    case "eject-template": requireNoArguments(args); return { kind: "eject-template" };
+    case "dev": if (hasHelp(args)) return help("dev"); requireNoArguments(args); return { kind: "dev" };
+    case "sync-template": return hasHelp(args) ? help("sync-template") : parseSyncTemplate(args);
+    case "eject-template": if (hasHelp(args)) return help("eject-template"); requireNoArguments(args); return { kind: "eject-template" };
     case "_daemon": requireNoArguments(args); return { kind: "daemon" };
     default: throw new LocalAppArgumentError(`Unknown command: ${command}`, command);
   }
@@ -57,11 +62,14 @@ export function parseLocalAppArgs(argv: string[]): LocalAppCommand {
 
 function parseServer(args: string[]): LocalAppCommand {
   const action = args.shift();
+  if (isHelpFlag(action)) return help("server");
   if (action === undefined || action === "start") {
+    if (hasHelp(args)) return help("server-start");
     requireNoArguments(args);
     return { kind: "server-start" };
   }
   if (action === "run") {
+    if (hasHelp(args)) return help("server-run");
     const options = consumeOptions(args, new Set(["--data-dir", "--host", "--port"]));
     requireNoPositionals(options);
     const port = value(options, "--port");
@@ -73,6 +81,7 @@ function parseServer(args: string[]): LocalAppCommand {
     };
   }
   if (["stop", "restart", "status", "logs", "uninstall"].includes(action)) {
+    if (hasHelp(args)) return help(`server-${action}` as LocalAppHelpTopic);
     requireNoArguments(args);
     return { kind: "server-control", action: action as "stop" | "restart" | "status" | "logs" | "uninstall" };
   }
@@ -129,7 +138,9 @@ function parseProfileCommand(args: string[], command: "logout" | "whoami"): Loca
 
 function parseApp(args: string[]): LocalAppCommand {
   const command = args.shift();
+  if (isHelpFlag(command)) return help("app");
   if (command === "install") {
+    if (hasHelp(args)) return help("app-install");
     const options = consumeOptions(args, new Set(["--target", "--package"]));
     requireNoPositionals(options);
     const target = value(options, "--target");
@@ -137,6 +148,7 @@ function parseApp(args: string[]): LocalAppCommand {
     return { kind: "app-install", ...(target === undefined ? {} : { target }), ...(packagePath === undefined ? {} : { packagePath }) };
   }
   if (command === "sync") {
+    if (hasHelp(args)) return help("app-sync");
     const options = consumeOptions(args, new Set(["--peer", "--target", "--with-data", "--confirm-app"]), new Set(["--with-data"]));
     requireNoPositionals(options);
     const peer = value(options, "--peer");
@@ -152,6 +164,28 @@ function parseApp(args: string[]): LocalAppCommand {
     };
   }
   throw new LocalAppArgumentError(`Unknown app command: ${command ?? ""}`, command);
+}
+
+function parseHelp(args: string[]): LocalAppCommand {
+  const topicPath = args.filter((argument) => !isHelpFlag(argument));
+  const topic = resolveHelpTopic(topicPath);
+  if (topic === undefined) {
+    const requested = topicPath.join(" ");
+    throw new LocalAppArgumentError(`Unknown help topic: ${requested}`, topicPath[0]);
+  }
+  return help(topic);
+}
+
+function help(topic: LocalAppHelpTopic): LocalAppCommand {
+  return { kind: "help", topic };
+}
+
+function hasHelp(args: string[]): boolean {
+  return args.some(isHelpFlag);
+}
+
+function isHelpFlag(argument: string | undefined): boolean {
+  return argument === "--help" || argument === "-h";
 }
 
 function parseSyncTemplate(args: string[]): LocalAppCommand {
