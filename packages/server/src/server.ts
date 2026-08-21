@@ -12,6 +12,7 @@ import { keysRoutes } from "./routes/keys.js";
 import { uploadRoutes } from "./routes/upload.js";
 import { pagesRoutes } from "./routes/pages.js";
 import { serveRoutes } from "./routes/serve.js";
+import { starterDocRoutes } from "./routes/starter-doc.js";
 import { schemasRoutes } from "./routes/schemas.js";
 import { authenticatedCliRoutes } from "./routes/cli.js";
 import { depsRoutes } from "./routes/deps.js";
@@ -152,6 +153,7 @@ async function registerServerPluginsAndRoutes(
   await peerProtocolRoutes(app);
   await syncTargetRoutes(app, syncTarget);
   app.get("/health", async () => ({ status: "ok" }));
+  starterDocRoutes(app);
 
   const webRoot = options.webRoot ?? path.resolve(__dirname, "../../web/out");
   await app.register(fastifyStatic, { root: path.join(webRoot, "_next"), prefix: "/_next", decorateReply: false });

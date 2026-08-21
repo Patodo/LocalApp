@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "../app/(dashboard)/page";
@@ -51,5 +51,26 @@ describe("public home", () => {
     expect(screen.getByText("平台能力")).toBeInTheDocument();
     expect(screen.queryByText("Agent 应用发射台")).not.toBeInTheDocument();
     expect(screen.queryByText("CDN")).not.toBeInTheDocument();
+  });
+
+  it("offers a copyable starter.md instruction for agents", async () => {
+    render(<HomePage />);
+
+    expect(await screen.findByText("交给 Agent 一句话")).toBeInTheDocument();
+    const phrase = screen.getByText(/阅读 http:\/\/localhost:3000\/starter\.md 的说明创建应用/);
+    expect(phrase).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看 starter.md 完整说明" })).toHaveAttribute("href", "/starter.md");
+  });
+
+  it("shows only valid CLI commands in the workflow", async () => {
+    render(<HomePage />);
+
+    await screen.findByRole("heading", { name: "让 Agent 交付真正可运行的业务应用" });
+    fireEvent.click(screen.getByText("连接实例"));
+    expect(screen.getByText("localapp login http://localhost:3000")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("创建并开发"));
+    expect(screen.getByText("localapp init my-app")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("检查并发布"));
+    expect(screen.getByText("localapp check && localapp app install")).toBeInTheDocument();
   });
 });

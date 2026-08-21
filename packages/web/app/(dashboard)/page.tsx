@@ -22,6 +22,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { useAuthModals } from "@/components/auth-modals/auth-provider";
+import { AgentStarterHint } from "@/components/agent-starter-hint";
 
 interface UserData {
   id: string;
@@ -141,9 +142,9 @@ function PublicHome() {
 
   const workflow = [
     { command: "localapp --version", title: "下载 CLI", text: "从下方选择对应平台下载命令行工具，并确认安装版本。", icon: Download },
-    { command: `localapp login --server-url ${serverOrigin}`, title: "连接实例", text: "使用 API Key 将 CLI 绑定到当前 LocalApp 实例。", icon: LogIn },
-    { command: "localapp init --name my-app", title: "创建并开发", text: "从内置模板开始，让 Agent 直接实现可维护的 React 业务应用。", icon: Package },
-    { command: "localapp check && localapp app install --target local", title: "检查并发布", text: "一次完成契约、测试、构建、安装和正式路径验收。", icon: UploadCloud },
+    { command: `localapp login ${serverOrigin}`, title: "连接实例", text: "使用 API Key 将 CLI 绑定到当前 LocalApp 实例。", icon: LogIn },
+    { command: "localapp init my-app", title: "创建并开发", text: "从内置模板开始，让 Agent 直接实现可维护的 React 业务应用。", icon: Package },
+    { command: "localapp check && localapp app install", title: "检查并发布", text: "一次完成契约、测试、构建、安装和正式路径验收。", icon: UploadCloud },
   ];
 
   const gates = [
@@ -372,6 +373,12 @@ function PublicHome() {
                 </div>
               </div>
             </div>
+
+            <div className="relative z-10 min-[960px]:col-span-7">
+              <div className="ml-auto max-w-[760px] rounded-xl border border-black/10 bg-white/86 p-5 shadow-[0_18px_54px_rgba(17,17,17,0.1)] backdrop-blur">
+                <AgentStarterHint />
+              </div>
+            </div>
           </div>
 
           <div className="mb-3 grid overflow-hidden rounded-xl border border-black/10 bg-white/90 shadow-[0_18px_54px_rgba(17,17,17,0.1)] backdrop-blur min-[960px]:grid-cols-[1.15fr_1.2fr_1.05fr]">
@@ -500,7 +507,13 @@ function DashboardHome({ user }: { user: UserData }) {
           <EmptyState>应用列表暂时加载失败。</EmptyState>
         ) : apps.data.length === 0 ? (
           <EmptyState>
-            暂无应用。使用 <code className="rounded bg-muted px-1 py-0.5 text-xs">localapp init</code> 创建第一个应用。
+            <div className="space-y-4">
+              <p>
+                暂无应用。使用 <code className="rounded bg-muted px-1 py-0.5 text-xs">localapp init</code> 创建第一个应用，
+                或者直接把下面这句话发给你的 AI Agent：
+              </p>
+              <AgentStarterHint compact />
+            </div>
           </EmptyState>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
