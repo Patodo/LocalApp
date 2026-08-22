@@ -46,7 +46,7 @@ test("packed product exposes one localapp binary without workspace references", 
   assert.equal(manifest.name, "@patodo/localapp");
   assert.deepEqual(manifest.bin, { localapp: "bin/localapp.mjs" });
   assert.equal(JSON.stringify(manifest).includes("workspace:"), false);
-  assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.2.2");
+  assert.equal(await run(result.outputDirectory, ["--version"]), "localapp 0.2.3");
   assert.match(await run(result.outputDirectory, ["-h"]), /Commands:\n[\s\S]*server \[start\][\s\S]*app install/);
   assert.match(await run(result.outputDirectory, ["server", "run", "--help"]), /--data-dir <path>[\s\S]*--host <address>[\s\S]*--port <number>/);
   assert.match(await run(result.outputDirectory, ["help", "app", "sync"]), /--peer <name>[\s\S]*--with-data[\s\S]*--confirm-app <name>/);
@@ -95,7 +95,7 @@ test("direct builder execution works from a source path containing spaces", asyn
 
   assert.equal(result.code, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).outputDirectory, outputDirectory);
-  assert.equal(await run(outputDirectory, ["--version"]), "localapp 0.2.2");
+  assert.equal(await run(outputDirectory, ["--version"]), "localapp 0.2.3");
 });
 
 test("builder rejects a source package identity that diverges from the shared release target", async (t) => {
@@ -134,7 +134,7 @@ test("packed tarball keeps the builtin runtime available to init", async (t) => 
   t.after(() => fs.rm(projectDirectory, { recursive: true, force: true }));
 
   await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
-  const tarball = path.join(packDirectory, "patodo-localapp-0.2.2.tgz");
+  const tarball = path.join(packDirectory, "patodo-localapp-0.2.3.tgz");
   await fs.mkdir(unpackDirectory, { recursive: true });
   await runProcess("tar", ["-xzf", tarball, "-C", unpackDirectory]);
   const packedPackage = path.join(unpackDirectory, "package");
@@ -178,7 +178,7 @@ test("pnpm-packed tarball wrapper handles missing executable and genuine child f
   }
 
   await runProcess("pnpm", ["-C", packageDirectory, "pack", "--pack-destination", packDirectory]);
-  await runProcess("tar", ["-xzf", path.join(packDirectory, "patodo-localapp-0.2.2.tgz"), "-C", unpackDirectory]);
+  await runProcess("tar", ["-xzf", path.join(packDirectory, "patodo-localapp-0.2.3.tgz"), "-C", unpackDirectory]);
   const wrapper = path.join(unpackDirectory, "package/template/runtime/sync-template.cjs");
 
   const missing = await runNode(wrapper, { PATH: emptyPath });
