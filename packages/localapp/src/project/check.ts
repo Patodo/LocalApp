@@ -246,11 +246,15 @@ export async function detectPackageManager(projectDir: string, packageJson?: Rec
 }
 
 export async function runProjectCommand(invocation: ProjectCommandInvocation): Promise<ProjectCommandResult> {
-  const command = process.platform === "win32" ? `${invocation.command}.cmd` : invocation.command;
+  // Node refuses to spawn .cmd/.bat shims without a shell since the
+  // CVE-2024-27980 fix; the arguments are fixed internal values, so a shell
+  // spawn on win32 carries no injection surface.
+  const isWindows = process.platform === "win32";
+  const command = isWindows ? `${invocation.command}.cmd` : invocation.command;
   return new Promise((resolve, reject) => {
     const child = spawn(command, invocation.args, {
       cwd: invocation.cwd,
-      shell: false,
+      shell: isWindows,
       stdio: "ignore",
       windowsHide: true,
       signal: invocation.signal,

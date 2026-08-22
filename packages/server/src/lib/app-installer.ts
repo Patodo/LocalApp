@@ -713,8 +713,15 @@ function durableCopyFile(source: string, target: string): void {
 }
 
 function syncFile(filePath: string): void {
-  const descriptor = fs.openSync(filePath, "r");
-  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  // Windows FlushFileBuffers needs a write-capable handle; a read-only
+  // descriptor always fails there, so durability failures caused purely by
+  // handle access are ignored like the directory fsync below.
+  const descriptor = fs.openSync(filePath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    if (!["EPERM", "EACCES", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  } finally { fs.closeSync(descriptor); }
 }
 
 function sha256FileSync(filePath: string): string {
