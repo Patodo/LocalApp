@@ -4,7 +4,7 @@
     {
       "path": "packages/localapp/scripts/build-package.node-test.mjs",
       "rule": "PRIVATE_TEST_IDENTITY",
-      "sha256": "0575cce6cf5be998441fcb44f833eb1761a6bd9bc6d1a6a528cab540319265cc"
+      "sha256": "02d500d2eab0cb10042e430ac16d2fc10a6490b68a8128494359f19c6d5c49ea"
     },
     {
       "path": "packages/localapp/src/commands/login.ts",
@@ -24,7 +24,7 @@
     {
       "path": "packages/localapp/tests/localapp-client.test.ts",
       "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "96d18d7100831f91c43b2374d8cf4abe6a0a4828a80d7b1e87e7173adee229f3"
+      "sha256": "c0bf323661d7703aa40395e2e57cc75a38e3ad78410b3909b3bc5f7548470ac8"
     },
     {
       "path": "packages/localapp/tests/login.test.ts",

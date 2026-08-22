@@ -99,7 +99,7 @@ describe("per-user service manager", () => {
     await expect(fs.stat(manager.registrationPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
   });
 
-  it("creates a LIMITED current-user Windows task with one safely quoted command", async () => {
+  it("creates an S4U current-user Windows task that survives a logged-off console", async () => {
     const fixture = await serviceFixture("windows & task (one)!");
     const commands: ServiceCommandInvocation[] = [];
     const manager = createServiceManager({
@@ -114,12 +114,15 @@ describe("per-user service manager", () => {
     await manager.install();
     const create = commands.find((command) => command.args.includes("/Create"));
     expect(create?.command.toLowerCase()).toMatch(/schtasks\.exe$/);
-    expect(create?.args).toContain("LIMITED");
+    expect(create?.args).toContain("/XML");
     expect(create?.args).not.toContain("SYSTEM");
-    const taskCommand = create?.args[create.args.indexOf("/TR") + 1] ?? "";
-    expect(taskCommand).toContain('"C:\\Program Files\\Node & Runtime\\node.exe"');
-    expect(taskCommand).toContain('"' + fixture.layout.launcherPath + '"');
-    expect(taskCommand).not.toMatch(/api.?key|password|secret/i);
+    const definition = await fs.readFile(create?.args[create.args.indexOf("/XML") + 1] ?? "", "utf16le");
+    expect(definition).toContain("<LogonType>S4U</LogonType>");
+    expect(definition).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+    expect(definition).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+    expect(definition).toContain("<Command>C:\\Program Files\\Node &amp; Runtime\\node.exe</Command>");
+    expect(definition).toContain(`<Arguments>${fixture.layout.launcherPath.replaceAll("&", "&amp;")}</Arguments>`);
+    expect(definition).not.toMatch(/api.?key|password|secret/i);
     const metadata = JSON.parse(await fs.readFile(manager.registrationPath, "utf8"));
     expect(metadata.environment).toEqual({
       LOCALAPP_SUPPORT_DIR: fixture.layout.supportDir,

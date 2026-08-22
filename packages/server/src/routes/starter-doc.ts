@@ -74,6 +74,8 @@ localapp app install                  # 安装/更新到当前 profile 的 Serve
 
 ## 给 AI Agent 的提示
 
+- 用户没有说明应用主题时，直接采用内置模板的默认示例开始，**不要向用户提问**。
+- 只创建和修改项目目录内的文件；**不要修改、重装或调试全局 localapp CLI、Server 或系统配置**。遇到环境故障（命令不存在、Server 不可达、安装失败）时，停止重试并把错误原样报告用户。
 - 临时产物放在项目自己的 \`tmp/\` 目录，不要写系统临时目录。
 - 不要实现第二套后端；数据、文件、通知一律使用平台 SDK 与 named SQL。
 - 修改后先 \`localapp check\` 再 \`localapp app install\`，并从正式路径验收。
