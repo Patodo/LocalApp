@@ -12,8 +12,15 @@ The catalog contains six stable requirements. Do not change an existing requirem
 Run the deterministic platform suite without an Agent or paid API:
 
 ```bash
+pnpm -C packages/server-core build
+pnpm -C packages/web build
 pnpm test:platform-regression
 ```
+
+Both builds are prerequisites. `verification-isolation` drives the production
+app entry, which serves the Platform Shell from the Next.js static export at
+`packages/web/out`; without it the entry answers `404` and the check fails for a
+missing shell instead of a verification-boundary defect.
 
 It checks the capability contract, dev/production content behavior, production verification isolation, and the benchmark protocol. This is the only benchmark layer that blocks ordinary CI.
 

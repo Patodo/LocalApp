@@ -7,6 +7,7 @@ import test from "node:test";
 const release = fs.readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const ci = fs.readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const windows = fs.readFileSync(new URL("../.github/workflows/native-windows.yml", import.meta.url), "utf8");
+const platformRegression = fs.readFileSync(new URL("../.github/workflows/platform-regression.yml", import.meta.url), "utf8");
 const dockerfile = fs.readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
 const dockerSmoke = fs.readFileSync(new URL("./docker-release-smoke.sh", import.meta.url), "utf8");
 const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
@@ -46,6 +47,16 @@ test("Windows workflow builds only the localapp native adapter", () => {
   assert.match(windows, /build-windows-release\.ps1/);
   assert.match(windows, /packages\/localapp\/native\/windows/);
   assert.doesNotMatch(windows, /packages\/cli|packages\/desktop|@localapp\/desktop|tauri|nsis/i);
+});
+
+test("platform regression builds the Platform Shell before the deterministic suite", () => {
+  // Break caught: without packages/web/out the Server answers 404 for the app
+  // entry, so verification-isolation reported a missing shell as a failed
+  // verification boundary on every run of this workflow.
+  const shellBuild = platformRegression.indexOf("pnpm -C packages/web build");
+  const suite = platformRegression.indexOf("pnpm test:platform-regression");
+  assert.ok(shellBuild >= 0, "the Platform Shell must be built for the deterministic suite");
+  assert.ok(suite > shellBuild, "the Platform Shell must be built before the deterministic suite runs");
 });
 
 test("Docker installs the packed npm product and runs its public server command", () => {

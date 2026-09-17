@@ -20,4 +20,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -C packages/server-core build
+
+      # verification-isolation serves the production Platform Shell, so the
+      # Server reads the Next.js static export at packages/web/out. Without that
+      # export the app entry answers 404 and the check fails for a missing
+      # shell, not for a verification-boundary defect.
+      - run: pnpm -C packages/web build
       - run: pnpm test:platform-regression
