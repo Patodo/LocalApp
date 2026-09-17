@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { WindowsOwnedProcessHandle, WindowsProcessTreeAdapter } from "../process/process-tree.js";
 import { lifecycleError } from "../errors.js";
+import { localAppArtifactDirectory } from "../artifact-directory.js";
 import { ACTIVATION_URL_LIMIT_BYTES } from "../activation/activation-url.js";
 import { selectNativeAdapter } from "./adapter-selection.js";
 
@@ -309,7 +311,7 @@ export function createWindowsProcessTreeAdapter(helper: WindowsNativeHelper): Wi
 
 export function createWindowsProcessTreeAdapterFromEnvironment(): WindowsProcessTreeAdapter | undefined {
   if (process.platform !== "win32") return undefined;
-  const executable = windowsNativeExecutableFromEnvironment();
+  const executable = resolveWindowsNativeExecutable();
   if (executable === undefined) return undefined;
   return createWindowsProcessTreeAdapter({
     spawn(command, args, options) {
@@ -323,6 +325,32 @@ export function createWindowsProcessTreeAdapterFromEnvironment(): WindowsProcess
   });
 }
 
+export interface WindowsNativeExecutableOptions {
+  env?: NodeJS.ProcessEnv;
+  arch?: string;
+  artifactDirectory?: string;
+}
+
+/**
+ * The Windows helper is a build product of a release artifact, so it is
+ * resolved from a release root and never from PATH. The daemon bootstrap
+ * exports LOCALAPP_RELEASE_PATH; the CLI's own artifact directory covers every
+ * direct invocation (`localapp server run`, browser opening) that never passes
+ * through that bootstrap. A candidate that is not on disk is not an adapter, so
+ * callers still fail closed instead of spawning an unowned process tree.
+ */
+export function resolveWindowsNativeExecutable(options: WindowsNativeExecutableOptions = {}): string | undefined {
+  const env = options.env ?? process.env;
+  const arch = options.arch ?? process.arch;
+  const roots = [env.LOCALAPP_RELEASE_PATH, options.artifactDirectory ?? localAppArtifactDirectory()];
+  for (const root of roots) {
+    if (root === undefined || root.length === 0) continue;
+    const candidate = path.join(root, "runtime", "native", `win32-${arch}`, "localapp-native.exe");
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 export async function openValidatedExternalUrl(url: string): Promise<void> {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw lifecycleError("browser_open_invalid", "The validated browser destination is invalid"); }
@@ -332,18 +360,12 @@ export async function openValidatedExternalUrl(url: string): Promise<void> {
   if (process.platform === "darwin") return waitForChild(spawn("/usr/bin/open", [url], { shell: false, stdio: "ignore" }));
   if (process.platform === "linux") return waitForChild(spawn("xdg-open", [url], { shell: false, stdio: "ignore" }));
   if (process.platform === "win32") {
-    const executable = windowsNativeExecutableFromEnvironment();
+    const executable = resolveWindowsNativeExecutable();
     if (executable === undefined) throw lifecycleError("native_adapter_unsupported", "NATIVE_ADAPTER_UNSUPPORTED: the Windows opener is unavailable");
     await waitForChild(spawn(executable, ["--open-url", url], { shell: false, stdio: "ignore", windowsHide: true }));
     return;
   }
   throw unsupported(process.platform);
-}
-
-function windowsNativeExecutableFromEnvironment(): string | undefined {
-  const release = process.env.LOCALAPP_RELEASE_PATH;
-  if (!release) return undefined;
-  return path.join(release, "runtime", "native", `win32-${process.arch}`, "localapp-native.exe");
 }
 
 async function runCommand(command: string, args: readonly string[], timeoutMs: number, environment: NodeJS.ProcessEnv = process.env): Promise<string> {

@@ -324,10 +324,14 @@ describe("owned process trees", () => {
 
   it("fails closed on Windows when the suspended-root Job Object adapter is unavailable", () => {
     // Break caught: ordinary Windows spawn races descendants before Task 8 can assign the root to a Job Object.
-    expect(() => spawnOwnedProcess(process.execPath, ["-e", "process.exit(0)"], {
+    const spawn = () => spawnOwnedProcess(process.execPath, ["-e", "process.exit(0)"], {
       platform: "win32",
       stdio: "ignore",
-    })).toThrow(/Windows process-tree adapter.*unavailable/i);
+    });
+    expect(spawn).toThrow(/Windows process-tree adapter.*unavailable/i);
+    // Break caught: an untyped Error is flattened to command_failed at the CLI
+    // entrypoint, hiding the real cause from `localapp server run`.
+    expect(spawn).toThrow(expect.objectContaining({ code: "native_adapter_unsupported" }));
   });
 });
 

@@ -168,7 +168,7 @@ backend/
 | 命令 | 说明 |
 | --- | --- |
 | `localapp server [start]` | 注册系统集成并启动当前用户 daemon |
-| `localapp server run` | 以前台模式运行同一 Server，适合容器和服务管理器 |
+| `localapp server run` | 以前台模式运行同一 Server，适合容器和服务管理器；Windows 上使用包内 native helper |
 | `localapp server stop/restart/status/logs/uninstall` | 管理当前用户 daemon |
 | `localapp init <name>` | 从 npm 包内置模板创建应用 |
 | `localapp build --package` | 构建并生成不含本地数据的 `.localapp` |
@@ -269,6 +269,14 @@ docker load -i localapp-image.tar
 
 仓库中的少量 Swift/Rust 代码仅用于编译这些按平台分发的 native adapter，不包含
 Tauri、WebView、托盘 UI、CLI 或第二套 Server。
+
+Windows 上 `localapp` 需要 native adapter 提供原子 Job Object 子树所有权（`server run`、
+`dev` 与打开浏览器都经由它）。CLI 按以下顺序解析 helper，且只在文件确实存在时才采用，
+否则以 `native_adapter_unsupported` 失败关闭：
+
+1. `LOCALAPP_RELEASE_PATH` 指向的 release 根（daemon 经 bootstrap 启动时由它导出）；
+2. CLI 自身所在的发行 artifact 目录（`bin/localapp.mjs` 的上一级）。因此直接从 shell
+   执行 `localapp server run` 不需要任何额外环境变量。
 
 Windows 的用户发行物仍是标准 npm tgz。完整的 native adapter 构建、签名、打包
 检查和干净环境验收流程见：
