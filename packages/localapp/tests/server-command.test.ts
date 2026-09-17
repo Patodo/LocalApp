@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { artifactDirectoryFromEntrypoint, runServerCommand, runtimeLayoutFromEnvironment } from "../src/commands/server.js";
+import { artifactDirectoryFromEntrypoint } from "../src/artifact-directory.js";
+import { runServerCommand, runtimeLayoutFromEnvironment } from "../src/commands/server.js";
 import type { RuntimeLayout } from "../src/daemon/runtime-layout.js";
 
 const layout = {

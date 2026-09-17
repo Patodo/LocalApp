@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
 import { createWindowsProcessTreeAdapterFromEnvironment } from "../native/native-adapter.js";
+import { lifecycleError } from "../errors.js";
 
 export interface OwnedProcessExit {
   code: number | null;
@@ -73,7 +74,9 @@ export function spawnOwnedProcess(
   if (platform === "win32") {
     const windowsAdapter = options.windowsAdapter ?? createWindowsProcessTreeAdapterFromEnvironment();
     if (windowsAdapter === undefined) {
-      throw new Error("Windows process-tree adapter is unavailable; refusing to spawn without atomic Job Object ownership");
+      // A structured code keeps the cause visible; a bare Error is flattened to
+      // command_failed by the CLI entrypoint.
+      throw lifecycleError("native_adapter_unsupported", "NATIVE_ADAPTER_UNSUPPORTED: the Windows process-tree adapter is unavailable without the packaged LocalApp native helper");
     }
     return ownedWindowsProcess(windowsAdapter.spawnOwned(command, args, spawnOptions), options);
   }

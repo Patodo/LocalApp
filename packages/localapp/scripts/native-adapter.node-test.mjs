@@ -183,6 +183,19 @@ test("Windows helper preserves argv, has an explicit application path, and keeps
   assert.match(source, /ShellExecuteW/);
 });
 
+test("Windows helper hands the shortcut property store a task-allocator buffer, never a Rust allocation", async () => {
+  // Break caught: `--register` wrote the Scheme registry key and then died with
+  // STATUS_HEAP_CORRUPTION before the CLI could install the daemon, because the
+  // PROPVARIANT drop cleared a Vec pointer through CoTaskMemFree.
+  const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/windows/src/main.rs"), "utf8");
+  assert.match(source, /CoTaskMemAlloc\(app_id_wide\.len\(\) \* std::mem::size_of::<u16>\(\)\)/);
+  assert.match(source, /pwszVal: PWSTR\(allocation\.cast::<u16>\(\)\)/);
+  assert.doesNotMatch(source, /pwszVal: PWSTR\(app_id_wide/);
+  assert.doesNotMatch(source, /let mut app_id_wide = wide\(/);
+  const copy = source.indexOf("copy_nonoverlapping(app_id_wide.as_ptr(), allocation.cast::<u16>()");
+  assert.ok(copy > 0 && copy < source.indexOf("SetValue(&APP_USER_MODEL_KEY"));
+});
+
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], shell: false });

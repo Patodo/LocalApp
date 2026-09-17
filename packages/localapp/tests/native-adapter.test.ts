@@ -13,6 +13,7 @@ import {
   createWindowsSchemeForwardInvocation,
   installLinuxScheme,
   performWindowsAtomicOwnership,
+  resolveWindowsNativeExecutable,
   validateNativeNotificationEnvelope,
 } from "../src/native/native-adapter.js";
 
@@ -303,6 +304,36 @@ function notificationEnvelope(iconPath: string) {
     priority: "normal" as const,
     iconPath,
   };
+}
+
+describe("Windows native helper resolution", () => {
+  it("prefers the bootstrap release root, then the CLI's own artifact directory", async () => {
+    const artifactRoot = await windowsHelperFixture(true);
+    const releaseRoot = await windowsHelperFixture(true);
+    expect(resolveWindowsNativeExecutable({ env: { LOCALAPP_RELEASE_PATH: releaseRoot }, arch: "x64", artifactDirectory: artifactRoot }))
+      .toBe(path.join(releaseRoot, "runtime", "native", "win32-x64", "localapp-native.exe"));
+    // Break caught: `localapp server run` and browser opening never pass through
+    // the daemon bootstrap, so LOCALAPP_RELEASE_PATH is absent for a user shell.
+    expect(resolveWindowsNativeExecutable({ env: {}, arch: "x64", artifactDirectory: artifactRoot }))
+      .toBe(path.join(artifactRoot, "runtime", "native", "win32-x64", "localapp-native.exe"));
+  });
+
+  it("yields no adapter when neither release root holds an installed helper", async () => {
+    const artifactRoot = await windowsHelperFixture(false);
+    expect(resolveWindowsNativeExecutable({ env: { LOCALAPP_RELEASE_PATH: path.join(artifactRoot, "releases/0.0.0-absent") }, arch: "x64", artifactDirectory: artifactRoot })).toBeUndefined();
+    expect(resolveWindowsNativeExecutable({ env: {}, arch: "x64", artifactDirectory: artifactRoot })).toBeUndefined();
+  });
+});
+
+async function windowsHelperFixture(writeExecutable: boolean): Promise<string> {
+  const root = await fs.mkdtemp(path.resolve(process.cwd(), "../../tmp/task-11-native-resolution-"));
+  fixtureDirectories.push(root);
+  if (writeExecutable) {
+    const executable = path.join(root, "runtime", "native", "win32-x64", "localapp-native.exe");
+    await fs.mkdir(path.dirname(executable), { recursive: true });
+    await fs.writeFile(executable, "");
+  }
+  return root;
 }
 
 async function nativeFixture(platform: "darwin" | "win32" | "linux") {

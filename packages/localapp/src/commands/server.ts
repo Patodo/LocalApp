@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import { realpathSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { localAppArtifactDirectory } from "../artifact-directory.js";
 import { lifecycleError } from "../errors.js";
 import { createIpcClient, type IpcClient } from "../daemon/ipc-client.js";
 import { publishRelease, readCurrentRelease, verifyReleaseArtifact, type CurrentRelease } from "../daemon/release-store.js";
@@ -186,14 +185,7 @@ function defaultServiceManager(layout: RuntimeLayout): ServiceManager {
 }
 
 function defaultArtifactDirectory(): string {
-  const fromEntry = process.argv[1] === undefined ? undefined : artifactDirectoryFromEntrypoint(process.argv[1]);
-  if (fromEntry !== undefined) return fromEntry;
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-}
-
-export function artifactDirectoryFromEntrypoint(entrypoint: string): string {
-  const canonical = realpathSync(entrypoint);
-  return path.resolve(path.dirname(canonical), "..");
+  return localAppArtifactDirectory();
 }
 
 export function runtimeLayoutFromEnvironment(environment: NodeJS.ProcessEnv = process.env): RuntimeLayout {

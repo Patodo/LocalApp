@@ -258,3 +258,18 @@ test("default Server tests exclude generated-app acceptance while preserving its
   assert.match(serverConfig, /tests\/e2e-unified\/real-apps\.spec\.ts/);
   assert.match(rootManifest.scripts["test:real-apps"], /real-apps\.spec\.ts/);
 });
+
+test("every reviewed baseline exception still matches the file it pins", () => {
+  // Break caught: editing a baselined file leaves its reviewed digest stale, and
+  // the export gate only reports that after a full CI round trip.
+  const baseline = JSON.parse(fs.readFileSync(new URL("./public-source-scan-baseline.json", import.meta.url), "utf8"));
+  const stale = [];
+  for (const exception of baseline.exceptions) {
+    const bytes = fs.readFileSync(new URL(`../${exception.path}`, import.meta.url));
+    // The export hashes committed content, which is LF on every platform, while a
+    // Windows checkout materializes the same file with CRLF.
+    const digest = createHash("sha256").update(bytes.toString("binary").replace(/\r\n/g, "\n"), "binary").digest("hex");
+    if (digest !== exception.sha256) stale.push(`${exception.rule} ${exception.path}`);
+  }
+  assert.deepEqual(stale, [], `refresh the recorded sha256 for: ${stale.join(", ")}`);
+});
