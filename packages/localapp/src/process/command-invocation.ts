@@ -10,6 +10,8 @@ export interface ResolveCommandInvocationOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   commandInterpreter?: string;
+  /** Path-existence seam so the resolution rules stay testable off-Windows. */
+  isFile?: (candidate: string) => boolean;
 }
 
 /**
@@ -67,17 +69,21 @@ export function resolveExecutablePath(command: string, options: ResolveCommandIn
   const names = platform === "win32"
     ? (pathApi.extname(command) === "" ? extensions.map((extension) => `${command}${extension}`) : [command])
     : [command];
+  const isFile = options.isFile ?? ((candidate: string) => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      // A missing or unreadable candidate is not a match.
+      return false;
+    }
+  });
   for (const directory of searchPath.split(pathApi.delimiter)) {
     const trimmed = directory.trim();
     if (trimmed === "") continue;
     const unquoted = trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"") ? trimmed.slice(1, -1) : trimmed;
     for (const name of names) {
       const candidate = pathApi.join(unquoted, name);
-      try {
-        if (fs.statSync(candidate).isFile()) return candidate;
-      } catch {
-        // Keep searching: a missing or unreadable candidate is not a match.
-      }
+      if (isFile(candidate)) return candidate;
     }
   }
   return undefined;

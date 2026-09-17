@@ -1,22 +1,7 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveCommandInvocation, resolveExecutablePath, resolveOwnedCommand } from "../src/process/command-invocation.js";
 
 const WINDOWS_ENV = { SystemRoot: "C:\\Windows" } as NodeJS.ProcessEnv;
-const fixtures: string[] = [];
-
-afterEach(() => {
-  for (const directory of fixtures.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
-});
-
-function toolDirectory(names: string[]): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "localapp-tools-"));
-  fixtures.push(directory);
-  for (const name of names) fs.writeFileSync(path.join(directory, name), "");
-  return directory;
-}
 
 describe("command invocation resolution", () => {
   it("routes a bare Windows package-manager name through the command interpreter", () => {
@@ -53,28 +38,28 @@ describe("command invocation resolution", () => {
   });
 
   it("resolves a bare name to the file PATH would run, following PATHEXT", () => {
-    const first = toolDirectory(["other.exe"]);
-    // npm ships an extensionless POSIX script next to its .cmd shim; Windows
-    // must skip it and keep walking PATHEXT.
-    const second = toolDirectory(["npm", "npm.cmd"]);
-    const env = { PATH: `${first}${path.delimiter}${second}`, PATHEXT: ".COM;.EXE;.BAT;.CMD" } as NodeJS.ProcessEnv;
-    expect(resolveExecutablePath("npm", { platform: "win32", env })).toBe(path.win32.join(second, "npm.cmd"));
-    expect(resolveExecutablePath("missing", { platform: "win32", env })).toBeUndefined();
+    const env = { PATH: "C:\\tools\\first;C:\\tools\\second", PATHEXT: ".COM;.EXE;.BAT;.CMD" } as NodeJS.ProcessEnv;
+    // Windows resolves a bare name through PATHEXT, so npm's extensionless
+    // POSIX script must not win over the .cmd shim sitting next to it.
+    const present = new Set(["C:\\tools\\second\\npm", "C:\\tools\\second\\npm.cmd", "C:\\tools\\first\\other.exe"]);
+    const isFile = (candidate: string) => present.has(candidate);
+    expect(resolveExecutablePath("npm", { platform: "win32", env, isFile })).toBe("C:\\tools\\second\\npm.cmd");
+    expect(resolveExecutablePath("missing", { platform: "win32", env, isFile })).toBeUndefined();
     // A name that already carries an extension is used as given.
-    expect(resolveExecutablePath("other.exe", { platform: "win32", env })).toBe(path.win32.join(first, "other.exe"));
+    expect(resolveExecutablePath("other.exe", { platform: "win32", env, isFile })).toBe("C:\\tools\\first\\other.exe");
     // A path is already resolved and is never rewritten.
-    expect(resolveExecutablePath("C:\\tools\\npm.cmd", { platform: "win32", env })).toBeUndefined();
+    expect(resolveExecutablePath("C:\\tools\\npm.cmd", { platform: "win32", env, isFile })).toBeUndefined();
   });
 
   it("hands the owned-process wrapper an absolute shim path so it can wrap .cmd itself", () => {
     // Break caught: the wrapper rejects a relative executable, so `localapp dev`
     // could never start `npm.cmd`; it now receives the absolute shim and wraps
     // it in the command interpreter on its own side.
-    const tools = toolDirectory(["npm.cmd"]);
-    const env = { PATH: tools, PATHEXT: ".CMD" } as NodeJS.ProcessEnv;
-    expect(resolveOwnedCommand("npm", { platform: "win32", env })).toBe(path.win32.join(tools, "npm.cmd"));
+    const env = { PATH: "C:\\tools", PATHEXT: ".CMD" } as NodeJS.ProcessEnv;
+    const isFile = (candidate: string) => candidate === "C:\\tools\\npm.cmd";
+    expect(resolveOwnedCommand("npm", { platform: "win32", env, isFile })).toBe("C:\\tools\\npm.cmd");
     expect(resolveOwnedCommand("npm", { platform: "linux", env })).toBe("npm");
     // Unresolvable names stay untouched so the wrapper reports the real failure.
-    expect(resolveOwnedCommand("absent", { platform: "win32", env })).toBe("absent");
+    expect(resolveOwnedCommand("absent", { platform: "win32", env, isFile })).toBe("absent");
   });
 });
