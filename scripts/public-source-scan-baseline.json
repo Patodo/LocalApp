@@ -34,7 +34,7 @@
     {
       "path": "packages/localapp/tests/native-adapter.test.ts",
       "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "4f1c411c9d690c1b35443883380a874d162a87b2612285d3cc5efbc064abe56f"
+      "sha256": "8f93accbef08d81cce76efbd35d724883a52174776d50eeac3efe3d308ff4229"
     },
     {
       "path": "packages/localapp/tests/notification-manager.test.ts",
