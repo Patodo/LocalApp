@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 export interface ResolvedCommandInvocation {
@@ -45,4 +46,51 @@ function isBareCommandName(command: string): boolean {
 function defaultCommandInterpreter(env: NodeJS.ProcessEnv): string {
   const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows";
   return path.win32.join(systemRoot, "System32", "cmd.exe");
+}
+
+/**
+ * Resolves a bare command name to the absolute file PATH would run, following
+ * PATHEXT on Windows. Returns undefined for a path (already resolved) or when
+ * nothing matches.
+ */
+export function resolveExecutablePath(command: string, options: ResolveCommandInvocationOptions = {}): string | undefined {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  if (!isBareCommandName(command)) return undefined;
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const searchPath = env.PATH ?? env.Path ?? env.path ?? "";
+  // Windows resolves a bare name through PATHEXT, so an extensionless file of
+  // the same name (npm ships one: the POSIX shell script) must not win.
+  const extensions = platform === "win32"
+    ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).map((entry) => entry.toLowerCase())
+    : [""];
+  const names = platform === "win32"
+    ? (pathApi.extname(command) === "" ? extensions.map((extension) => `${command}${extension}`) : [command])
+    : [command];
+  for (const directory of searchPath.split(pathApi.delimiter)) {
+    const trimmed = directory.trim();
+    if (trimmed === "") continue;
+    const unquoted = trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"") ? trimmed.slice(1, -1) : trimmed;
+    for (const name of names) {
+      const candidate = pathApi.join(unquoted, name);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Keep searching: a missing or unreadable candidate is not a match.
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The command to hand the owned-process wrapper, which validates an absolute
+ * executable path and delegates a `.cmd`/`.bat` target to the command
+ * interpreter itself. Falls back to the original name so the wrapper reports a
+ * missing executable rather than this helper silently doing nothing.
+ */
+export function resolveOwnedCommand(command: string, options: ResolveCommandInvocationOptions = {}): string {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return command;
+  return resolveExecutablePath(command, options) ?? command;
 }

@@ -193,8 +193,14 @@ test("Windows helper reports the owned process exit code instead of always succe
   assert.match(source, /Some\("--job-owner"\)[^;]*platform::job_owner/);
   // The exit code must reach the process exit status, not be dropped in main.
   assert.match(source, /Ok\(code\) => std::process::exit\(code as i32\)/);
+  // A .cmd/.bat target is not an executable image, so the wrapper has to run it
+  // through the interpreter itself; a caller cannot express cmd's quoting
+  // through the per-argument command line the wrapper rebuilds.
+  assert.match(source, /fn is_command_script\(value: &str\) -> bool/);
+  assert.match(source, /\/d \/s \/c /);
+  assert.match(source, /let \(application, command_line_text\) = if is_command_script\(executable\)/);
   // A relative executable stays rejected: PATH resolution belongs to the
-  // interpreter the caller passes, never to the owned-process wrapper.
+  // caller, never to the owned-process wrapper.
   assert.match(source, /if !safe_absolute_path\(executable\)/);
 });
 

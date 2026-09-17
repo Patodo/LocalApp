@@ -973,8 +973,10 @@ async function retainExactPackage(
     await fs.promises.chmod(tempPath, 0o600);
     const copied = await inspectAppPackage(tempPath);
     if (copied.digest !== inspected.digest) throw new AppInstallError("APP_PACKAGE_STORAGE_CORRUPT", "Retained package digest mismatch", 500);
-    const handle = await fs.promises.open(tempPath, "r");
-    try { await handle.sync(); } finally { await handle.close(); }
+    // syncFile owns the Windows rule that FlushFileBuffers needs a
+    // write-capable handle: a read-only handle fails with EPERM there, which
+    // aborted every install that had to retain its package.
+    syncFile(tempPath);
     fs.renameSync(tempPath, finalPath);
     syncDirectory(directory);
     syncDirectory(pageDir);

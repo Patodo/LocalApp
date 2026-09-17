@@ -123,14 +123,40 @@ mod platform {
         CloseHandle(process.hProcess);
     }
 
+    /// A `.cmd`/`.bat` target is not an executable image, so CreateProcessW
+    /// cannot load it directly; the interpreter has to run it instead.
+    fn is_command_script(value: &str) -> bool {
+        let lower = value.to_ascii_lowercase();
+        lower.ends_with(".cmd") || lower.ends_with(".bat")
+    }
+
+    fn command_interpreter() -> Result<String, String> {
+        let from_environment = std::env::var("ComSpec").ok().filter(|value| safe_absolute_path(value));
+        if let Some(value) = from_environment { return Ok(value); }
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let candidate = format!("{system_root}\\System32\\cmd.exe");
+        if safe_absolute_path(&candidate) { Ok(candidate) } else { Err("command interpreter is unavailable".into()) }
+    }
+
     /// Suspended create -> kill-on-close Job assignment -> resume. Every
     /// partial failure terminates and closes the root before it can escape.
     /// The owned root's exit code is returned so callers see a failing child
     /// as a failure instead of a successful wrapper.
     pub unsafe fn job_owner(executable: &str, arguments: &[String]) -> Result<u32, String> {
         if !safe_absolute_path(executable) { return Err("invalid executable".into()); }
-        let application_name = wide(executable);
-        let mut command_line = wide(&create_process_command_line(executable, arguments));
+        // The interpreter supplies its own command line, so a script target is
+        // wrapped here rather than by the caller: this is the only layer that
+        // controls quoting for the single string cmd.exe parses.
+        let (application, command_line_text) = if is_command_script(executable) {
+            let interpreter = command_interpreter()?;
+            if !safe_absolute_path(&interpreter) { return Err("invalid command interpreter".into()); }
+            let inner = create_process_command_line(executable, arguments);
+            (interpreter, format!("/d /s /c \"{inner}\""))
+        } else {
+            (executable.to_string(), create_process_command_line(executable, arguments))
+        };
+        let application_name = wide(&application);
+        let mut command_line = wide(&command_line_text);
         let mut startup: STARTUPINFOW = std::mem::zeroed();
         startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut process: PROCESS_INFORMATION = std::mem::zeroed();
