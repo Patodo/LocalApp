@@ -4,6 +4,8 @@ LocalApp 只有一个 Server 实现。它可以作为开发机上的本地 Serve
 
 用户只安装一个 `@patodo/localapp` npm 包，安装后的可执行命令仍为 `localapp`。个人电脑上运行的是当前操作系统用户的常驻 daemon；容器、NAS、局域网主机或公开服务器使用同一包的前台 Server 模式。项目不再提供 Tauri、托盘、Desktop 窗口或单独的 Rust CLI。
 
+Windows 上的 daemon 是当前用户的计划任务：登录时启动，并以该用户自身的普通权限运行，不继承提权令牌。因此它需要有交互登录会话——只通过 SSH 使用、没有桌面会话的机器请改用 `localapp server run` 前台模式。首次注册计划任务可能需要管理员终端，之后 `status`、`stop`、`dev` 等命令在普通终端即可操作 daemon。
+
 ```bash
 npm install --global @patodo/localapp
 localapp server          # 等同于 localapp server start，注册并启动用户 daemon

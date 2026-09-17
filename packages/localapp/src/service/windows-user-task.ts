@@ -71,11 +71,15 @@ function isNotRunningTask(stderr: string): boolean {
 }
 
 /**
- * The daemon must also run while the owning user has no interactive logon
- * session (SSH-only or headless Windows), so the task registers with an S4U
- * logon type instead of the schtasks /TR default, which is interactive-only
- * and silently refuses to start. ExecutionTimeLimit PT0S removes the default
- * 72-hour kill.
+ * InteractiveToken reuses the token from the owning user's own logon session,
+ * so the daemon runs at the user's integrity level. S4U would also allow a
+ * start with no interactive logon session, but it grants an administrator
+ * account an unfiltered (elevated) token, and the control pipe created by an
+ * elevated daemon carries a high mandatory label: Windows then lets a
+ * non-elevated client read the pipe but never write to it, so every CLI command
+ * that talks to the daemon fails with an access-denied transport error.
+ * LeastPrivilege is what keeps the reused token un-elevated and must stay with
+ * the principal. ExecutionTimeLimit PT0S removes the default 72-hour kill.
  */
 function taskDefinition(nodePath: string, launcherPath: string): Buffer {
   // Omitting UserId registers the principal as the creating user, so the
@@ -92,7 +96,7 @@ function taskDefinition(nodePath: string, launcherPath: string): Buffer {
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <LogonType>S4U</LogonType>
+      <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
   </Principals>
