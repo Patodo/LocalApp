@@ -99,7 +99,7 @@ describe("per-user service manager", () => {
     await expect(fs.stat(manager.registrationPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
   });
 
-  it("creates an S4U current-user Windows task that survives a logged-off console", async () => {
+  it("creates a least-privilege interactive current-user Windows task", async () => {
     const fixture = await serviceFixture("windows & task (one)!");
     const commands: ServiceCommandInvocation[] = [];
     const manager = createServiceManager({
@@ -117,7 +117,11 @@ describe("per-user service manager", () => {
     expect(create?.args).toContain("/XML");
     expect(create?.args).not.toContain("SYSTEM");
     const definition = await fs.readFile(create?.args[create.args.indexOf("/XML") + 1] ?? "", "utf16le");
-    expect(definition).toContain("<LogonType>S4U</LogonType>");
+    // Break caught: S4U hands an administrator account an elevated token, whose
+    // control pipe a non-elevated client can read but never write, so every
+    // daemon command failed with an access-denied transport error.
+    expect(definition).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(definition).not.toContain("S4U");
     expect(definition).toContain("<RunLevel>LeastPrivilege</RunLevel>");
     expect(definition).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
     expect(definition).toContain("<Command>C:\\Program Files\\Node &amp; Runtime\\node.exe</Command>");
