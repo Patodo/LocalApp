@@ -183,6 +183,21 @@ test("Windows helper preserves argv, has an explicit application path, and keeps
   assert.match(source, /ShellExecuteW/);
 });
 
+test("Windows helper reports the owned process exit code instead of always succeeding", async () => {
+  // Break caught: --job-owner waited for the root and returned Ok(()) without
+  // reading its exit code, so every owned command looked successful — a failing
+  // project script under `localapp dev` was reported as a passing one.
+  const source = await fs.readFile(path.join(repositoryRoot, "packages/localapp/native/windows/src/main.rs"), "utf8");
+  assert.match(source, /GetExitCodeProcess\(process\.hProcess, &mut exit_code\)/);
+  assert.match(source, /Ok\(exit_code\)/);
+  assert.match(source, /Some\("--job-owner"\)[^;]*platform::job_owner/);
+  // The exit code must reach the process exit status, not be dropped in main.
+  assert.match(source, /Ok\(code\) => std::process::exit\(code as i32\)/);
+  // A relative executable stays rejected: PATH resolution belongs to the
+  // interpreter the caller passes, never to the owned-process wrapper.
+  assert.match(source, /if !safe_absolute_path\(executable\)/);
+});
+
 test("Windows helper hands the shortcut property store a task-allocator buffer, never a Rust allocation", async () => {
   // Break caught: `--register` wrote the Scheme registry key and then died with
   // STATUS_HEAP_CORRUPTION before the CLI could install the daemon, because the
