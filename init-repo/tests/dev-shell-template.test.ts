@@ -9,7 +9,10 @@ const TRANSPARENT = "rgba(0, 0, 0, 0)";
 function readTemplateFile(relativePath: string) {
   const parts = relativePath.split(/[\\/]/);
   const resolved = parts[0] === "runtime" ? path.join(runtimeRoot, ...parts.slice(1)) : relativePath;
-  return fs.readFileSync(path.join(root, resolved), "utf-8");
+  // Several assertions compare multi-line source text. A Windows checkout, and
+  // the template sync that writes these files on Windows, carry CRLF, so
+  // normalize before matching or those assertions can never pass there.
+  return fs.readFileSync(path.join(root, resolved), "utf-8").replace(/\r\n/g, "\n");
 }
 
 function cssForRuntimeTokens() {

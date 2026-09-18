@@ -49,7 +49,7 @@ mod platform {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JobObjectExtendedLimitInformation};
     use windows_sys::Win32::System::Registry::{RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ};
-    use windows_sys::Win32::System::Threading::{CreateProcessW, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOW, CREATE_SUSPENDED};
+    use windows_sys::Win32::System::Threading::{CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject, PROCESS_INFORMATION, STARTUPINFOW, CREATE_SUSPENDED};
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows::core::{Error, HSTRING, Interface, PCWSTR, PWSTR};
     use windows::Data::Xml::Dom::XmlDocument;
@@ -123,12 +123,40 @@ mod platform {
         CloseHandle(process.hProcess);
     }
 
+    /// A `.cmd`/`.bat` target is not an executable image, so CreateProcessW
+    /// cannot load it directly; the interpreter has to run it instead.
+    fn is_command_script(value: &str) -> bool {
+        let lower = value.to_ascii_lowercase();
+        lower.ends_with(".cmd") || lower.ends_with(".bat")
+    }
+
+    fn command_interpreter() -> Result<String, String> {
+        let from_environment = std::env::var("ComSpec").ok().filter(|value| safe_absolute_path(value));
+        if let Some(value) = from_environment { return Ok(value); }
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let candidate = format!("{system_root}\\System32\\cmd.exe");
+        if safe_absolute_path(&candidate) { Ok(candidate) } else { Err("command interpreter is unavailable".into()) }
+    }
+
     /// Suspended create -> kill-on-close Job assignment -> resume. Every
     /// partial failure terminates and closes the root before it can escape.
-    pub unsafe fn job_owner(executable: &str, arguments: &[String]) -> Result<(), String> {
+    /// The owned root's exit code is returned so callers see a failing child
+    /// as a failure instead of a successful wrapper.
+    pub unsafe fn job_owner(executable: &str, arguments: &[String]) -> Result<u32, String> {
         if !safe_absolute_path(executable) { return Err("invalid executable".into()); }
-        let application_name = wide(executable);
-        let mut command_line = wide(&create_process_command_line(executable, arguments));
+        // The interpreter supplies its own command line, so a script target is
+        // wrapped here rather than by the caller: this is the only layer that
+        // controls quoting for the single string cmd.exe parses.
+        let (application, command_line_text) = if is_command_script(executable) {
+            let interpreter = command_interpreter()?;
+            if !safe_absolute_path(&interpreter) { return Err("invalid command interpreter".into()); }
+            let inner = create_process_command_line(executable, arguments);
+            (interpreter, format!("/d /s /c \"{inner}\""))
+        } else {
+            (executable.to_string(), create_process_command_line(executable, arguments))
+        };
+        let application_name = wide(&application);
+        let mut command_line = wide(&command_line_text);
         let mut startup: STARTUPINFOW = std::mem::zeroed();
         startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut process: PROCESS_INFORMATION = std::mem::zeroed();
@@ -154,9 +182,12 @@ mod platform {
             CloseHandle(job);
             return Err("owned process wait failed".into());
         }
+        let mut exit_code: u32 = 1;
+        let observed = GetExitCodeProcess(process.hProcess, &mut exit_code) != 0;
         CloseHandle(process.hProcess);
         CloseHandle(job);
-        Ok(())
+        if !observed { return Err("owned process exit code is unavailable".into()); }
+        Ok(exit_code)
     }
 
     pub fn forward_scheme(config_path: &str, url: &str) -> Result<(), String> {
@@ -295,19 +326,24 @@ mod platform {
 #[cfg(windows)]
 fn main() {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    let result = match arguments.first().map(String::as_str) {
+    // Every arm reports an exit code so a failed owned process is not reported
+    // as a successful wrapper; commands without an owned process use 0.
+    let result: Result<u32, String> = match arguments.first().map(String::as_str) {
         Some("--job-owner") if arguments.len() >= 3 && arguments[1] == "--" => unsafe { platform::job_owner(&arguments[2], &arguments[3..]) },
-        Some("--register") if arguments.len() == 3 && arguments[1] == "--config" => unsafe { platform::register_scheme(&arguments[2]) },
-        Some("--scheme") if arguments.len() == 4 && arguments[1] == "--config" => platform::forward_scheme(&arguments[2], &arguments[3]),
-        Some("--open-url") if arguments.len() == 2 => unsafe { platform::open_external_url(&arguments[1]) },
-        Some("--permission-state") if arguments.len() == 1 => { println!("{}", platform::notification_permission_state()); Ok(()) },
-        Some("--request-permission") if arguments.len() == 1 => { println!("{}", platform::notification_permission_state()); Ok(()) },
-        Some("--show-notification") if arguments.len() == 2 => platform::show_notification(&arguments[1]),
+        Some("--register") if arguments.len() == 3 && arguments[1] == "--config" => unsafe { platform::register_scheme(&arguments[2]).map(|()| 0) },
+        Some("--scheme") if arguments.len() == 4 && arguments[1] == "--config" => platform::forward_scheme(&arguments[2], &arguments[3]).map(|()| 0),
+        Some("--open-url") if arguments.len() == 2 => unsafe { platform::open_external_url(&arguments[1]).map(|()| 0) },
+        Some("--permission-state") if arguments.len() == 1 => { println!("{}", platform::notification_permission_state()); Ok(0) },
+        Some("--request-permission") if arguments.len() == 1 => { println!("{}", platform::notification_permission_state()); Ok(0) },
+        Some("--show-notification") if arguments.len() == 2 => platform::show_notification(&arguments[1]).map(|()| 0),
         Some("--validate-notification") if arguments.len() == 2 => localapp_native_contract::NotificationEnvelope::parse(&arguments[1], localapp_native_contract::Platform::Windows)
-            .and_then(|envelope| envelope.verify_icon()).map_err(String::from),
+            .and_then(|envelope| envelope.verify_icon()).map(|()| 0).map_err(String::from),
         _ => Err("unsupported native command".into()),
     };
-    if result.is_err() { std::process::exit(1); }
+    match result {
+        Ok(code) => std::process::exit(code as i32),
+        Err(_) => std::process::exit(1),
+    }
 }
 
 #[cfg(not(windows))]

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CliIo } from "../cli/output.js";
 import { LocalAppLifecycleError, lifecycleError } from "../errors.js";
 import { isValidProjectName, writeProjectManifest } from "../project/manifest.js";
+import { resolveCommandInvocation } from "../process/command-invocation.js";
 import { isManagedSkillName, verifyInitParent } from "../project/safety.js";
 import { copyDirectory, isDirectory, type CopyDestinationMutations } from "../template/copy.js";
 
@@ -101,7 +102,8 @@ export function isManagedSkill(name: string): boolean {
 
 async function installDependencies(projectDirectory: string, io: CliIo): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("npm", ["install"], { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
+    const invocation = resolveCommandInvocation("npm", ["install"]);
+    const child = spawn(invocation.command, invocation.args, { cwd: projectDirectory, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => io.stdout(chunk));

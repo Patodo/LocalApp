@@ -8,6 +8,7 @@ import type { CliIo } from "../cli/output.js";
 import { readOrCreateDevCredentials } from "../dev/credentials.js";
 import { lifecycleError } from "../errors.js";
 import { LocalAppClient } from "../http/localapp-client.js";
+import { resolveOwnedCommand } from "../process/command-invocation.js";
 import { spawnOwnedProcess, type OwnedProcess, type WindowsProcessTreeAdapter } from "../process/process-tree.js";
 import { waitForServerReady } from "../process/readiness.js";
 import type { ProjectCommandRunner } from "../project/check.js";
@@ -136,7 +137,7 @@ export async function runDev(options: RunDevOptions, dependencies: RunDevDepende
       "--strictPort",
     ];
     lifecycle.assertActive();
-    const vite = lifecycle.spawn(() => spawnProcess(configuredVite.command, viteArgs, {
+    const vite = lifecycle.spawn(() => spawnProcess(resolveOwnedCommand(configuredVite.command), viteArgs, {
       cwd: projectDir,
       env: { ...process.env, LOCALAPP_DEV_API_KEY: credentials.apiKey },
       stdio: "ignore",
@@ -332,8 +333,9 @@ function createOwnedProjectCommandRunner(
 ): ProjectCommandRunner {
   return async (invocation) => {
     lifecycle.assertActive();
-    const command = process.platform === "win32" ? `${invocation.command}.cmd` : invocation.command;
-    const child = lifecycle.spawn(() => spawnProcess(command, invocation.args, {
+    // The wrapper validates an absolute executable path and handles a .cmd/.bat
+    // target itself, so resolve the shim instead of handing it a bare name.
+    const child = lifecycle.spawn(() => spawnProcess(resolveOwnedCommand(invocation.command), invocation.args, {
       cwd: invocation.cwd,
       stdio: "ignore",
       windowsAdapter,
