@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { getPageDir, readPageMeta, readDbConfig } from "../plugins/storage.js";
 import { pushPageView } from "../lib/request-logger.js";
@@ -267,8 +268,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
       const versionDir = path.join(getPageDir(dataDir(), userId, name), "versions", `v${version}`);
       const indexPath = path.join(versionDir, "index.html");
       if (fs.existsSync(indexPath)) {
-        reply.header("Content-Security-Policy", CSP_HEADER);
-        return reply.type("text/html").send(fs.readFileSync(indexPath));
+        return sendAppFile(req, reply, indexPath, "index.html");
       }
       return reply.status(404).send({ success: false, error: "index.html not found" });
     },
@@ -444,20 +444,47 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
 
       let filePath = path.join(versionDir, restPath || "index.html");
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        reply.header("Content-Security-Policy", CSP_HEADER);
-        return reply.type(getMimeType(filePath)).send(fs.readFileSync(filePath));
+        return sendAppFile(req, reply, filePath, restPath);
       }
 
       // SPA fallback: if not a static asset (no extension), serve index.html
       const indexPath = path.join(versionDir, "index.html");
       if (fs.existsSync(indexPath) && !restPath.includes(".")) {
-        reply.header("Content-Security-Policy", CSP_HEADER);
-        return reply.type("text/html").send(fs.readFileSync(indexPath));
+        return sendAppFile(req, reply, indexPath, restPath);
       }
 
       return reply.status(404).send({ success: false, error: "File not found" });
     }
   );
+}
+
+/**
+ * Vite emits bundled assets as `assets/<name>-<contentHash>.<ext>`, so the URL
+ * already changes whenever the bytes change. Anything else under an app version
+ * directory (index.html, or a file the app itself shipped) keeps its name across
+ * versions and must revalidate instead.
+ */
+function isImmutableAppAsset(restPath: string): boolean {
+  return /(?:^|\/)assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(restPath);
+}
+
+/**
+ * Serves one file from an app version directory with the validators the platform
+ * shell already has and app resources used to lack: without them every visit
+ * re-downloaded the whole bundle, and a revalidation could not answer 304.
+ */
+function sendAppFile(req: FastifyRequest, reply: FastifyReply, filePath: string, restPath: string): FastifyReply {
+  const stat = fs.statSync(filePath);
+  const etag = `W/"${stat.size.toString(16)}-${Math.trunc(stat.mtimeMs).toString(16)}"`;
+  reply.header("ETag", etag);
+  reply.header("Last-Modified", stat.mtime.toUTCString());
+  reply.header("Cache-Control", isImmutableAppAsset(restPath) ? "public, max-age=31536000, immutable" : "no-cache");
+  reply.header("Content-Security-Policy", CSP_HEADER);
+  const ifNoneMatch = req.headers["if-none-match"];
+  if (typeof ifNoneMatch === "string" && ifNoneMatch.split(",").some((value) => value.trim() === etag)) {
+    return reply.status(304).send();
+  }
+  return reply.type(getMimeType(filePath)).send(createReadStream(filePath));
 }
 
 function injectNativeShellMetadata(html: string, userId: string, name: string): string {

@@ -43,10 +43,12 @@ describe("Serve edge cases", () => {
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_1"\r\n\r\nassets/main.js\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_2"\r\n\r\nassets/main.css\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_3"\r\n\r\nassets/pdf.worker.mjs\r\n`;
+    body += `--${boundary}\r\nContent-Disposition: form-data; name="filepath_4"\r\n\r\nassets/main-2f9a1c3b4d.js\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="index.html"\r\nContent-Type: text/html\r\n\r\n${html}\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="main.js"\r\nContent-Type: application/javascript\r\n\r\nconsole.log("hello");\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="main.css"\r\nContent-Type: text/css\r\n\r\nbody { margin: 0; }\r\n`;
     body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="pdf.worker.mjs"\r\nContent-Type: application/javascript\r\n\r\nexport const workerVersion = "test";\r\n`;
+    body += `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="main-2f9a1c3b4d.js"\r\nContent-Type: application/javascript\r\n\r\nconsole.log("hashed");\r\n`;
     body += `--${boundary}--\r\n`;
 
     await fetch(`${baseUrl}/api/upload`, {
@@ -124,6 +126,24 @@ describe("Serve edge cases", () => {
       const html = await res.text();
       expect(html).toContain(`/serve/${userId}/${pageName}/`);
       expect(html).toContain("data-localapp-app-resource-base");
+    });
+
+    it("marks content-hashed app assets immutable and revalidates the rest", async () => {
+      // Break caught: app resources were served with no validators at all, so
+      // every visit re-downloaded the whole bundle instead of answering 304.
+      const hashed = await fetch(`${baseUrl}/serve/${userId}/${pageName}/assets/main-2f9a1c3b4d.js`);
+      expect(hashed.status).toBe(200);
+      expect(hashed.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      expect(hashed.headers.get("etag")).toBeTruthy();
+
+      const plain = await fetch(`${baseUrl}/serve/${userId}/${pageName}/assets/main.js`);
+      expect(plain.headers.get("cache-control")).toBe("no-cache");
+      const etag = plain.headers.get("etag");
+      expect(etag).toBeTruthy();
+      const revalidated = await fetch(`${baseUrl}/serve/${userId}/${pageName}/assets/main.js`, {
+        headers: { "If-None-Match": String(etag) },
+      });
+      expect(revalidated.status).toBe(304);
     });
 
     it("未登录访问返回 Next.js Shell HTML（登录 UI 由客户端渲染）", async () => {
