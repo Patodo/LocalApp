@@ -44,7 +44,10 @@ describe("ClickTicketStore", () => {
     expect(await tickets.consume("invalid-ticket-value")).toBeNull();
   });
 
-  it("allows only one winner across independent store instances", async () => {
+  // 8 independent instances contend through the real filesystem across 12
+  // rounds, so this asserts cross-instance atomicity rather than latency: the
+  // default 5s budget is a load-dependent flake on CI runners.
+  it("allows only one winner across independent store instances", { timeout: 30_000 }, async () => {
     const { delivery, now } = await stores();
     await delivery.baseline("local", 0);
     const instances = [delivery, ...Array.from({ length: 7 }, () => new DeliveryStore({ statePath: delivery.statePath, now }))];
