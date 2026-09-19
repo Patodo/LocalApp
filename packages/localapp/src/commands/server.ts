@@ -11,6 +11,14 @@ import { createNativeAdapter, type NativeAdapter, type NativeAdapterOptions } fr
 
 export type ServerCommandAction = "start" | "stop" | "restart" | "status" | "logs" | "uninstall";
 export interface RunServerCommandOptions { action: ServerCommandAction; }
+
+/**
+ * A foreground Server keeps one address across restarts unless the operator
+ * asks for another one: a saved profile, a reverse proxy, or a container port
+ * mapping must not have to follow a port the Server picked for itself. Pass
+ * `--port 0` to ask for any available port instead.
+ */
+export const DEFAULT_FOREGROUND_PORT = 50524;
 export interface ServerCommandDependencies {
   layout?: RuntimeLayout;
   artifactDirectory?: string;
@@ -79,7 +87,7 @@ export async function runServerForeground(options: { dataDir?: string; host?: st
   if (typeof manifest.serverEntrypoint !== "string") throw lifecycleError("canonical_server_unavailable", "The packed canonical LocalApp Server runtime is unavailable");
   const entrypoint = path.join(artifact, ...manifest.serverEntrypoint.split("/"));
   const child = (dependencies.spawnOwnedProcess ?? spawnOwnedProcess)(process.execPath, [entrypoint, "start", "--data-dir", options.dataDir ?? layout.dataDir,
-    "--host", options.host ?? "127.0.0.1", "--port", String(options.port ?? 0)], { stdio: "inherit" });
+    "--host", options.host ?? "127.0.0.1", "--port", String(options.port ?? DEFAULT_FOREGROUND_PORT)], { stdio: "inherit" });
   return await new Promise<number>((resolve, reject) => {
     let termination: Promise<void> | undefined;
     let settled = false;

@@ -123,11 +123,12 @@ Usage:
 Options:
   --data-dir <path>   Server database, files, and configuration directory
   --host <address>    Listen address (default: 127.0.0.1)
-  --port <number>     Listen port, 0 selects an available port (default: 0)
+  --port <number>     Listen port, 0 selects an available port (default: 50524)
   -h, --help          Show this help
 
 Examples:
   localapp server run
+  localapp server run --port 55441
   localapp server run --data-dir ./localapp-data --port 3000
   localapp server run --host 0.0.0.0 --port 3000
 `],

@@ -6,11 +6,14 @@ LocalApp 只有一个 Server 实现。它可以作为开发机上的本地 Serve
 
 Windows 上的 daemon 是当前用户的计划任务：登录时启动，并以该用户自身的普通权限运行，不继承提权令牌。因此它需要有交互登录会话——只通过 SSH 使用、没有桌面会话的机器请改用 `localapp server run` 前台模式。首次注册计划任务可能需要管理员终端，之后 `status`、`stop`、`dev` 等命令在普通终端即可操作 daemon。
 
+前台模式同样是一种正式用法，适合需要**稳定监听地址**的机器（已保存的 profile、反向代理、容器端口映射，或本机无法注册计划任务）：它监听固定的 **50524**，可用 `--port` 覆盖（`--port 0` 才表示临时端口），由启动它的终端显式维持进程，不涉及计划任务与 daemon。
+
 ```bash
 npm install --global @patodo/localapp
 localapp server          # 等同于 localapp server start，注册并启动用户 daemon
 localapp server status
-localapp server run      # 容器/前台运行
+localapp server run      # 容器/前台运行，默认监听 127.0.0.1:50524
+localapp server run --port 55441   # 固定到指定端口
 ```
 
 不进行全局安装时，可使用 `npx --package @patodo/localapp localapp --version` 验证当前
