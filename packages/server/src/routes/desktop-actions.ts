@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { guardTimerCallback } from "../lib/timer-guard.js";
 import {
   claimDesktopAction,
   cleanupDesktopActions,
@@ -177,7 +178,7 @@ export async function desktopActionsRoutes(app: FastifyInstance) {
     new Date(Date.now() - DESKTOP_ACTION_TERMINAL_RETENTION_MS),
   );
   cleanup();
-  const cleanupTimer = setInterval(cleanup, DESKTOP_ACTION_CLEANUP_INTERVAL_MS);
+  const cleanupTimer = setInterval(guardTimerCallback("desktop action cleanup", cleanup), DESKTOP_ACTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
   app.addHook("onClose", async () => {
     clearInterval(cleanupTimer);
@@ -354,11 +355,11 @@ export async function desktopActionsRoutes(app: FastifyInstance) {
     });
     sseClients.add(client);
     client.write(initial);
-    const heartbeat = setInterval(() => {
+    const heartbeat = setInterval(guardTimerCallback("desktop action heartbeat", () => {
       const snapshot = getDesktopActionSnapshot(userId, req.params.id);
       if (snapshot) client.write(snapshot);
       reply.raw.write(": heartbeat\n\n");
-    }, 15_000);
+    }), 15_000);
     heartbeat.unref();
     req.raw.on("close", () => {
       clearInterval(heartbeat);

@@ -2,7 +2,7 @@ import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { LocalAppRuntimeError, isWasmRuntimeError, wrapDatabaseRuntimeError } from "./runtime-errors.js";
+import { LocalAppRuntimeError, assertSqlJsRuntimeUsable, isWasmRuntimeError, markSqlJsRuntimeUnusable, wrapDatabaseRuntimeError } from "./runtime-errors.js";
 import { collectConvertibleIssueTasks, replaceIssueTaskContent } from "./issue-task-conversion.js";
 import type { FieldType, FieldConstraints, DataSchema } from "../types/models.js";
 
@@ -175,7 +175,8 @@ export async function exportDatabaseSnapshot(dbPath: string): Promise<Buffer> {
   });
 }
 
-async function openDatabase(dbPath: string, retry = true): Promise<SqlJsDatabase> {
+async function openDatabase(dbPath: string): Promise<SqlJsDatabase> {
+  assertSqlJsRuntimeUsable();
   const SQL = await getSqlJs();
   try {
     const db = fs.existsSync(dbPath)
@@ -183,10 +184,9 @@ async function openDatabase(dbPath: string, retry = true): Promise<SqlJsDatabase
       : new SQL.Database();
     return guardDatabase(dbPath, db);
   } catch (err) {
-    if (retry && isWasmRuntimeError(err)) {
-      resetSqlJsRuntimeAfterError();
-      return openDatabase(dbPath, false);
-    }
+    // A trap during the open means the module instance is torn; retrying on it
+    // only traps again, so this is where the process stops instead.
+    recoverFromSqlJsRuntimeError(dbPath, err);
     throw err;
   }
 }
@@ -243,19 +243,9 @@ function guardSqlJsCall<T>(dbPath: string, fn: () => T): T {
 function recoverFromSqlJsRuntimeError(dbPath: string, err: unknown): void {
   if (!isWasmRuntimeError(err)) return;
   evictConnectionForDbPath(dbPath);
-  resetSqlJsRuntimeAfterError();
-}
-
-function resetSqlJsRuntimeAfterError(): void {
-  for (const [dbPath, entry] of _connections) {
-    try {
-      entry.db.close();
-    } catch {
-      // A WASM runtime error can leave the module in a bad state; reset is best-effort.
-    }
-    _connections.delete(dbPath);
-  }
-  SqlJs = null;
+  // Clearing the cached module cannot help: `initSqlJs()` hands back the trapped
+  // instance again, so this trap is terminal for the process.
+  markSqlJsRuntimeUnusable(err, "application database");
 }
 
 function markDirty(dbPath: string): void {

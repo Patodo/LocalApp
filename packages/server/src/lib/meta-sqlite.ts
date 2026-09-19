@@ -2,7 +2,7 @@ import initSqlJs, { Database as SqlJsDatabase } from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { ISSUE_SAVED_REPLY_LIMIT, normalizeIssueSavedReplyInput, type IssueSavedReplyInput } from "@localapp/server-core";
+import { ISSUE_SAVED_REPLY_LIMIT, assertSqlJsRuntimeUsable, markSqlJsRuntimeUnusable, normalizeIssueSavedReplyInput, type IssueSavedReplyInput } from "@localapp/server-core";
 
 export const BOOTSTRAP_USER_ID = "localadmin";
 export const MAX_NOTIFICATION_DELIVERY_SEQUENCE = Number.MAX_SAFE_INTEGER;
@@ -139,6 +139,12 @@ function evictMetaDbAfterRuntimeError(err: unknown): void {
   } catch {
     // The sql.js instance may already be poisoned; recovery happens by reopening from disk.
   }
+  // Reopening cannot succeed in this process: `initSqlJs()` returns the trapped
+  // module instance again, so the next `new SqlJs.Database(...)` traps the same
+  // way — that is exactly the trap seen at `openMetaDbFromDisk`. Record the
+  // terminal state so the process stops instead of failing every database
+  // request until an unguarded timer callback kills it.
+  markSqlJsRuntimeUnusable(err, "meta database");
 }
 
 function guardSqlJsCall<T>(fn: () => T): T {
@@ -152,6 +158,7 @@ function guardSqlJsCall<T>(fn: () => T): T {
 
 function assertMetaDatabaseAvailable(): void {
   if (commitStateUnknown) throw commitStateUnknown;
+  assertSqlJsRuntimeUsable();
 }
 
 function guardStatement<T extends Record<string, unknown>>(stmt: T): T {

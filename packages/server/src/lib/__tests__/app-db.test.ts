@@ -12,6 +12,7 @@ import {
   getDbPath,
 } from "../app-db.js";
 import type { SchemaField, DataSchema } from "../../types/models.js";
+import { resetSqlJsRuntimeUsability, setSqlJsRuntimeStopHook } from "@localapp/server-core";
 
 function testSchema(
   overrides: { fields: Record<string, SchemaField> } & Partial<Omit<DataSchema, "fields">>,
@@ -119,23 +120,35 @@ describe("execRawSql", () => {
     expect(result.rows).toEqual([{ title: "persisted" }]);
   });
 
-  it("evicts cached sql.js runtime after sql-wasm surfaces an empty runtime error", async () => {
-    const schema = testSchema({
-      fields: { title: { type: "string" } },
-    });
-    await createTable(tmpDir, schema);
-    const dbPath = await prepareDb(tmpDir);
-    const before = await getConnection(dbPath);
-    (before as unknown as { create_function: (name: string, fn: () => unknown) => void })
-      .create_function("localapp_boom", () => {
-        throw new WebAssembly.RuntimeError("memory access out of bounds");
+  it("treats a WebAssembly trap as terminal instead of pretending to reopen the database", async () => {
+    // Break caught: this case used to expect eviction + reopen to keep working.
+    // It only passed because the trap here is a JS-thrown RuntimeError, which
+    // leaves the Emscripten module intact; a real trap tears it, and initSqlJs()
+    // hands that same torn module back, so the reopen trapped again on every
+    // request until an unguarded timer callback killed the process. The runtime
+    // is now terminal: later access is refused with a restart code, and the
+    // process is asked to stop exactly once.
+    const stops: string[] = [];
+    setSqlJsRuntimeStopHook((reason) => stops.push(reason));
+    try {
+      const schema = testSchema({
+        fields: { title: { type: "string" } },
       });
+      await createTable(tmpDir, schema);
+      const dbPath = await prepareDb(tmpDir);
+      const before = await getConnection(dbPath);
+      (before as unknown as { create_function: (name: string, fn: () => unknown) => void })
+        .create_function("localapp_boom", () => {
+          throw new WebAssembly.RuntimeError("memory access out of bounds");
+        });
 
-    expect(() => execRawSql(dbPath, "SELECT localapp_boom()")).toThrow();
+      expect(() => execRawSql(dbPath, "SELECT localapp_boom()")).toThrow();
 
-    const after = await getConnection(dbPath);
-    expect(after).not.toBe(before);
-    execRawSql(dbPath, "INSERT INTO bugs (title) VALUES (?)", ["recovered"]);
-    expect(execRawSql(dbPath, "SELECT title FROM bugs").rows).toEqual([{ title: "recovered" }]);
+      await expect(getConnection(dbPath)).rejects.toMatchObject({ code: "db_runtime_restart_required", status: 503 });
+      expect(stops).toHaveLength(1);
+    } finally {
+      setSqlJsRuntimeStopHook(undefined);
+      resetSqlJsRuntimeUsability();
+    }
   });
 });

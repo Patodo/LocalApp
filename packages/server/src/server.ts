@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import { guardTimerCallback } from "./lib/timer-guard.js";
 import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
 import cookie from "@fastify/cookie";
@@ -223,7 +224,7 @@ async function registerServerPluginsAndRoutes(
     }
   });
 
-  const idleConnectionTimer = setInterval(closeIdleConnections, 60_000);
+  const idleConnectionTimer = setInterval(guardTimerCallback("idle database close", closeIdleConnections), 60_000);
   idleConnectionTimer.unref();
   app.addHook("onListen", async () => {
     startRequestLogger();
