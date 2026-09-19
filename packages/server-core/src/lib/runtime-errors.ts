@@ -4,6 +4,7 @@ export type LocalAppRuntimeErrorCode =
   | "action_runtime_error"
   | "action_concurrency_timeout"
   | "db_runtime_error"
+  | "db_runtime_restart_required"
   | "db_contract_error"
   | "db_queue_timeout"
   | "named_sql_result_too_large";
@@ -44,8 +45,7 @@ export function isWasmRuntimeError(err: unknown): boolean {
   return /sql-wasm\.js/i.test(stack) && (message.trim() === "" || message.includes("\uFFFD"));
 }
 
-export function summarizeError(err: unknown): LocalAppRuntimeErrorDetails {
-  if (err instanceof Error) {
+export function summarizeError(err: unknown): LocalAppRuntimeErrorDetails {  if (err instanceof Error) {
     return {
       originalName: err.name,
       originalMessage: err.message,
@@ -93,4 +93,66 @@ export function wrapDatabaseContractError(
       ...summarizeError(err),
     },
   });
+}
+
+type SqlJsRuntimeStopHook = (reason: string) => void;
+
+let sqlJsRuntimeStop: SqlJsRuntimeStopHook | undefined;
+let sqlJsRuntimeStopReason: string | undefined;
+
+/** Tests observe the stop instead of ending the process under test. */
+export function setSqlJsRuntimeStopHook(hook: SqlJsRuntimeStopHook | undefined): void {
+  sqlJsRuntimeStop = hook;
+}
+
+export function isSqlJsRuntimeUnusable(): boolean {
+  return sqlJsRuntimeStopReason !== undefined;
+}
+
+/**
+ * A WebAssembly trap tears the Emscripten module instance, and `initSqlJs()`
+ * hands that same instance back on every later call — so re-opening a database
+ * in this process traps again on the next `new SQL.Database(...)`. Recovery
+ * therefore cannot be in-process: the trap is terminal, and the process stops
+ * (non-zero) so whatever supervises it starts a clean one. Serving requests on
+ * the poisoned instance is what turned a single trap into every database
+ * request failing until an unguarded timer callback finally killed the process.
+ */
+export function markSqlJsRuntimeUnusable(err: unknown, scope: string): LocalAppRuntimeError {
+  const fatal = new LocalAppRuntimeError(
+    `The LocalApp SQLite runtime is unusable after a WebAssembly trap in ${scope}; the Server must restart`,
+    {
+      status: 503,
+      code: "db_runtime_restart_required",
+      cause: err,
+      details: { scope, ...summarizeError(err) },
+    },
+  );
+  if (sqlJsRuntimeStopReason !== undefined) return fatal;
+  sqlJsRuntimeStopReason = fatal.message;
+  process.stderr.write(`[localapp] ${fatal.message} (${JSON.stringify(summarizeError(err))})\n`);
+  if (sqlJsRuntimeStop) {
+    sqlJsRuntimeStop(fatal.message);
+    return fatal;
+  }
+  // The process is unusable from here on; leave the log line behind before it goes.
+  setImmediate(() => process.exit(1));
+  return fatal;
+}
+
+/** The failure later requests get once the runtime is terminal, instead of a doomed reopen. */
+export function unusableSqlJsRuntimeError(): LocalAppRuntimeError {
+  return new LocalAppRuntimeError(
+    "The LocalApp SQLite runtime is unusable after a WebAssembly trap; the Server must restart",
+    { status: 503, code: "db_runtime_restart_required", details: {} },
+  );
+}
+
+export function assertSqlJsRuntimeUsable(): void {
+  if (sqlJsRuntimeStopReason !== undefined) throw unusableSqlJsRuntimeError();
+}
+
+/** Tests only: clears the terminal state so each case starts from a healthy runtime. */
+export function resetSqlJsRuntimeUsability(): void {
+  sqlJsRuntimeStopReason = undefined;
 }

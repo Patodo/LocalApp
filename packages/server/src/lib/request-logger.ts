@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { insertRequestLogs, insertPageViews, type RequestLogEntry, type PageViewEntry } from "./meta-sqlite.js";
+import { guardTimerCallback } from "./timer-guard.js";
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAX_BUFFER_SIZE = 100;
@@ -17,8 +18,11 @@ function flush(): void {
   try {
     insertRequestLogs(requests);
     insertPageViews(views);
-  } catch {
-    // Logging should never crash the server
+  } catch (error) {
+    // Logging should never crash the server, but swallowing a terminal SQLite
+    // trap here is how a single trap stayed invisible while every database
+    // request failed for the next 46 minutes.
+    guardTimerCallback("request log flush", () => { throw error; })();
   }
 }
 
@@ -43,7 +47,7 @@ export function pushPageView(entry: PageViewEntry): void {
 
 export function startRequestLogger(): void {
   if (timer) return;
-  timer = setInterval(flush, FLUSH_INTERVAL_MS);
+  timer = setInterval(guardTimerCallback("request log flush", flush), FLUSH_INTERVAL_MS);
 }
 
 export function stopRequestLogger(): void {

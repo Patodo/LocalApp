@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { guardTimerCallback } from "../lib/timer-guard.js";
 import {
   claimDeviceAction,
   cleanupDeviceActions,
@@ -181,7 +182,7 @@ export async function handleDeviceActionCreation(
 export async function deviceActionsRoutes(app: FastifyInstance) {
   const cleanup = () => cleanupDeviceActions(new Date(Date.now() - DEVICE_ACTION_TERMINAL_RETENTION_MS));
   cleanup();
-  const cleanupTimer = setInterval(cleanup, DEVICE_ACTION_CLEANUP_INTERVAL_MS);
+  const cleanupTimer = setInterval(guardTimerCallback("device action cleanup", cleanup), DEVICE_ACTION_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
   app.addHook("onClose", async () => clearInterval(cleanupTimer));
 
@@ -273,11 +274,11 @@ export async function deviceActionsRoutes(app: FastifyInstance) {
     reply.raw.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
     sseClients.add(client);
     client.write(initial);
-    const heartbeat = setInterval(() => {
+    const heartbeat = setInterval(guardTimerCallback("device action heartbeat", () => {
       const snapshot = getDeviceActionSnapshot(userId, req.params.id);
       if (snapshot) client.write(snapshot);
       reply.raw.write(": heartbeat\n\n");
-    }, 15_000);
+    }), 15_000);
     heartbeat.unref();
     req.raw.on("close", () => { clearInterval(heartbeat); sseClients.delete(client); });
     reply.hijack();
