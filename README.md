@@ -168,7 +168,7 @@ backend/
 | 命令 | 说明 |
 | --- | --- |
 | `localapp server [start]` | 注册系统集成并启动当前用户 daemon |
-| `localapp server run` | 以前台模式运行同一 Server，适合容器和服务管理器；Windows 上使用包内 native helper |
+| `localapp server run` | 以前台模式运行同一 Server，默认监听 `127.0.0.1:50524`（`--port` 覆盖）；适合容器、服务管理器和需要固定地址的机器 |
 | `localapp server stop/restart/status/logs/uninstall` | 管理当前用户 daemon |
 | `localapp init <name>` | 从 npm 包内置模板创建应用 |
 | `localapp build --package` | 构建并生成不含本地数据的 `.localapp` |

@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { runServerForeground } from "../src/commands/server.js";
 import { buildLocalAppPackage } from "../scripts/build-package.mjs";
 import type { OwnedProcess } from "../src/process/process-tree.js";
-
 const root = path.resolve(process.cwd(), "../..");
 const testRoot = path.join(root, "tmp/task-7b-foreground-tests");
 const packageArtifact = path.join(testRoot, "package-artifact");
@@ -36,5 +35,32 @@ describe("server run foreground ownership", () => {
     expect(settled).toBe(false);
     releaseTerminate();
     await expect(result).resolves.toBe(0);
+  });
+
+  it("keeps one stable default port unless the operator asks for another", async () => {
+    // Break caught: the foreground Server picked an ephemeral port on every
+    // start, so a saved profile, a proxy target, or a published container port
+    // had to follow a port the Server chose for itself.
+    const invocations: string[][] = [];
+    const ownedStub = () => {
+      const child = new EventEmitter() as unknown as OwnedProcess["child"];
+      return {
+        child,
+        pid: 42,
+        exited: Promise.resolve({ code: 0, signal: null }),
+        terminate: async () => undefined,
+      } as unknown as OwnedProcess;
+    };
+    const run = (options: { port?: number }) => runServerForeground(options, {
+      artifactDirectory: packageArtifact,
+      spawnOwnedProcess: (_command, args) => { invocations.push([...args]); return ownedStub(); },
+    });
+
+    await expect(run({})).resolves.toBe(0);
+    await expect(run({ port: 55441 })).resolves.toBe(0);
+    await expect(run({ port: 0 })).resolves.toBe(0);
+
+    const portOf = (args: string[]) => args[args.indexOf("--port") + 1];
+    expect(invocations.map(portOf)).toEqual(["50524", "55441", "0"]);
   });
 });
