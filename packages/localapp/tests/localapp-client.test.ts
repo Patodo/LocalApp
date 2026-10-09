@@ -50,7 +50,7 @@ describe("LocalAppClient", () => {
       response.writeHead(302, { location: `${externalUrl}/target` });
       response.end();
     }));
-    const client = new LocalAppClient({ name: "local", serverUrl: platformUrl, apiKey: "api-key-must-not-leak" });
+    const client = new LocalAppClient({ name: "local", serverUrl: platformUrl, apiKey: "test-api-key-must-not-leak" });
 
     const result = await client.getJson("/api/me");
 

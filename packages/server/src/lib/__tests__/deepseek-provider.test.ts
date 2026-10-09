@@ -18,14 +18,14 @@ it("uses the dsh multi-provider adapter for a user's Anthropic endpoint and cred
   }));
   const { DeepSeekHarness } = await import("../deepseek-harness.mjs");
   const root = path.resolve(__dirname, "../../../../../tmp/dsh-provider-test", String(process.pid));
-  const harness = new DeepSeekHarness({ llmApiKey: "user-anthropic-key", llmBaseUrl: "http://anthropic.test", llmModel: "private-model", protocol: "anthropic-messages", root });
+  const harness = new DeepSeekHarness({ llmApiKey: "test-user-anthropic-key", llmBaseUrl: "http://anthropic.test", llmModel: "private-model", protocol: "anthropic-messages", root });
   const events: any[] = [];
   try {
     await harness.run("user", { sessionId: "anthropic", prompt: "hello", systemPrompt: "app prompt", tools: [] }, (event) => events.push(event), new AbortController().signal);
     expect(events.filter((e) => e.type === "error")).toEqual([]);
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toContain("/messages");
-    expect(requests[0].headers.get("x-api-key")).toBe("user-anthropic-key");
+    expect(requests[0].headers.get("x-api-key")).toBe("test-user-anthropic-key");
     expect(events.at(-2).messages.at(-1).content).toContainEqual({ type: "text", text: "private response" });
   } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
 }, 30_000);

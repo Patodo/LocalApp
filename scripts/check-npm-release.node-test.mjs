@@ -56,7 +56,7 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
     const tarball = await createFixture("target-manifest-drift");
     const releaseTargetsPath = path.join(testRoot, "target-manifest-drift-release-targets.json");
     const releaseTargets = JSON.parse(await fs.readFile(path.join(projectDirectory, "packages/shared/release-targets.json"), "utf8"));
-    releaseTargets.npmPackage.name = "@patodo/other-localapp";
+    releaseTargets.npmPackage.name = "@example/other-localapp";
     await fs.writeFile(releaseTargetsPath, `${JSON.stringify(releaseTargets)}\n`);
 
     await assert.rejects(

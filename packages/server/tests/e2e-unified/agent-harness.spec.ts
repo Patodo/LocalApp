@@ -6,8 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../../src/server.js";
 import { SetupTokenStore } from "../../src/lib/setup-token-store.js";
 import { closeMetaDb, createApiKey, createUser, findUserByName } from "../../src/lib/meta-sqlite.js";
-const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../tmp/deepseek-harness-http-e2e", String(process.pid));
-const adminKey = "harness-e2e-admin-key";
+const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../tmp/deepseek-test-harness-http-e2e", String(process.pid));
+const adminKey = "test-harness-e2e-admin-key";
 describe("unified Server DeepSeek Harness HTTP", () => {
   let app: Awaited<ReturnType<typeof buildServer>>;
   let model: http.Server;
@@ -26,7 +26,7 @@ describe("unified Server DeepSeek Harness HTTP", () => {
     });
     await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
     const tokens = new SetupTokenStore();
-    app = await buildServer({ setupTokens: tokens, env: { DATA_DIR: dataDir, JWT_SECRET: "harness-http-e2e", BOOTSTRAP_API_KEY: adminKey, LLM_API_KEY: "mock-key", LLM_BASE_URL: `http://127.0.0.1:${(model.address() as any).port}/v1`, LLM_MODEL: "mock-model" } });
+    app = await buildServer({ setupTokens: tokens, env: { DATA_DIR: dataDir, JWT_SECRET: "test-harness-http-e2e", BOOTSTRAP_API_KEY: adminKey, LLM_API_KEY: "mock-key", LLM_BASE_URL: `http://127.0.0.1:${(model.address() as any).port}/v1`, LLM_MODEL: "mock-model" } });
     const token = tokens.issue();
     expect((await app.inject({ method: "POST", url: "/api/setup/initialize", payload: { token: token.token, username: "harness-http-admin", password: "harness-test-password" } })).statusCode).toBe(201);
     createUser("harness-outsider", "harness-outsider", "not-used");
@@ -78,7 +78,7 @@ describe("unified Server DeepSeek Harness HTTP", () => {
     expect(JSON.stringify(own)).not.toContain("mock-key");
     expect((await get(outsiderKey)).json().data.providers).toEqual([]);
     expect((await app.inject({ method: "POST", url: "/api/agent/run", headers: { "X-API-Key": outsiderKey }, payload: { sessionId: "not-configured", prompt: "hi", systemPrompt: "", tools: [] } })).statusCode).toBe(400);
-    const saved = await app.inject({ method: "PUT", url: "/api/agent/settings", headers: { "X-API-Key": outsiderKey }, payload: { ...own.data, providers: [{ ...own.data.providers[0], model: "outsider-model", apiKey: "outsider-model-key" }] } });
+    const saved = await app.inject({ method: "PUT", url: "/api/agent/settings", headers: { "X-API-Key": outsiderKey }, payload: { ...own.data, providers: [{ ...own.data.providers[0], model: "outsider-model", apiKey: "test-outsider-model-key" }] } });
     expect(saved.statusCode).toBe(200);
     const response = await fetch(`${baseUrl}/api/agent/run`, { method: "POST", headers: { "X-API-Key": outsiderKey, "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "http-e2e-session", prompt: "hello", systemPrompt: "", tools: [] }) });
     expect(response.status).toBe(200);
@@ -86,7 +86,7 @@ describe("unified Server DeepSeek Harness HTTP", () => {
     // the provider still completes the next model step and the turn settles.
     await response.text();
     expect(modelRequests.at(-1).model).toBe("outsider-model");
-    expect(modelRequests.at(-1).authorization).toBe("Bearer outsider-model-key");
+    expect(modelRequests.at(-1).authorization).toBe("Bearer test-outsider-model-key");
     expect((await get(adminKey)).json().data.providers[0].model).toBe("mock-model");
     expect((await app.inject({ method: "GET", url: "/api/agent/sessions", headers: { "X-API-Key": adminKey } })).json().data.map((s: any) => s.id)).toContain("http-e2e-session");
   });
