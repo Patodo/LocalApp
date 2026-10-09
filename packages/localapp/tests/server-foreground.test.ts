@@ -37,30 +37,20 @@ describe("server run foreground ownership", () => {
     await expect(result).resolves.toBe(0);
   });
 
-  it("keeps one stable default port unless the operator asks for another", async () => {
-    // Break caught: the foreground Server picked an ephemeral port on every
-    // start, so a saved profile, a proxy target, or a published container port
-    // had to follow a port the Server chose for itself.
-    const invocations: string[][] = [];
-    const ownedStub = () => {
-      const child = new EventEmitter() as unknown as OwnedProcess["child"];
-      return {
-        child,
-        pid: 42,
-        exited: Promise.resolve({ code: 0, signal: null }),
-        terminate: async () => undefined,
-      } as unknown as OwnedProcess;
-    };
-    const run = (options: { port?: number }) => runServerForeground(options, {
+  it.each([
+    { options: {}, port: "50524" },
+    { options: { port: 55441 }, port: "55441" },
+    { options: { port: 0 }, port: "0" },
+  ])("uses the requested foreground port $port", async ({ options, port }) => {
+    // Each case verifies the complete packed product before exercising the
+    // port choice, with the original deadline for the foreground operation.
+    let invocation: string[] = [];
+    const child = new EventEmitter() as unknown as OwnedProcess["child"];
+    const owned = { child, pid: 42, exited: Promise.resolve({ code: 0, signal: null }), terminate: async () => undefined } as unknown as OwnedProcess;
+    await expect(runServerForeground(options, {
       artifactDirectory: packageArtifact,
-      spawnOwnedProcess: (_command, args) => { invocations.push([...args]); return ownedStub(); },
-    });
-
-    await expect(run({})).resolves.toBe(0);
-    await expect(run({ port: 55441 })).resolves.toBe(0);
-    await expect(run({ port: 0 })).resolves.toBe(0);
-
-    const portOf = (args: string[]) => args[args.indexOf("--port") + 1];
-    expect(invocations.map(portOf)).toEqual(["50524", "55441", "0"]);
+      spawnOwnedProcess: (_command, args) => { invocation = [...args]; return owned; },
+    })).resolves.toBe(0);
+    expect(invocation[invocation.indexOf("--port") + 1]).toBe(port);
   });
 });
