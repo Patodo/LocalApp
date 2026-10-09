@@ -126,12 +126,6 @@ export function AppDevelopmentDock(
       aria-label="应用开发对话"
     >
       <header className="development-dock-header">
-        <button
-          aria-label={expanded ? "收起开发对话" : "展开开发对话"}
-          onClick={() => setExpanded(!expanded)}
-        >
-          {expanded ? <Minus size={16} /> : <Plus size={16} />}
-        </button>
         {p.running && <LoaderCircle className="dock-spinner" size={15} />}
         <div
           className="dock-history"
@@ -249,6 +243,12 @@ export function AppDevelopmentDock(
         >
           <Code2 size={17} />
         </a>
+        <button
+          aria-label={expanded ? "收起开发对话" : "展开开发对话"}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <Minus size={16} /> : <Plus size={16} />}
+        </button>
       </header>
       {expanded && (
         <>
