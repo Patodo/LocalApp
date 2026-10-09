@@ -438,7 +438,7 @@ export function AppDevelopmentDock(
                   {building
                     ? "正在检查与构建…"
                     : ready
-                      ? "构建通过，可以预览或上线"
+                      ? (p.build?.purpose === "preview" ? "预览编译通过，正式上线需完整检查" : "构建通过，可以预览或上线")
                       : p.build?.status === "failed"
                         ? "构建失败，请查看日志"
                         : "尚未构建"}
@@ -456,6 +456,7 @@ export function AppDevelopmentDock(
             {(p.error || importError) && (
               <p className="dock-error" role="alert">
                 {p.error || importError}
+                {p.build?.status === "failed" && <Button variant="ghost" size="sm" onClick={() => setPanel("build")}>查看构建日志</Button>}
               </p>
             )}
             {userMode && input.userInteractions}
@@ -526,6 +527,7 @@ export function AppDevelopmentDock(
       {!expanded && p.error && (
         <p className="dock-error dock-collapsed-error" role="alert">
           {p.error}
+          {p.build?.status === "failed" && <Button variant="ghost" size="sm" onClick={() => {setExpanded(true); setPanel("build");}}>查看构建日志</Button>}
         </p>
       )}
       <input

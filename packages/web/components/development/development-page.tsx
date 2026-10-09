@@ -60,6 +60,9 @@ export function DevelopmentPage({
   } | null>(null);
   const handoffStarted = useRef(false);
   const previewedBuild = useRef("");
+  const autoPreviewBuild = useRef("");
+  const handledFailure = useRef("");
+  const repairAttempts = useRef(0);
   const session = useRef(""),
     abort = useRef<AbortController | null>(null),
     selection = useRef(0);
@@ -201,9 +204,11 @@ export function DevelopmentPage({
   async function run(options?: {
     continueCreation?: boolean;
     prompt?: string;
+    repairPreview?: boolean;
   }) {
     const submitted = options?.prompt ?? prompt;
     if (!project || !submitted.trim() || running) return;
+    if (!options?.repairPreview) repairAttempts.current = 0;
     if (file && file.content !== text) await save();
     setBuild(null);
     setRunning(true);
@@ -294,6 +299,7 @@ export function DevelopmentPage({
           const previewBuild = await request(base + "/builds", "POST", {
             purpose: "preview",
           });
+          autoPreviewBuild.current = previewBuild.id;
           setBuild(previewBuild);
           setLog(previewBuild.log ?? "");
         } catch (error) {
@@ -353,6 +359,17 @@ export function DevelopmentPage({
     }, 1000);
     return () => clearInterval(timer);
   }, [base, build]);
+  useEffect(() => {
+    if (!build || build.status !== "failed" || running || pending || handledFailure.current === build.id) return;
+    handledFailure.current = build.id;
+    const preview = build.purpose === "preview";
+    if (preview && application && autoPreviewBuild.current === build.id && repairAttempts.current < 2) {
+      repairAttempts.current++;
+      void act(() => run({repairPreview: true, prompt: `平台预览编译失败（自动修复 ${repairAttempts.current}/2）。请根据以下真实日志修复源码；不要移除类型检查、删减测试或修改构建脚本。完成后平台会重新编译。\n${build.log ?? "未返回日志"}`}));
+    } else {
+      setError(`${preview ? "预览编译" : "完整构建"}失败，应用尚未更新。请查看构建日志。`);
+    }
+  }, [build?.id, build?.status, running, pending]);
   useEffect(() => {
     if (
       !application ||

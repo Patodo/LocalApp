@@ -111,3 +111,28 @@ it("continues the creation session and starts an inline preview build after the 
   expect(fetcher.mock.calls.filter(([url]) => url.endsWith("/agent/run"))).toHaveLength(1);
   view.unmount(); window.history.replaceState({}, "", "/");
 });
+it("feeds preview compiler errors into the same session twice, then reports failure", async () => {
+  HTMLElement.prototype.scrollTo = vi.fn();
+  let builds = 0;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/agent/run")) return new Response('data: {"type":"session","sessionId":"repair-session"}\n\n');
+    const data = url === "/api/agent/settings" ? {providers: [{id: "provider", name: "Provider", model: "model"}], defaultProviderId: "provider"}
+      : url.includes("/apps/") ? {id: "repair-project", name: "repair-app"}
+      : url.endsWith("/builds") && init?.method === "POST" ? {id: `build-${++builds}`, purpose: "preview", status: "failed", log: "error TS2552: Cannot find name 'toNumber'"}
+      : [];
+    return new Response(JSON.stringify({success: true, data}));
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<DevelopmentPage application={{owner: "alice", name: "repair-app"}}/>);
+  await waitFor(() => expect(screen.getByLabelText("应用修改需求")).not.toBeDisabled());
+  fireEvent.change(screen.getByLabelText("应用修改需求"), {target: {value: "实现应用"}});
+  fireEvent.click(screen.getByLabelText("发送修改需求"));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("预览编译失败，应用尚未更新"));
+  const runs = fetcher.mock.calls.filter(([url]) => url.endsWith("/agent/run")).map(([, init]) => JSON.parse(init!.body as string));
+  expect(runs).toHaveLength(3);
+  expect(runs[1]).toMatchObject({sessionId: "repair-session"});
+  expect(runs[1].prompt).toContain("error TS2552");
+  expect(runs[2].prompt).toContain("自动修复 2/2");
+  fireEvent.click(screen.getByRole("button", {name: "查看构建日志"}));
+  expect(screen.getByText("构建失败，请查看日志")).toBeVisible();
+});
