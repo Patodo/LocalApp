@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { LocalAppClient } from "../src/http/localapp-client.js";
 
 const servers: Server[] = [];
 const directories: string[] = [];
+const productVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 async function listen(server: Server): Promise<string> {
   servers.push(server);
@@ -62,7 +64,7 @@ describe("LocalAppClient", () => {
     // Break caught: requests that omit either authentication or version metadata cannot satisfy the Server contract.
     const platformUrl = await listen(createServer((request, response) => {
       expect(request.headers["x-api-key"]).toBe("valid-key");
-      expect(request.headers["x-cli-version"]).toBe("0.3.0");
+      expect(request.headers["x-cli-version"]).toBe(productVersion);
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"success":true,"data":{"id":"alice"}}');
     }));

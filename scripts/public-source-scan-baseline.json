@@ -4,7 +4,7 @@
     {
       "path": "packages/localapp/scripts/build-package.node-test.mjs",
       "rule": "PRIVATE_TEST_IDENTITY",
-      "sha256": "a7bf2a9f6890cf369ab6d40bd7d33b3e35cc370bfd0506676564499bb205db92",
+      "sha256": "1bf256bcb71daa5d85ebe56be9496301ef2f734aa32893b050c105760cd217c4",
       "reason": "The canonical scoped npm package determines the tarball filename; this is public package metadata."
     },
     {
@@ -141,7 +141,7 @@
     {
       "path": "packages/server/src/lib/deepseek-harness.mts",
       "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "172435e957eca9aabc7e159a3f11b9a3e45985345576ee5f54983676793b0a59",
+      "sha256": "fdf7a440586561398dcb4ca870f8357e09df6912012885a4aa32bacaf373adaf",
       "reason": "apiKeyEnv names the LOCALAPP_USER_MODEL_KEY environment variable; it contains no credential value."
     }
   ]

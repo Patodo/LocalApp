@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const projectDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const packageDirectory = path.join(projectDirectory, "packages/localapp");
+const productVersion = JSON.parse(await fs.readFile(path.join(packageDirectory, "package.json"), "utf8")).version;
 const testRoot = path.join(projectDirectory, "tmp/task-1-pack-test");
 
 test("pnpm pack ships an executable localapp binary", async (t) => {
@@ -17,7 +18,7 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
 
   const packed = await run(process.execPath, [path.join(projectDirectory, "scripts/package-localapp.mjs")], projectDirectory);
   assert.equal(packed.code, 0, packed.stderr);
-  const tarball = path.join(projectDirectory, "tmp/localapp-package/localapp-0.3.0.tgz");
+  const tarball = path.join(projectDirectory, `tmp/localapp-package/localapp-${productVersion}.tgz`);
   const extracted = path.join(testRoot, "extracted");
   await fs.mkdir(extracted, { recursive: true });
   const unpacked = await run("tar", ["-xzf", tarball, "-C", extracted], projectDirectory);
@@ -58,7 +59,7 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   assert.equal(packedFiles.some((file) => /(^|\/)(tauri|desktop|electron)(\/|$)/i.test(file)), false);
   const version = await run(process.execPath, [binary, "--version"], extracted);
   assert.equal(version.code, 0, version.stderr);
-  assert.equal(version.stdout.trim(), "localapp 0.3.0");
+  assert.equal(version.stdout.trim(), `localapp ${productVersion}`);
 
   const installPrefix = path.join(testRoot, "clean npm prefix");
   const installed = await run("npm", ["install", "--prefix", installPrefix, "--ignore-scripts", tarball], projectDirectory);
@@ -68,7 +69,7 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
     PATH: `${installedBinDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
   });
   assert.equal(installedVersion.code, 0, installedVersion.stderr);
-  assert.equal(installedVersion.stdout.trim(), "localapp 0.3.0");
+  assert.equal(installedVersion.stdout.trim(), `localapp ${productVersion}`);
   const installedBins = (await fs.readdir(installedBinDirectory)).filter((entry) => !entry.startsWith("."));
   assert.equal(installedBins.length > 0, true);
   assert.equal(installedBins.every((entry) => entry.replace(/\.(?:cmd|ps1)$/i, "") === "localapp"), true);
