@@ -371,6 +371,7 @@ export async function developmentRoutes(
       workspaceRoot: projects.workspace(id, user),
       dataRoot: app.config.dataDir,
       networkBlocked: true,
+      autoSessionTitles: true,
       capabilities: ["files", "skills", "terminal"],
       pythonEnvironment: readPythonEnvironment(app.config.dataDir),
     });

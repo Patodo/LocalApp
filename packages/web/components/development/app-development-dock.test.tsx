@@ -154,8 +154,8 @@ it("imports source while excluding generated packages, dependencies and credenti
 it("uses the title to switch history without changing the expanded state", () => {
   const p = props();
   p.sessions = [
-    { id: "old-session", createdAt: "2026-10-09T01:00:00Z" },
-    { id: "current-session", createdAt: "2026-10-09T02:00:00Z" },
+    { id: "old-session", title: "旧会话", createdAt: "2026-10-09T01:00:00Z" },
+    { id: "current-session", title: "当前会话", createdAt: "2026-10-09T02:00:00Z" },
   ];
   p.selectedSession = "current-session";
   p.actions.selectSession = vi.fn();
@@ -164,9 +164,9 @@ it("uses the title to switch history without changing the expanded state", () =>
   expect(screen.getByRole("menu")).toBeInTheDocument();
   expect(screen.queryByRole("log")).toBeNull();
   expect(
-    screen.getByRole("menuitemradio", { name: /current-/ }),
+    screen.getByRole("menuitemradio", { name: /当前会话/ }),
   ).toHaveAttribute("aria-checked", "true");
-  fireEvent.click(screen.getByRole("menuitemradio", { name: /old-sess/ }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: /旧会话/ }));
   expect(p.actions.selectSession).toHaveBeenCalledWith("old-session");
   expect(screen.queryByRole("menu")).toBeNull();
   expect(screen.queryByRole("log")).toBeNull();
@@ -256,4 +256,18 @@ it("does not preview a previous turn after the latest user request has no final 
   fireEvent.click(screen.getByLabelText("最小化开发对话"));
   fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
   expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+it("shows the selected conversation title in the header, history and minimized preview", () => {
+  const p = props();
+  p.sessions = [{ id: "session", createdAt: "2026-10-09T12:00:00Z", title: "添加工作项筛选" }];
+  p.selectedSession = "session";
+  p.messages = [{ role: "assistant", content: "完成" }];
+  render(<AppDevelopmentDock {...p} />);
+  expect(screen.getByLabelText("切换历史对话").textContent).toContain("添加工作项筛选");
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  expect(screen.getByRole("menuitemradio", { name: /添加工作项筛选/ })).toBeTruthy();
+  fireEvent.click(screen.getByLabelText("最小化开发对话"));
+  fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
+  expect(screen.getByRole("tooltip").textContent).toContain("添加工作项筛选");
 });

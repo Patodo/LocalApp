@@ -29,7 +29,7 @@ export class LocalAppLlmAdapter extends LlmAdapter {
     });
     if (!res.ok) throw new Error(`LLM request failed (${res.status})`);
     if (!res.body) throw new Error("LLM response body is empty");
-    this.emit(options.sessionId, { type: "assistant_start" });
+    if (options.purpose !== "session-title") this.emit(options.sessionId, { type: "assistant_start" });
     const blocks = new Map<number, { index: number; block: ContentBlock }>();
     let nextIndex = 0;
     let finish = "stop";
@@ -84,7 +84,7 @@ export class LocalAppLlmAdapter extends LlmAdapter {
           const data = line.slice(5).trim();
           if (!data) continue;
           for (const chunk of process(data)) {
-            if (chunk.type === "text-delta") this.emit(options.sessionId, { type: "text_delta", text: chunk.text });
+            if (chunk.type === "text-delta" && options.purpose !== "session-title") this.emit(options.sessionId, { type: "text_delta", text: chunk.text });
             yield chunk;
           }
         }

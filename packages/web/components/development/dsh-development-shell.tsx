@@ -44,7 +44,7 @@ interface Project {
 }
 export interface DevelopmentShellProps {
   attachments?: Array<{ id: string; name: string; size: number }>;
-  sessions: Array<{ id: string; createdAt: string }>;
+  sessions: Array<{ id: string; createdAt: string; title?: string }>;
   selectedSession: string;
   projects: Project[];
   project: Project | null;
@@ -247,12 +247,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                         onClick={() => p.actions.selectSession(item.id)}
                       >
                         <span>
-                          {new Date(item.createdAt).toLocaleString("zh-CN", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {item.title || "未命名对话"}
                         </span>
                       </button>
                     ))}{" "}

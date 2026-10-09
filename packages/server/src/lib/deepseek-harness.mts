@@ -11,6 +11,8 @@ import { Context } from "@deepseek-ai/cordis";
 import AgentRegistry, { type AgentHandle } from "@deepseek-ai/dsh-agent";
 import AgentLoop from "@deepseek-ai/dsh-agent-loop";
 import LlmRuntime, { createUserMessage, type Message } from "@deepseek-ai/dsh-llm";
+import SessionTitle, { foldSessionTitle, fallbackSessionTitle } from "@deepseek-ai/dsh-session-title";
+import * as FirstPromptTitle from "@deepseek-ai/dsh-session-title-first-prompt-llm";
 import SessionRegistry, { SessionId } from "@deepseek-ai/dsh-session";
 import SessionProjections from "@deepseek-ai/dsh-session-projection";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
@@ -97,7 +99,7 @@ export class DeepSeekHarness {
   }
   toolCatalog() { return this.ctx.tools.schemas().map(({ name, description }) => ({ name, description })); }
 
-  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment; workspaceRoot?: string; dataRoot?: string; networkBlocked?: boolean; readDirectories?: string[] }) {
+  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment; workspaceRoot?: string; autoSessionTitles?: boolean; dataRoot?: string; networkBlocked?: boolean; readDirectories?: string[] }) {
     this.ready = (async () => {
       await this.ctx.plugin(LlmRuntime);
       await this.ctx.plugin(SessionRegistry);
@@ -113,6 +115,16 @@ export class DeepSeekHarness {
         await this.ctx.plugin(PiAi, { providers: { localapp: { api: config.protocol, baseURL: config.llmBaseUrl, apiKeyEnv: "LOCALAPP_USER_MODEL_KEY", models: [{ id: config.llmModel }], retryPolicy: { mode: "normal", maxRetries: 0 } } } });
       } else {
         this.ctx.llm.registerAdapter(["localapp"], new LocalAppLlmAdapter(config, (id, event) => id && this.publish(id, event)));
+      }
+      if (config.autoSessionTitles) {
+        await this.ctx.plugin(SessionTitle, { fallbackMaxWords: 8, fallbackMaxBytes: 120, maxTitleBytes: 160 });
+        await this.ctx.plugin(FirstPromptTitle, { targetWords: 6, targetCjkCharacters: 16, maxInputBytes: 16384, maxOutputTokens: 128, timeoutMs: 20000, provider: "localapp", model: config.llmModel });
+        this.ctx.on("session/event", (session, event) => {
+          if (event.type === "session/title") {
+            this.publish(session.id, { type: "session_title", sessionId: session.id, title: this.ctx.sessionTitle.get(session)?.title });
+            void this.ctx.sessions.flush(session).catch(() => {});
+          }
+        });
       }
       if (config.root) {
         this.ctx.provide("sessionController", { resolveAgent: async (id: string) => {
@@ -231,9 +243,11 @@ export class DeepSeekHarness {
           return;
         }
       }
+      const needsLegacyTitle = this.config.autoSessionTitles && !this.ctx.sessionTitle.get(agent.session) && agent.session.deriveMessages().some(message => message.role === "user");
       agent.followup(createUserMessage({ content: [{ type: "text", text: input.prompt }], source: { kind: "user" } }));
       if (signal.aborted) cancel();
       await agent.whenIdle();
+      if (needsLegacyTitle && !signal.aborted) await this.ctx.sessionTitle.refresh(agent.session, signal).catch(() => {});
       emit({ type: "messages", messages: browserMessages(agent.session.deriveMessages()) });
       if (this.config.root) await this.ctx.sessions.flush(agent.session);
       emit({ type: "done" });
@@ -300,7 +314,16 @@ export class DeepSeekHarness {
     await this.ready;
     if (!this.config.root) return [];
     const stored = await this.ctx.sessionPersistence.list();
-    return stored.map((snapshot) => ({ id: snapshot.header.id, createdAt: snapshot.header.createdAt }));
+    return Promise.all(stored.map(async (snapshot) => {
+      const handle = await this.ctx.sessionPersistence.open(snapshot.header.id, "read");
+      try {
+        const { events } = await handle.read();
+        const snapshotTitle = foldSessionTitle(events);
+        const first = events.find(event => event.type === "user/message" && event.data.source.kind === "user");
+        const firstText = first?.type === "user/message" ? first.data.content.filter(block => block.type === "text").map(block => block.text).join(" ") : "";
+        return { id: snapshot.header.id, createdAt: snapshot.header.createdAt, title: snapshotTitle?.title ?? (fallbackSessionTitle(firstText, 8, 120) || "未命名对话") };
+      } finally { await handle.close(); }
+    }));
   }
 
   async history(sessionId: string) {

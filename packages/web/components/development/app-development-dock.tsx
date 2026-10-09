@@ -66,6 +66,7 @@ export function AppDevelopmentDock(
     draft.current.style.height =
       Math.min(draft.current.scrollHeight, 160) + "px";
   }, [p.prompt]);
+  const conversationTitle = p.sessions.find(item => item.id === p.selectedSession)?.title || (p.selectedSession ? "未命名对话" : "新对话");
   const building = ["queued", "running"].includes(p.build?.status);
   const ready = p.build?.status === "succeeded";
   const working = p.running || building || importing;
@@ -178,8 +179,8 @@ export function AppDevelopmentDock(
               <X size={14} />
             </button>
             <strong>
-              {p.error ? <CircleAlert size={17} /> : <Check size={17} />}编辑{" "}
-              {p.application?.name ?? p.project?.name}
+              {p.error ? <CircleAlert size={17} /> : <Check size={17} />}
+              {conversationTitle}
             </strong>
             <div className="development-mini-message">
               <DshMarkdown text={completion} />
@@ -279,7 +280,7 @@ export function AppDevelopmentDock(
             disabled={p.running || p.pending || !p.project}
             onClick={() => setHistoryOpen(!historyOpen)}
           >
-            编辑 {p.application?.name ?? p.project?.name}
+            {conversationTitle}
             <ChevronDown size={14} />
           </button>
           {historyOpen && (
@@ -322,13 +323,7 @@ export function AppDevelopmentDock(
                   >
                     <MessageSquare size={16} />
                     <span>
-                      {new Date(session.createdAt).toLocaleString("zh-CN", {
-                        month: "numeric",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}{" "}
-                      · {session.id.slice(0, 8)}
+                      {session.title || "未命名对话"}
                     </span>
                     {p.selectedSession === session.id && <Check size={15} />}
                   </button>

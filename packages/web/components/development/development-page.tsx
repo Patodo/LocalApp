@@ -27,7 +27,7 @@ export function DevelopmentPage({
     [prompt, setPrompt] = useState(""),
     [messages, setMessages] = useState<any[]>([]),
     [sessions, setSessions] = useState<
-      Array<{ id: string; createdAt: string }>
+      Array<{ id: string; createdAt: string; title?: string }>
     >([]),
     [live, setLive] = useState(""),
     [running, setRunning] = useState(false),
@@ -200,6 +200,11 @@ export function DevelopmentPage({
             if (!line.startsWith("data: ")) continue;
             const e = JSON.parse(line.slice(6));
             if (e.type === "session") session.current = e.sessionId;
+            if (e.type === "session_title" && e.title) {
+              setSessions(rows => rows.some(row => row.id === e.sessionId)
+                ? rows.map(row => row.id === e.sessionId ? { ...row, title: e.title } : row)
+                : [...rows, { id: e.sessionId, createdAt: new Date().toISOString(), title: e.title }]);
+            }
             if (e.type === "messages") {
               setMessages(e.messages);
               setLive("");
@@ -221,6 +226,20 @@ export function DevelopmentPage({
       if (file) await open(file.path);
     }
   }
+  useEffect(() => {
+    if (!project || !sessions.length) return;
+    // Auxiliary title generation can finish after the main conversation stream.
+    let active = true;
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      try {
+        const rows = await request(base + "/agent/sessions");
+        if (active) setSessions(rows);
+      } catch { /* Keep the last known titles when the Server is unavailable. */ }
+      if (++attempts >= 10) clearInterval(timer);
+    }, 3000);
+    return () => { active = false; clearInterval(timer); };
+  }, [project?.id, running]);
   async function stop() {
     await request(base + "/agent/cancel", "POST", {
       sessionId: session.current,

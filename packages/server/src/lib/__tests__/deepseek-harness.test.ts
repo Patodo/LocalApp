@@ -82,3 +82,34 @@ describe("DeepSeek Harness integration", () => {
     expect(secondary.some((event) => event.type === "tool_call")).toBe(false);
   } finally { secondUnsubscribe(); unsubscribe(); await harness.close(); }
  });
+
+it("generates and persists development conversation titles without leaking title text into chat", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const root = path.resolve("../../tmp/platform-development/title-harness-test");
+  await fs.mkdir(root, { recursive: true });
+  const directory = await fs.mkdtemp(path.join(root, "session-"));
+  const { DeepSeekHarness } = await import("../deepseek-harness.mjs");
+  const requests: any[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    const naming = body.messages.some((message: any) => message.role === "system" && /title/i.test(message.content));
+    return sse([{ choices: [{ delta: { content: naming ? "工作项筛选" : "已完成页面修改" }, finish_reason: "stop" }] }]);
+  }));
+  const options = { ...config, root: directory, autoSessionTitles: true };
+  const harness = new DeepSeekHarness(options);
+  const events: any[] = [];
+  try {
+    await harness.run("owner", { sessionId: "named-session", prompt: "给工作项增加状态筛选", systemPrompt: "帮助开发应用", tools: [] }, event => events.push(event), new AbortController().signal);
+    await vi.waitFor(async () => expect((await harness.listSessions())[0].title).toBe("工作项筛选"));
+    expect(events.some(event => event.type === "session_title" && event.title === "工作项筛选")).toBe(true);
+    expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("已完成页面修改");
+    expect(JSON.stringify(await harness.history("named-session"))).not.toContain("工作项筛选");
+    await harness.run("owner", { sessionId: "named-session", prompt: "继续", systemPrompt: "帮助开发应用", tools: [] }, () => {}, new AbortController().signal);
+    expect(requests).toHaveLength(3);
+  } finally { await harness.close(); }
+  const restored = new DeepSeekHarness(options);
+  try { expect((await restored.listSessions())[0].title).toBe("工作项筛选"); }
+  finally { await restored.close(); await fs.rm(directory, { recursive: true, force: true }); }
+});
