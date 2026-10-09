@@ -274,6 +274,8 @@ it("shows the selected conversation title in the header, history and minimized p
 
 it("switches identity above history and hides developer actions in user mode", () => {
   const developer = props(), user = props();
+  developer.sessions = [{ id: "developer-session", createdAt: "2026-10-09", title: "修改应用样式" }];
+  developer.selectedSession = "developer-session";
   user.sessions = [{ id: "user-session", createdAt: "2026-10-09", title: "创建工作项" }];
   user.selectedSession = "user-session";
   user.prompt = "帮我创建工作项";
@@ -282,14 +284,22 @@ it("switches identity above history and hides developer actions in user mode", (
   fireEvent.click(screen.getByLabelText("切换历史对话"));
   fireEvent.click(screen.getByLabelText("切换对话身份"));
   expect(switchIdentity).toHaveBeenCalledWith("user");
+  expect(screen.getByRole("menuitemradio", { name: /修改应用样式/ })).toBeInTheDocument();
+  expect(screen.queryByRole("menuitemradio", { name: /创建工作项/ })).toBeNull();
   view.rerender(<AppDevelopmentDock {...developer} identity="user" userConversation={user} onIdentityChange={switchIdentity} />);
   expect(screen.getByLabelText("应用对话消息")).toHaveValue("帮我创建工作项");
+  expect(screen.getByRole("menu", { name: "应用历史对话" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitemradio", { name: /创建工作项/ })).toBeInTheDocument();
+  expect(screen.queryByRole("menuitemradio", { name: /修改应用样式/ })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByLabelText("切换对话身份")).toBeNull();
   fireEvent.click(screen.getByLabelText("展开应用对话"));
   expect(screen.queryByLabelText("开发操作")).toBeNull();
   expect(screen.queryByLabelText("打开完整开发页")).toBeNull();
   fireEvent.click(screen.getByLabelText("发送对话消息"));
   expect(user.actions.run).toHaveBeenCalledOnce();
   expect(developer.actions.run).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
   fireEvent.click(screen.getByLabelText("切换对话身份"));
   expect(switchIdentity).toHaveBeenLastCalledWith("developer");
   view.rerender(<AppDevelopmentDock {...developer} identity="user" userConversation={{ ...user, running: true }} onIdentityChange={switchIdentity} />);

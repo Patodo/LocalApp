@@ -85,7 +85,7 @@ export function AppDevelopmentDock(
     if (input.reveal) { setMinimized(false); setExpanded(true); setPanel("chat"); }
   }, [input.reveal]);
   useEffect(() => { if (input.minimize) setMinimized(true); }, [input.minimize]);
-  useEffect(() => { setPanel("chat"); setHistoryOpen(false); }, [input.identity]);
+  useEffect(() => { setPanel("chat"); }, [input.identity]);
   const switchIdentity = input.onIdentityChange ? (
     <button type="button" className="dock-identity"
       disabled={p.running || p.pending || !!input.userConversation?.running || !!input.running || ["queued", "running"].includes(input.build?.status)}
@@ -385,7 +385,6 @@ export function AppDevelopmentDock(
       </header>
       {expanded && (
         <>
-          {switchIdentity && !historyOpen && <div className="development-dock-tools" aria-label="当前对话身份">{switchIdentity}</div>}
           {!userMode && p.project ? (
             <nav className="development-dock-tools" aria-label="开发操作">
               <button
