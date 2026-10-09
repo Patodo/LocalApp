@@ -16,6 +16,7 @@ export type LocalAppHelpTopic =
   | "whoami"
   | "app"
   | "app-install"
+  | "app-source"
   | "app-sync"
   | "dev"
   | "sync-template"
@@ -23,6 +24,8 @@ export type LocalAppHelpTopic =
   | "version";
 
 const TOPICS = new Map<string, LocalAppHelpTopic>([
+  ["app pull", "app-source"],
+  ["app push", "app-source"],
   ["", "root"],
   ["server", "server"],
   ["server start", "server-start"],
@@ -63,6 +66,7 @@ Commands:
   check             Validate the current application before installation
   build --package   Build a distributable .localapp package
   app install       Install the current application on a target Server
+  app pull/push     Download/upload original application source
   app sync          Synchronize an application to a configured peer
   login [url]       Save credentials for a Server profile
   logout            Remove credentials for a Server profile
@@ -231,6 +235,14 @@ Options:
 Examples:
   localapp app install --target local
   localapp app install --target office --package ./dist/notes.localapp
+`],
+  ["app-source", `Synchronize original source with a Server using your API Key identity.
+
+  localapp app pull --profile <profile> --name <app> --directory <new-directory>
+  localapp app push --profile <profile> --directory <directory>
+
+Pull requires a new directory. Push rejects remote changes, including unsaved edits.
+No application data or secrets are synchronized. Build, preview and release separately.
 `],
   ["app-sync", `Synchronize an installed application to a configured peer Server.
 

@@ -51,3 +51,15 @@ it("preserves binary source through snapshots and restore without text corruptio
  expect(fs.readFileSync(path.join(store.workspace(p.id,"alice"),"public/logo.png"))).toEqual(bytes);
  expect(() => store.create("alice","invalid-binary",{"logo.png":{encoding:"base64",content:"invalid!"}})).toThrow("编码");
 });
+it("source sync respects locks and leaves the workspace unchanged on invalid uploads", () => {
+ const files = {"manifest.json": '{"name":"sync-app"}', "package.json": '{"scripts":{"test":"test","build":"build"}}', "old.txt": "original"};
+ const p = store.create("alice", "sync-app", files);
+ const digest = store.versions(p.id, "alice")[0].digest;
+ const unlock = store.lock(p.id, "alice");
+ expect(() => store.replaceSource(p.id, "alice", files, digest)).toThrow(/占用/); unlock();
+ expect(() => store.replaceSource(p.id, "bob", files, digest)).toThrow();
+ expect(() => store.replaceSource(p.id, "alice", {...files, "../outside": "unsafe"}, digest)).toThrow();
+ expect(() => store.replaceSource(p.id, "alice", {...files, "binary": {encoding: "base64", content: "invalid!"}}, digest)).toThrow();
+ expect(store.read(p.id, "alice", "old.txt").content).toBe("original");
+ expect(store.versions(p.id, "alice")).toHaveLength(1);
+});

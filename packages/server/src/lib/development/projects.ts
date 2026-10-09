@@ -45,6 +45,7 @@ const excluded = new Set([
   ".next",
   "coverage",
   ".tmp",
+  "tmp",
   ".localapp-public-skills",
   ".localapp-attachments",
 ]);
@@ -292,6 +293,27 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
     } finally {
       fs.rmSync(stage, { recursive: true, force: true });
     }
+  }
+  replaceSource(id: string, user: string, files: Record<string, SourceFile>, expectedDigest: string) {
+    const unlock = this.lock(id, user);
+    const root = this.workspace(id, user), stage = root + "-stage-" + randomUUID(), old = root + "-old-" + randomUUID();
+    try {
+      const current = this.sourceFiles(id, user);
+      if (contentHash(JSON.stringify(current)) !== expectedDigest) throw new DevelopmentError("服务端源码已改变，请重新拉取并合并", 409);
+      if (!files || typeof files !== "object" || Array.isArray(files) || Object.keys(files).length > MAX_FILES || Buffer.byteLength(JSON.stringify(files)) > MAX_SOURCE) throw new DevelopmentError("源码超过限制");
+      for (const file of Object.keys(files)) if (!allowed(file)) throw new DevelopmentError("不允许同步此文件");
+      let manifest, pkg;
+      try { manifest = JSON.parse(sourceBytes(files["manifest.json"]).toString()); pkg = JSON.parse(sourceBytes(files["package.json"]).toString()); } catch { throw new DevelopmentError("源码缺少 manifest.json 或 package.json"); }
+      if (manifest.name !== this.get(id, user).name || !pkg.scripts?.test || !pkg.scripts?.build) throw new DevelopmentError("应用名称不匹配或缺少 test/build 脚本");
+      fs.cpSync(root, stage, {recursive: true, dereference: false});
+      for (const file of Object.keys(current)) fs.rmSync(resolveWorkspacePath(stage, file));
+      for (const [file, content] of Object.entries(files)) this.save(stage, file, content);
+      this.capture(stage);
+      fs.renameSync(root, old);
+      try { fs.renameSync(stage, root); } catch (error) { fs.renameSync(old, root); throw error; }
+      try { return {version: this.snapshot(id, user, "同步本地源码"), digest: contentHash(JSON.stringify(this.sourceFiles(id, user)))}; }
+      catch (error) { fs.rmSync(root, {recursive: true}); fs.renameSync(old, root); throw error; }
+    } finally { fs.rmSync(stage, {recursive: true, force: true}); fs.rmSync(old, {recursive: true, force: true}); unlock(); }
   }
   assertIdle(id: string, user: string) {
     this.get(id, user);

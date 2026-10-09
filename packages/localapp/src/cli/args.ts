@@ -14,6 +14,7 @@ export type LocalAppCommand =
   | { kind: "logout"; profile?: string }
   | { kind: "whoami"; profile?: string }
   | { kind: "app-install"; target?: string; packagePath?: string }
+  | { kind: "app-source"; action: "pull" | "push"; profile: string; directory: string; name?: string }
   | { kind: "app-sync"; target?: string; peer: string; withData: boolean; confirmation?: string }
   | { kind: "dev" }
   | { kind: "sync-template"; quiet: boolean }
@@ -139,6 +140,14 @@ function parseProfileCommand(args: string[], command: "logout" | "whoami"): Loca
 function parseApp(args: string[]): LocalAppCommand {
   const command = args.shift();
   if (isHelpFlag(command)) return help("app");
+  if (command === "pull" || command === "push") {
+    if (hasHelp(args)) return help("app-source");
+    const options = consumeOptions(args, new Set(["--profile", "--directory", "--name"]));
+    requireNoPositionals(options);
+    const profile = value(options, "--profile"), directory = value(options, "--directory"), name = value(options, "--name");
+    if (!profile || !directory || (command === "pull" && !name)) throw new LocalAppArgumentError("app pull/push requires --profile, --directory; pull also requires --name");
+    return {kind: "app-source", action: command, profile, directory, ...(name ? {name} : {})};
+  }
   if (command === "install") {
     if (hasHelp(args)) return help("app-install");
     const options = consumeOptions(args, new Set(["--target", "--package"]));

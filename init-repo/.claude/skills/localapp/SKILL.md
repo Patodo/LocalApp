@@ -80,3 +80,24 @@ Do not claim the application is usable until all are true:
 - core user journeys persist and reload;
 - unauthorized and cross-user access fail correctly;
 - no credentials, runtime data or machine-external temp paths are packaged.
+
+## 服务端源码在本地开发
+
+应用原始源码已托管后，使用明确的 CLI profile 拉取到尚不存在的目录：
+
+```bash
+localapp app pull --profile production --name my-app --directory ./my-app-local
+cd my-app-local
+npm install
+localapp dev
+```
+
+在该目录使用编辑器或 Codex 开发；遵循应用自身 AGENTS.md。`localapp dev` 提供本地统一 Server 和开发预览，测试数据留在项目 tmp 中。完成应用 test/build、`localapp check --json` 以及正式入口验证后推回：
+
+```bash
+localapp app push --profile production --directory .
+```
+
+Server 根据 API Key 识别用户。源码记录 `.localapp/source.json` 保存目标、用户、项目和拉取时的摘要，不包含密钥。不要手改摘要来跳过冲突检查。推回不会上线，也不同步业务数据；在 Server 开发页检查、构建、预览后使用上线按钮。
+
+如果服务端源码发生改变，推回会失败。将同一应用拉取到新的目录，把本地修改合并到新目录，再测试和推回。旧目录保留，不能强制覆盖。旧应用没有源码时，先用 localapp-migrate Skill 上传原始项目。

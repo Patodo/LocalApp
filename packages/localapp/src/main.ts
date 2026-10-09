@@ -10,6 +10,7 @@ import { ejectManagedTemplate } from "./commands/eject-template.js";
 import { check } from "./commands/check.js";
 import { buildPackage } from "./commands/build.js";
 import { installApplication } from "./commands/app-install.js";
+import {syncSource} from "./commands/app-source.js";
 import { syncApplication } from "./commands/app-sync.js";
 import { writeCredentialSafeJson } from "./commands/shared.js";
 import { resolveProjectTarget } from "./project/target.js";
@@ -55,6 +56,8 @@ export async function runLocalApp(argv: string[], io: CliIo = defaultCliIo()): P
       const result = await installApplication({ projectDir, target: command.target, packagePath: command.packagePath });
       const profile = await resolveProjectTarget({ projectDir, target: command.target });
       writeCredentialSafeJson(io, { success: true, ...result }, profile.apiKey);
+    } else if (command.kind === "app-source") {
+      io.stdout(`${JSON.stringify({success: true, ...await syncSource(command)})}\n`);
     } else if (command.kind === "app-sync") {
       const projectDir = process.cwd();
       const job = await syncApplication({

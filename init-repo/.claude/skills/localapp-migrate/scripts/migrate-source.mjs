@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 
-const excluded = new Set(['node_modules', '.git', 'dist', '.npm', '.pnpm', '.cache', '.next', 'coverage', '.tmp', '.localapp', '.localapp-public-skills', '.localapp-attachments']);
+const excluded = new Set(['node_modules', '.git', 'dist', '.npm', '.pnpm', '.cache', '.next', 'coverage', '.tmp', 'tmp', '.localapp', '.localapp-public-skills', '.localapp-attachments']);
 const excludedFile = name => name === '.env' || name.startsWith('.env.') || name === '.npmrc' || /\.(pem|key)$/.test(name);
 const maxFile = 2 * 1024 * 1024, maxSource = 32 * 1024 * 1024;
 
@@ -48,12 +48,12 @@ function configDirectory() {
   return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'localapp');
 }
 
-export async function migrate({ project, profile: profileName, owner, upload = false, cliVersion }, dependencies = {}) {
+export async function migrate({ project, profile: profileName, upload = false, cliVersion }, dependencies = {}) {
   const directory = path.resolve(project);
   const source = await collectSource(directory);
   const report = { application: source.name, fileCount: source.inventory.length, bytes: source.total, files: source.inventory, omitted: source.omitted };
   if (!upload) return { status: 'checked', ...report };
-  if (!profileName || !owner || !/^[a-zA-Z0-9_-]+$/.test(owner)) throw new Error('上传必须明确指定 --profile 和 --owner');
+  if (!profileName) throw new Error('上传必须明确指定 --profile');
   let document;
   try { document = JSON.parse(await fs.readFile(path.join(configDirectory(), 'profiles.json'), 'utf8')); }
   catch { throw new Error('目标 CLI profile 文件无法读取，请先登录'); }
@@ -75,8 +75,8 @@ export async function migrate({ project, profile: profileName, owner, upload = f
     return value.data;
   };
   const me = await request('/api/me');
-  if (me.id !== owner) throw new Error('登录用户不是指定的应用拥有者');
-  const base = `/api/development/apps/${encodeURIComponent(owner)}/${encodeURIComponent(source.name)}/source`;
+  const owner = me.id;
+  const base = `/api/development/apps/${encodeURIComponent(source.name)}/source`;
   const existing = await request(base);
   if (existing) return { status: 'already-hosted', projectId: existing.id, serverUrl: origin.origin, application: source.name };
   const created = await request(base, { files: source.files });
@@ -107,7 +107,7 @@ export async function migrate({ project, profile: profileName, owner, upload = f
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const options = { project: process.cwd() };
-    const keys = { '--project': 'project', '--profile': 'profile', '--owner': 'owner', '--cli-version': 'cliVersion' };
+    const keys = { '--project': 'project', '--profile': 'profile', '--cli-version': 'cliVersion' };
     for (let i = 2; i < process.argv.length; i++) {
       const key = process.argv[i];
       if (key === '--upload') options.upload = true;

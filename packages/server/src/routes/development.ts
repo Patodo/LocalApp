@@ -43,7 +43,7 @@ export async function developmentRoutes(
     options.builds,
   );
   // An app's source is never inferred from its compiled assets.
-  const appSource = "/api/development/apps/:owner/:name/source";
+  const appSource = ["/api/development/apps/:owner/:name/source", "/api/development/apps/:name/source"];
   function ownedApp(owner: string, name: string, user: string) {
     if (owner !== user)
       throw new DevelopmentError("只有应用拥有者可以编辑应用", 403);
@@ -51,10 +51,11 @@ export async function developmentRoutes(
     if (!readPageMeta(app.config.dataDir, user, name))
       throw new DevelopmentError("应用不存在", 404);
   }
-  app.get<{ Params: { owner: string; name: string } }>(
-    appSource,
+  for (const route of appSource) {
+  app.get<{ Params: { owner?: string; name: string } }>(
+    route,
     async (req) => {
-      ownedApp(req.params.owner, req.params.name, req.userId);
+      ownedApp(req.params.owner ?? req.userId, req.params.name, req.userId);
       return {
         success: true,
         data:
@@ -64,10 +65,10 @@ export async function developmentRoutes(
     },
   );
   app.post<{
-    Params: { owner: string; name: string };
+    Params: { owner?: string; name: string };
     Body: { files: Record<string, SourceFile> };
-  }>(appSource, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
-    ownedApp(req.params.owner, req.params.name, req.userId);
+  }>(route, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
+    ownedApp(req.params.owner ?? req.userId, req.params.name, req.userId);
     const files = req.body?.files;
     if (
       !files ||
@@ -101,6 +102,18 @@ export async function developmentRoutes(
       success: true,
       data: projects.create(req.userId, req.params.name, files),
     };
+  });
+  }
+  app.get<{Params: {id: string}}>(base + "/:id/source", async req => {
+    const unlock = projects.lock(req.params.id, req.userId);
+    try {
+      const project = projects.get(req.params.id, req.userId);
+      const files = projects.sourceFiles(project.id, req.userId);
+      return {success: true, data: {project, files, digest: createHash("sha256").update(JSON.stringify(files)).digest("hex")}};
+    } finally { unlock(); }
+  });
+  app.post<{Params: {id: string}; Body: {files: Record<string, SourceFile>; expectedDigest: string}}>(base + "/:id/source", {bodyLimit: 40 * 1024 * 1024}, async req => {
+    return {success: true, data: projects.replaceSource(req.params.id, req.userId, req.body.files, req.body.expectedDigest)};
   });
   app.post<{ Params: { id: string } }>(
     base + "/:id/attachments",

@@ -10,7 +10,7 @@ description: 将已有 LocalApp 应用的原始源码上传到明确的 Server�
 ## 确认项目与目标
 
 - 在原始项目根目录工作，读取项目的 AGENTS.md、manifest.json 和 package.json。只有 dist 或安装包时，说明缺少原始源码，不能用模板生成的项目代替。
-- 确定目标 Server 的 CLI profile，以及现有应用的 owner/name。不能把默认 profile 当作用户指定的目标。缺少目标时先完成本地检查，再询问目标。
+- 确定目标 Server 的 CLI profile，应用名称由 manifest.json 读取，用户身份由 Server 根据 API Key 识别。不能把默认 profile 当作用户指定的目标。缺少目标时先完成本地检查，再询问目标。
 - 使用 `localapp whoami --profile <profile>` 验证身份；上传者必须是应用拥有者。未登录时使用 `localapp login <url> --profile <profile>` 的正常登录流程，不把密钥写进项目或命令示例。
 - manifest.name 必须匹配已有应用，package.json 必须有 test 和 build 脚本。检查失败先修复必要问题，不修改业务功能来完成迁移。
 
@@ -27,7 +27,7 @@ node <skill-directory>/scripts/migrate-source.mjs --project <project-directory>
 用户已要求把此项目迁移到明确的 Server 时，可以执行上传；只有讨论或检查请求时不要上传。
 
 ```bash
-node <skill-directory>/scripts/migrate-source.mjs --project <project-directory> --profile <profile> --owner <owner> --upload
+node <skill-directory>/scripts/migrate-source.mjs --project <project-directory> --profile <profile> --upload
 ```
 
 脚本使用已保存的 CLI profile，检查登录身份和应用存在，再调用 Server 源码导入接口。上传后读取项目、文件列表和初始版本进行核对，在本地 `.localapp/source-migration.json` 保存目标、项目 ID 和源码版本，不保存凭据。
