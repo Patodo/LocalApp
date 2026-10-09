@@ -10,7 +10,7 @@ export async function systemAgentEnvironment(dataDir: string): Promise<AgentEnvi
  if(previous && (previous.pending || Date.now()-previous.at < 15_000))return previous.report;
  const report=(async()=>{
   const { DeepSeekHarness }=await import("./deepseek-harness.mjs");
-  const harness=new DeepSeekHarness({llmApiKey:"environment-check",llmBaseUrl:"http://127.0.0.1:9",llmModel:"environment-check",root:path.join(dataDir,"agent","system-environment"),capabilities:["files","terminal","skills"],skills:PUBLIC_AGENT_SKILLS.map(s=>s.id),pythonEnvironment});
+  const harness=new DeepSeekHarness({llmApiKey:"",llmBaseUrl:"http://127.0.0.1:9",llmModel:"environment-check",root:path.join(dataDir,"agent","system-environment"),capabilities:["files","terminal","skills"],skills:PUBLIC_AGENT_SKILLS.map(s=>s.id),pythonEnvironment});
   try{
    await harness.initialize();
    const report=await harness.checkEnvironment();
