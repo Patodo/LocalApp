@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -76,6 +77,8 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
     ["rejects a tag and version mismatch", () => {}, /tag.*version/i, "v0.2.0"],
     ["rejects a missing README", (value) => { value.omit.add("README.md"); }, /README\.md/],
     ["rejects a missing Windows Harness binary", (value) => { value.omit.add("runtime/server/node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe"); }, /ripgrep-win32-x64/],
+    ["rejects a file missing from the artifact inventory", (value) => { value.inventoryMismatch = true; }, /inventory/],
+    ["rejects a changed file checksum", (value) => { value.changedChecksum = true; }, /artifact file changed/],
     ["rejects a missing LICENSE", (value) => { value.omit.add("LICENSE"); }, /LICENSE/],
     ["rejects an incomplete adapter matrix", (value) => { value.targets.pop(); }, /native adapter/i],
     ["rejects an extra adapter target", (value) => { value.targets.push("freebsd-x64"); }, /native adapter/i],
@@ -164,6 +167,13 @@ async function createFixture(name, mutate = () => {}) {
     "@deepseek-ai/node-addon-system-linux-x64/bin/glibc/system.node",
     "@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
   ]) files[`runtime/server/node_modules/${relative}`] = "system binary";
+  const artifact = JSON.parse(files[".localapp-artifact.json"]);
+  artifact.files = Object.entries(files).filter(([relative]) => relative !== ".localapp-artifact.json" && !state.omit.has(relative)).map(([relative, contents]) => ({
+    path: relative, size: Buffer.byteLength(contents), sha256: crypto.createHash("sha256").update(contents).digest("hex"),
+  }));
+  if (state.inventoryMismatch) artifact.files.push({ path: "runtime/server/node_modules/example/.npmignore", size: 0, sha256: "0".repeat(64) });
+  if (state.changedChecksum) artifact.files[0].sha256 = "0".repeat(64);
+  files[".localapp-artifact.json"] = `${JSON.stringify(artifact)}\n`;
   for (const [relative, contents] of Object.entries(files)) {
     if (state.omit.has(relative)) continue;
     const destination = path.join(packageRoot, relative);

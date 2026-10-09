@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,7 +48,7 @@ export async function checkNpmRelease({ tarballPath, expectedTag, releaseTargets
     const extracted = await run("tar", ["-xzf", resolvedTarball, "-C", extractionRoot, "--no-same-owner"]);
     if (extracted.code !== 0) throw new Error(`could not extract release tarball: ${extracted.stderr.trim()}`);
     const packageRoot = path.join(extractionRoot, "package");
-    await assertSafeTree(packageRoot);
+    const actualFiles = await assertSafeTree(packageRoot);
     for (const relative of requiredFiles) await requireRegularFile(packageRoot, relative);
 
     const packageJson = await readJson(path.join(packageRoot, "package.json"), "package.json");
@@ -67,6 +68,7 @@ export async function checkNpmRelease({ tarballPath, expectedTag, releaseTargets
     assertExactTargets(sortedTargets(artifact.nativeAdapters, "artifact native adapters"), expectedTargets);
     assertExactTargets(sortedTargets(nativeManifest.adapters, "native adapter manifest"), expectedTargets);
 
+    await validateArtifactFiles(packageRoot, artifact.files, actualFiles);
     await runNpmDryRun(resolvedTarball);
     return { name: packageJson.name, version: packageJson.version, targets: expectedTargets };
   } finally {
@@ -141,6 +143,7 @@ function isSafeArchivePath(entry) {
 async function assertSafeTree(root) {
   const rootStat = await fs.lstat(root).catch(() => null);
   if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) throw new Error("release tarball must contain one package directory");
+  const files = new Set();
   const visit = async (directory) => {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
@@ -148,9 +151,28 @@ async function assertSafeTree(root) {
       if (stat.isSymbolicLink()) throw new Error("release tarball contains a symbolic link");
       if (stat.isDirectory()) await visit(absolute);
       else if (!stat.isFile()) throw new Error("release tarball contains an unsupported entry");
+      else files.add(path.relative(root, absolute).split(path.sep).join("/"));
     }
   };
   await visit(root);
+  files.delete(".localapp-artifact.json");
+  return files;
+}
+
+async function validateArtifactFiles(root, entries, actualFiles) {
+  if (!Array.isArray(entries) || entries.length !== actualFiles.size) throw new Error("artifact file inventory does not match packed files");
+  const expected = new Set();
+  for (const entry of entries) {
+    if (!entry || !isSafeArchivePath(`package/${entry.path}`) || !actualFiles.has(entry.path) || expected.has(entry.path)
+      || !Number.isSafeInteger(entry.size) || entry.size < 0 || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+      throw new Error("artifact file inventory is invalid");
+    }
+    expected.add(entry.path);
+    const bytes = await fs.readFile(path.join(root, ...entry.path.split("/")));
+    if (bytes.length !== entry.size || crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256) {
+      throw new Error(`artifact file changed: ${entry.path}`);
+    }
+  }
 }
 
 async function requireRegularFile(root, relative) {

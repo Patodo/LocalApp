@@ -32,7 +32,8 @@ export async function copyHarnessDependencies(serverDirectory, outputDirectory) 
       const relative = path.relative(sourceDirectory, file);
       // Source maps and type declarations are not used by Node. Keep the
       // compiler's declarations and all runtime/native assets intact.
-      return relative.split(path.sep)[0] !== "node_modules"
+      return path.basename(file) !== ".npmignore"
+        && relative.split(path.sep)[0] !== "node_modules"
         && !relative.endsWith(".map")
         && (name === "typescript" || !/\.d\.(?:ts|mts|cts)$/.test(relative));
     } });

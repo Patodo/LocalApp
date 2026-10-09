@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -45,7 +46,15 @@ test("pnpm pack ships an executable localapp binary", async (t) => {
   const nativeManifest = JSON.parse(await fs.readFile(path.join(nativeRoot, "adapter-manifest.json"), "utf8"));
   const nativeEntries = await fs.readdir(nativeRoot);
   assert.deepEqual(nativeEntries.sort(), ["adapter-manifest.json", nativeManifest.target]);
-  const packedFiles = await listFiles(path.join(extracted, "package"));
+  const packedRoot = path.join(extracted, "package");
+  const packedFiles = await listFiles(packedRoot);
+  const artifact = JSON.parse(await fs.readFile(path.join(packedRoot, ".localapp-artifact.json"), "utf8"));
+  assert.deepEqual(packedFiles.filter((file) => file !== ".localapp-artifact.json").sort(), artifact.files.map((file) => file.path).sort());
+  for (const entry of artifact.files) {
+    const bytes = await fs.readFile(path.join(packedRoot, ...entry.path.split("/")));
+    assert.equal(bytes.length, entry.size, entry.path);
+    assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"), entry.sha256, entry.path);
+  }
   assert.equal(packedFiles.some((file) => /(^|\/)(tauri|desktop|electron)(\/|$)/i.test(file)), false);
   const version = await run(process.execPath, [binary, "--version"], extracted);
   assert.equal(version.code, 0, version.stderr);
