@@ -10,7 +10,6 @@ import { toast } from "sonner";
 interface Provider { id: string; name: string; protocol: string; baseUrl: string; model: string; apiKey?: string; hasApiKey?: boolean }
 interface McpServer { serverName: string; transport?: "streamable-http" | "stdio"; url?: string; headers?: Record<string, string>; hasHeaders?: boolean; command?: string; args?: string[]; env?: Record<string, string>; hasEnv?: boolean; hasArgs?: boolean; hasUrlQuery?: boolean }
 interface Settings { providers: Provider[]; defaultProviderId: string; grants: Record<string, string[]>; mcpServers: McpServer[] }
-const capabilities: Record<string, string> = { files: "工作区文件", terminal: "Server 终端", mcp: "MCP", skills: "Skills", subagents: "子 Agent", jobs: "后台任务", web: "网页访问", workflow: "工作流", schedule: "定时任务" };
 
 export default function AgentModelSettings() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -24,7 +23,7 @@ export default function AgentModelSettings() {
   const save = async () => {
     setSaving(true); setError("");
     try {
-      const payload = { ...settings, mcpServers: settings?.mcpServers.map((server, index) => server.transport === "stdio" ? { ...server, args: !mcpArguments[index] ? server.hasArgs ? undefined : server.args ?? [] : JSON.parse(mcpArguments[index]), env: !mcpEnvironment[index] ? server.env : JSON.parse(mcpEnvironment[index]) } : server) };
+      const payload = { providers: settings?.providers, defaultProviderId: settings?.defaultProviderId, mcpServers: settings?.mcpServers.map((server, index) => server.transport === "stdio" ? { ...server, args: !mcpArguments[index] ? server.hasArgs ? undefined : server.args ?? [] : JSON.parse(mcpArguments[index]), env: !mcpEnvironment[index] ? server.env : JSON.parse(mcpEnvironment[index]) } : server) };
       const response = await fetch("/api/agent/settings", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.error || "保存失败");
@@ -49,10 +48,10 @@ export default function AgentModelSettings() {
       </fieldset>)}
       <Button variant="outline" onClick={() => { const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join(""); setSettings({ ...settings, defaultProviderId: settings.defaultProviderId || id, providers: [...settings.providers, { id, name: "", protocol: "openai-completions", baseUrl: "https://api.deepseek.com/v1", model: "", apiKey: "" }] }); }}><Plus className="mr-2 h-4 w-4" />添加供应商</Button>
     </div>
-    <section className="space-y-3"><h2 className="text-lg font-semibold">应用可用能力</h2>
-      <p className="text-sm text-muted-foreground">应用需要在 manifest.json 中声明能力，你在这里允许后才会启用。终端与工作流在 Server 主机执行代码；只允许你信任的应用。页面工具始终按你的应用权限执行。</p>
-      <div className="flex gap-2"><Input aria-label="应用地址" placeholder="用户名/应用名" value={appId} onChange={(e) => setAppId(e.target.value)} /><Button variant="outline" onClick={() => { if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(appId)) { setError("请填写 用户名/应用名"); return; } setSettings({ ...settings, grants: { ...settings.grants, [appId]: settings.grants[appId] ?? [] } }); setAppId(""); }}>添加应用</Button></div>
-      {Object.entries(settings.grants).map(([id, enabled]) => <fieldset key={id} className="rounded border p-3"><legend>{id}</legend><div className="flex flex-wrap gap-3">{Object.entries(capabilities).map(([key, label]) => <label key={key}><input type="checkbox" checked={enabled.includes(key)} onChange={(e) => setSettings({ ...settings, grants: { ...settings.grants, [id]: e.target.checked ? [...enabled, key] : enabled.filter((c) => c !== key) } })} /> {label}</label>)}<button aria-label={`删除应用授权 ${id}`} onClick={() => { const grants = { ...settings.grants }; delete grants[id]; setSettings({ ...settings, grants }); }}><Trash2 className="h-4 w-4" /></button></div></fieldset>)}
+    <section className="space-y-3"><h2 className="text-lg font-semibold">应用 Agent 设置</h2>
+      <p className="text-sm text-muted-foreground">Skills、能力和工具在各应用的设置页选择，仅影响当前用户。</p>
+      <div className="flex gap-2"><Input aria-label="应用地址" placeholder="用户名/应用名" value={appId} onChange={(event) => setAppId(event.target.value)} /><Button variant="outline" onClick={() => { if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(appId)) { setError("请填写 用户名/应用名"); return; } window.location.href = `/my/agent?${new URLSearchParams({ appId })}`; }}>打开应用设置</Button></div>
+      {Object.keys(settings.grants).map((id) => <a className="block underline" key={id} href={`/my/agent?${new URLSearchParams({ appId: id })}`}>{id}</a>)}
     </section>
     <section className="space-y-3"><h2 className="text-lg font-semibold">MCP 服务</h2>
       {settings.mcpServers.map((server, index) => <div key={index} className="space-y-2 rounded border p-3">

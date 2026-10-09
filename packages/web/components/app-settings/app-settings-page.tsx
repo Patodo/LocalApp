@@ -35,7 +35,9 @@ type DataState = {
   files: { count: number; size: number };
   backups: Backup[];
 };
-type Tab = "info" | "general" | "access" | "database" | "notify" | "data" | "manage";
+import { AppAgentSettings } from "./agent-settings";
+
+type Tab = "agent" | "info" | "general" | "access" | "database" | "notify" | "data" | "manage";
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "info", label: "应用信息" },
@@ -45,6 +47,7 @@ const tabs: Array<{ id: Tab; label: string }> = [
   { id: "notify", label: "通知" },
   { id: "data", label: "数据管理" },
   { id: "manage", label: "应用管理" },
+  { id: "agent", label: "Agent" },
 ];
 const accessLevels = ["public", "authenticated", "owner", "acl"];
 
@@ -72,6 +75,7 @@ export function AppSettingsPage({ name }: { name: string }) {
   const [data, setData] = useState<DataState | null>(null);
   const [backupName, setBackupName] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const base = `/api/me/pages/${encodeURIComponent(name)}`;
 
   const load = async () => {
@@ -86,6 +90,7 @@ export function AppSettingsPage({ name }: { name: string }) {
     const selected = new URLSearchParams(window.location.search).get("tab") as Tab | null;
     if (selected && tabs.some((item) => item.id === selected)) setTab(selected);
   }, []);
+  useEffect(() => { tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }, [tab, !!settings]);
   useEffect(() => { if (tab === "data") void loadData().catch(() => toast.error("加载数据状态失败")); }, [tab]);
 
   const manifest = useMemo(() => view === "source" ? settings?.sourceManifest ?? {} : draft, [view, settings, draft]);
@@ -160,7 +165,7 @@ export function AppSettingsPage({ name }: { name: string }) {
   const pageAccess = manifest.pageAccess ?? { level: "public", acl: [] };
   const db = manifest.db ?? { mode: "crud", sqlAccess: "owner", defaultAccess: {} };
   const notify = manifest.notify ?? { enabled: false };
-  const manifestTab = !(["info", "data", "manage"] as Tab[]).includes(tab);
+  const manifestTab = !(["info", "data", "manage", "agent"] as Tab[]).includes(tab);
 
   return <div className="w-full">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -179,7 +184,7 @@ export function AppSettingsPage({ name }: { name: string }) {
       </div>
     </div>
 
-    <div className="mb-5 flex gap-1 overflow-x-auto border-b" role="tablist">
+    <div ref={tabsRef} className="mb-5 flex gap-1 overflow-x-auto border-b" role="tablist">
       {tabs.map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} className={`h-10 shrink-0 border-b-2 px-3 text-sm ${tab === item.id ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground"}`} onClick={() => switchTab(item.id)}>{item.label}</button>)}
     </div>
 
@@ -187,6 +192,7 @@ export function AppSettingsPage({ name }: { name: string }) {
       {readonly ? <span className="text-xs font-medium text-muted-foreground">只读</span> : <Button size="sm" onClick={save} disabled={busy}><Save />保存配置</Button>}
     </div>}
 
+    {tab === "agent" && <AppAgentSettings appId={`${settings.app.userId}/${settings.app.name}`} />}
     {tab === "info" && <section className="space-y-5">
       <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2"><Info label="应用名称" value={settings.app.name}/><Info label="所有者" value={settings.app.userId}/><Info label="创建时间" value={new Date(settings.app.createdAt).toLocaleString()}/><Info label="更新时间" value={new Date(settings.app.updatedAt).toLocaleString()}/><Info label="当前版本" value={`v${settings.app.currentVersion}`}/><Info label="版本数量" value={String(settings.app.versionCount)}/></dl>
       <div><h2 className="mb-2 text-sm font-semibold">版本历史</h2><div className="divide-y border-y">{settings.app.versions.slice().reverse().map((version) => <div key={version.version} className="flex flex-wrap justify-between gap-2 py-3 text-sm"><span className="font-medium">v{version.version}</span><span className="text-muted-foreground">{new Date(version.createdAt).toLocaleString()} · {version.fileCount} 个文件 · {formatSize(version.totalSize)}</span></div>)}</div></div>

@@ -60,6 +60,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
         initialState: { systemPrompt },
       });
       agent.state.tools = tools;
+      void agent.registerTools().catch(() => {});
 
       agent.subscribe((event: AgentEvent) => {
         if (cancelled) return;

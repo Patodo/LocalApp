@@ -5,7 +5,7 @@ import type { AgentInteraction, HarnessAgent } from "./harness-client.js";
 export function AgentControls({ agent }: { agent: HarnessAgent | null }) {
   const [providers, setProviders] = useState<Array<{ id: string; name: string; model: string }>>([]);
   const [sessions, setSessions] = useState<Array<{ id: string; createdAt: number }>>([]);
-  const [settingsUrl, setSettingsUrl] = useState("/my/models/");
+  const [settingsUrl, setSettingsUrl] = useState("/my/models");
   const [error, setError] = useState("");
   const [, render] = useState(0);
   useEffect(() => {
@@ -19,6 +19,7 @@ export function AgentControls({ agent }: { agent: HarnessAgent | null }) {
   const act = (operation: Promise<unknown>) => { setError(""); operation.catch((e) => setError(e.message)); };
   return <div className="space-y-2 border-b p-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
+      {agent && agent.appId !== "platform" && <a href={`${settingsUrl.replace(/\/my\/models\/?$/, "/my/agent")}?${new URLSearchParams({ appId: agent.appId })}`} target="_blank" rel="noreferrer">应用 Agent 设置</a>}
       <a href={settingsUrl} target="_blank" rel="noreferrer">模型与 Agent 设置</a>
       <select aria-label="模型供应商" value={agent?.providerId ?? ""} disabled={!agent || agent.state.isStreaming} onChange={(e) => { if (agent) { agent.providerId = e.target.value; agent.newSession(); agent.startBackgroundEvents(); act(agent.listSessions().then(setSessions)); render((n) => n + 1); } }}>
         <option value="">选择模型</option>{providers.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.model}</option>)}

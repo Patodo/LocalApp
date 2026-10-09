@@ -27,3 +27,21 @@ it("encrypts user credentials and preserves hidden MCP credentials during unrela
     expect(new AgentSettingsStore(root).read("alice").providers[0].apiKey).toBe("test-provider-secret-marker");
   } finally { closeMetaDb(); await fs.rm(root, { recursive: true, force: true }); }
 });
+
+it("isolates application skill/tool choices by user and preserves them for old settings clients", async () => {
+  const root = path.resolve(__dirname, "../../../../../tmp/agent-preferences-test", String(process.pid));
+  await fs.mkdir(root, { recursive: true }); await initMetaDb(root);
+  try {
+    const store = new AgentSettingsStore(root);
+    const oldClient = { providers: [], defaultProviderId: "", grants: { "owner/app": ["skills", "files", "terminal"] }, mcpServers: [] };
+    store.write("alice", { ...oldClient, applications: { "owner/app": { skills: ["pdf"], disabledTools: ["bash", "deleteRecord"], tools: [{ name: "deleteRecord", description: "Delete" }] } } });
+    store.write("alice", oldClient);
+    const { grants, ...modelOnly } = oldClient;
+    store.write("alice", modelOnly);
+    expect(store.read("alice").grants["owner/app"]).toContain("skills");
+    expect(store.read("alice").applications["owner/app"].skills).toEqual(["pdf"]);
+    expect(store.read("bob").applications).toEqual({});
+    expect(() => store.write("alice", { ...oldClient, applications: { "owner/app": { skills: ["../secret"], disabledTools: [], tools: [] } } })).toThrow("preferences");
+    expect(store.read("alice").applications["owner/app"].disabledTools).toContain("bash");
+  } finally { closeMetaDb(); await fs.rm(root, { recursive: true, force: true }); }
+});

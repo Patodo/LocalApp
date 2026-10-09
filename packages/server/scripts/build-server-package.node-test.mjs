@@ -18,6 +18,14 @@ test("packed Node Server initializes and serves Web without repository dependenc
   const artifact = await buildServerPackage({ outputDirectory });
   const repeated = await buildServerPackage({ outputDirectory: repeatedDirectory });
   assert.equal(artifact.bundleDigest, repeated.bundleDigest);
+  const manifest = JSON.parse(await fs.readFile(artifact.manifestPath, "utf8"));
+  for (const skill of ["markitdown", "pdf", "docx", "xlsx"]) {
+    assert.ok(manifest.files[`skills/${skill}/SKILL.md`]);
+    assert.ok(manifest.files[`skills/${skill}/LICENSE`]);
+    assert.ok(manifest.files[`skills/${skill}/SOURCE.json`]);
+    assert.ok(Object.keys(manifest.files).some((file) => file.startsWith(`skills/${skill}/scripts/`) && file.endsWith(".py")));
+  }
+  assert.match(await fs.readFile(artifact.bin, "utf8"), /LOCALAPP_PUBLIC_SKILLS_ROOT/);
   assert.equal((await fs.readFile(artifact.bin, "utf8")).startsWith("#!/usr/bin/env node\n"), true);
 
   const child = spawn(process.execPath, [artifact.bin, "start", "--data-dir", dataDirectory, "--port", "0"], {
