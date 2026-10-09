@@ -50,7 +50,7 @@ it("runs a confined terminal command and prevents reads of another application's
     const request = JSON.parse(init.body); requests.push(request);
     const call = request.messages.at(-1)?.role !== "tool";
     const quoted = "'" + secret.replaceAll("'", "'\\''") + "'";
-    const delta = call ? { tool_calls: [{ index: 0, id: "shell-call", function: { name: "bash", arguments: JSON.stringify({ description: "Verify application isolation", command: `printf terminal-ok > terminal.txt; cat terminal.txt; cat ${quoted}` }) } }] } : { content: "finished" };
+    const delta = call ? { tool_calls: [{ index: 0, id: "shell-call", function: { name: "bash", arguments: JSON.stringify({ description: "Verify application isolation", command: `printf terminal-ok > terminal.txt; cat terminal.txt; cat ${quoted}; if cat /proc/${process.pid}/environ >/dev/null 2>&1; then printf server-env-readable; else printf server-env-denied; fi` }) } }] } : { content: "finished" };
     return new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`);
   }));
   const harness = new DeepSeekHarness({ llmApiKey: "test", llmBaseUrl: "http://model.test/v1", llmModel: "test", root, capabilities: ["terminal"] });
@@ -58,6 +58,7 @@ it("runs a confined terminal command and prevents reads of another application's
     await harness.run("user", { sessionId: "terminal", prompt: "execute", systemPrompt: "", tools: [] }, () => {}, new AbortController().signal);
     expect(requests.at(-1).messages.at(-1).content).not.toContain("outside-application-secret");
     expect(requests.at(-1).messages.at(-1).content).toContain("terminal-ok");
+    expect(requests.at(-1).messages.at(-1).content).toContain("server-env-denied");
     expect(await fs.readFile(path.join(root, "workspace/terminal.txt"), "utf8").catch(() => undefined), requests.at(-1).messages.at(-1).content).toBe("terminal-ok");
   } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
 }, 30_000);

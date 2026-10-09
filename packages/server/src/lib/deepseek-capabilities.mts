@@ -151,7 +151,10 @@ class ApplicationSandbox extends LocalSandboxProvider {
         if (fs.lstatSync(directory).isSymbolicLink()) return [];
         return fs.readdirSync(directory).flatMap((entry) => readable(path.join(directory, entry)));
       };
-      const allowed = [...new Set(roots.filter((directory) => directory !== workspace).flatMap(readable))];
+      // A shared /proc exposes other Server processes' environment. The
+      // launcher resolves these self paths after spawning, for its own PID.
+      const processFiles = ["/proc/self", "/proc/thread-self", "/proc/cpuinfo", "/proc/meminfo", "/proc/version"].filter((file) => fs.existsSync(file));
+      const allowed = [...new Set([...roots.filter((directory) => directory !== workspace && directory !== "/proc").flatMap(readable), ...processFiles])];
       result.argv = [result.argv[0], ...allowed.flatMap((directory) => ["--ro", directory]), "--rw", "/dev/null", "--rw", workspace, "--", ...args[0]];
       return result;
     }
