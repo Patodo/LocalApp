@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Square,
-  Minus,
+  Maximize2,
+  Minimize2,
   Plus,
   ChevronDown,
   Code2,
@@ -247,7 +248,7 @@ export function AppDevelopmentDock(
           aria-label={expanded ? "收起开发对话" : "展开开发对话"}
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? <Minus size={16} /> : <Plus size={16} />}
+          {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
         </button>
       </header>
       {expanded && (
