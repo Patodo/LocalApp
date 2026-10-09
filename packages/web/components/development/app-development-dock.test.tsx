@@ -5,7 +5,7 @@ import { AppDevelopmentDock } from "./app-development-dock";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
 vi.mock("./dsh-view", () => ({
   DshMessages: () => null,
-  DshMarkdown: () => null,
+  DshMarkdown: ({ text }: { text: string }) => <span>{text}</span>,
   DshDiff: () => null,
   DshTerminal: () => null,
 }));
@@ -196,4 +196,64 @@ it("uses the composer plus for attachments without creating a conversation or ex
   expect(p.actions.newSession).not.toHaveBeenCalled();
   expect(screen.queryByRole("log")).toBeNull();
   expect(screen.getByLabelText("待发送附件")).toHaveTextContent("brief.pdf");
+});
+
+it("minimizes without stopping work, shows a spinner, then previews only the final reply", () => {
+  const p = props();
+  p.messages = [
+    { role: "user", content: "request" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Intermediate" },
+        { type: "toolCall", id: "tool", name: "read" },
+      ],
+    },
+  ];
+  const view = render(<AppDevelopmentDock {...p} running />);
+  fireEvent.click(screen.getByLabelText("最小化开发对话"));
+  expect(screen.queryByLabelText("应用修改需求")).toBeNull();
+  expect(
+    screen
+      .getByLabelText("开发任务进行中，恢复对话")
+      .querySelector(".dock-spinner"),
+  ).not.toBeNull();
+  expect(p.actions.stop).not.toHaveBeenCalled();
+  fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+  view.rerender(
+    <AppDevelopmentDock
+      {...p}
+      messages={[
+        ...p.messages,
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Private reasoning" },
+            { type: "text", text: "Final answer" },
+          ],
+        },
+      ]}
+    />,
+  );
+  expect(screen.getByRole("tooltip")).toHaveTextContent("Final answer");
+  expect(screen.getByRole("tooltip")).not.toHaveTextContent("Intermediate");
+  expect(screen.getByRole("tooltip")).not.toHaveTextContent(
+    "Private reasoning",
+  );
+  fireEvent.click(screen.getByLabelText("关闭消息预览"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+  fireEvent.click(screen.getByLabelText("恢复开发对话"));
+  expect(screen.getByLabelText("应用修改需求")).toBeInTheDocument();
+});
+it("does not preview a previous turn after the latest user request has no final reply", () => {
+  const p = props();
+  p.messages = [
+    { role: "assistant", content: "Previous reply" },
+    { role: "user", content: "Latest request" },
+  ];
+  render(<AppDevelopmentDock {...p} />);
+  fireEvent.click(screen.getByLabelText("最小化开发对话"));
+  fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
 });

@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
+  Minus,
+  CircleAlert,
   Square,
   Maximize2,
   Minimize2,
@@ -30,6 +32,8 @@ export function AppDevelopmentDock(
   },
 ) {
   const [expanded, setExpanded] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [previewVisible, setPreviewVisible] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const history = useRef<HTMLDivElement>(null);
   const historyTrigger = useRef<HTMLButtonElement>(null);
@@ -64,6 +68,32 @@ export function AppDevelopmentDock(
   }, [p.prompt]);
   const building = ["queued", "running"].includes(p.build?.status);
   const ready = p.build?.status === "succeeded";
+  const working = p.running || building || importing;
+  let finalReply = "";
+  for (let i = p.messages.length - 1; i >= 0; i--) {
+    const message = p.messages[i];
+    if (message.role === "user") break;
+    if (message.role !== "assistant") continue;
+    if (
+      Array.isArray(message.content) &&
+      message.content.some(
+        (block: any) => block.type === "toolCall" || block.type === "tool-call",
+      )
+    )
+      continue;
+    const text =
+      typeof message.content === "string"
+        ? message.content
+        : (message.content ?? [])
+            .filter((block: any) => block.type === "text")
+            .map((block: any) => block.text ?? "")
+            .join("\n");
+    if (text.trim()) {
+      finalReply = text;
+      break;
+    }
+  }
+  const completion = p.error || (working ? "" : p.live || finalReply);
   async function importDirectory(list: FileList | null) {
     if (!list?.length || !p.importSource) return;
     setImportError("");
@@ -121,12 +151,86 @@ export function AppDevelopmentDock(
       if (sourceInput.current) sourceInput.current.value = "";
     }
   }
+  if (minimized)
+    return (
+      <section
+        className="development-mini dsh-development"
+        aria-label="已最小化的开发对话"
+        onMouseEnter={() => setPreviewVisible(true)}
+        onMouseLeave={() => setPreviewVisible(false)}
+        onFocusCapture={() => setPreviewVisible(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node))
+            setPreviewVisible(false);
+        }}
+      >
+        {!working && completion && previewVisible && (
+          <div
+            className="development-mini-preview"
+            role="tooltip"
+            id="development-mini-reply"
+          >
+            <button
+              className="development-mini-dismiss"
+              aria-label="关闭消息预览"
+              onClick={() => setPreviewVisible(false)}
+            >
+              <X size={14} />
+            </button>
+            <strong>
+              {p.error ? <CircleAlert size={17} /> : <Check size={17} />}编辑{" "}
+              {p.application?.name ?? p.project?.name}
+            </strong>
+            <div className="development-mini-message">
+              <DshMarkdown text={completion} />
+            </div>
+          </div>
+        )}
+        <button
+          className="development-mini-restore"
+          aria-label={working ? "开发任务进行中，恢复对话" : "恢复开发对话"}
+          aria-describedby={
+            !working && completion && previewVisible
+              ? "development-mini-reply"
+              : undefined
+          }
+          onClick={() => {
+            setMinimized(false);
+            setPreviewVisible(false);
+          }}
+        >
+          {working ? (
+            <LoaderCircle className="dock-spinner" size={23} />
+          ) : (
+            <MessageSquare size={23} />
+          )}
+          {!working && completion && (
+            <span className="development-mini-dot" aria-hidden="true" />
+          )}
+        </button>
+        {working && (
+          <span className="sr-only" role="status">
+            {p.interaction ? "Agent 等待回复" : "开发任务进行中"}
+          </span>
+        )}
+      </section>
+    );
   return (
     <section
       className={`app-development-dock dsh-development ${expanded ? "is-expanded" : ""} ${p.running ? "is-running" : ""}`}
       aria-label="应用开发对话"
     >
       <header className="development-dock-header">
+        <button
+          aria-label="最小化开发对话"
+          title="最小化"
+          onClick={() => {
+            setHistoryOpen(false);
+            setMinimized(true);
+          }}
+        >
+          <Minus size={16} />
+        </button>
         {p.running && <LoaderCircle className="dock-spinner" size={15} />}
         <div
           className="dock-history"
