@@ -42,6 +42,10 @@ export class HarnessAgent {
     if (!response.ok || !body.success) throw new Error(body.error || "Agent 请求失败");
     return body.data;
   }
+  async registerTools() {
+    if (this.appId === "platform") return;
+    await this.api("app-tools", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appId: this.appId, tools: this.state.tools.map(({ name, description }) => ({ name, description })) }) });
+  }
   settings(): Promise<{ providers: Array<{ id: string; name: string; model: string }>; defaultProviderId: string; settingsUrl?: string }> { return this.api("settings"); }
   listSessions(): Promise<Array<{ id: string; createdAt: number }>> { return this.api(`sessions?${new URLSearchParams({ appId: this.appId, ...(this.providerId ? { providerId: this.providerId } : {}) })}`); }
   async selectSession(id: string) {

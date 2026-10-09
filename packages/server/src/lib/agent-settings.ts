@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { PUBLIC_AGENT_SKILLS } from "./public-agent-skills.js";
 import { getDb, flushMetaDb } from "./meta-sqlite.js";
 
 export const AGENT_CAPABILITIES = ["files", "terminal", "mcp", "skills", "subagents", "jobs", "web", "workflow", "schedule"] as const;
@@ -22,13 +23,19 @@ export interface AgentMcpServer {
   args?: string[];
   env?: Record<string, string>;
 }
+export interface AgentAppPreferences {
+  skills: string[];
+  disabledTools: string[];
+  tools: Array<{ name: string; description: string }>;
+}
 export interface AgentSettings {
   providers: AgentProvider[];
   defaultProviderId: string;
   grants: Record<string, AgentCapability[]>;
   mcpServers: AgentMcpServer[];
+  applications: Record<string, AgentAppPreferences>;
 }
-const empty = (): AgentSettings => ({ providers: [], defaultProviderId: "", grants: {}, mcpServers: [] });
+const empty = (): AgentSettings => ({ providers: [], defaultProviderId: "", grants: {}, mcpServers: [], applications: {} });
 
 /** Server-owned encrypted storage; browser reads never return provider or MCP credentials. */
 export class AgentSettingsStore {
@@ -57,7 +64,7 @@ export class AgentSettingsStore {
       const decipher = createDecipheriv("aes-256-gcm", this.key, iv);
       decipher.setAAD(Buffer.from(userId));
       decipher.setAuthTag(tag);
-      return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8"));
+      return { ...empty(), ...JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")) };
     } finally { stmt.free(); }
   }
   publicSettings(userId: string) {
@@ -66,7 +73,7 @@ export class AgentSettingsStore {
   }
   write(userId: string, input: unknown) {
     const settings = input as AgentSettings;
-    if (!settings || !Array.isArray(settings.providers) || settings.providers.length > 20 || typeof settings.defaultProviderId !== "string" || !settings.grants || typeof settings.grants !== "object" || Array.isArray(settings.grants) || !Array.isArray(settings.mcpServers) || settings.mcpServers.length > 20) throw new Error("Invalid Agent settings");
+    if (!settings || !Array.isArray(settings.providers) || settings.providers.length > 20 || typeof settings.defaultProviderId !== "string" || settings.grants !== undefined && (!settings.grants || typeof settings.grants !== "object" || Array.isArray(settings.grants)) || !Array.isArray(settings.mcpServers) || settings.mcpServers.length > 20) throw new Error("Invalid Agent settings");
     const previous = this.read(userId);
     const ids = new Set<string>();
     const providers = settings.providers.map((provider) => {
@@ -80,7 +87,7 @@ export class AgentSettingsStore {
     });
     if (settings.defaultProviderId && !ids.has(settings.defaultProviderId)) throw new Error("Default provider does not exist");
     const grants: Record<string, AgentCapability[]> = {};
-    for (const [appId, capabilities] of Object.entries(settings.grants)) {
+    for (const [appId, capabilities] of Object.entries(settings.grants ?? previous.grants)) {
       if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(appId) || !Array.isArray(capabilities) || capabilities.some((c) => !AGENT_CAPABILITIES.includes(c))) throw new Error("Invalid application capability grant");
       grants[appId] = [...new Set(capabilities)];
     }
@@ -103,7 +110,12 @@ export class AgentSettingsStore {
       return { serverName: server.serverName, transport: "streamable-http", url: url.toString(), headers };
     });
     if (new Set(mcpServers.map((s) => s.serverName)).size !== mcpServers.length) throw new Error("Duplicate MCP server");
-    const value: AgentSettings = { providers, defaultProviderId: settings.defaultProviderId, grants, mcpServers };
+    const applications = settings.applications ?? previous.applications;
+    if (!applications || typeof applications !== "object" || Array.isArray(applications) || Object.keys(applications).length > 1000) throw new Error("Invalid application Agent preferences");
+    for (const [id, preferences] of Object.entries(applications)) {
+      if (!/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(id) || !preferences || !Array.isArray(preferences.skills) || preferences.skills.length > 20 || preferences.skills.some((name) => !PUBLIC_AGENT_SKILLS.some((skill) => skill.id === name)) || !Array.isArray(preferences.disabledTools) || preferences.disabledTools.length > 500 || preferences.disabledTools.some((name) => typeof name !== "string" || !name || name.length > 200) || !Array.isArray(preferences.tools) || preferences.tools.length > 100 || preferences.tools.some((tool) => !tool || typeof tool.name !== "string" || !tool.name || tool.name.length > 200 || typeof tool.description !== "string" || tool.description.length > 10000)) throw new Error("Invalid application Agent preferences");
+    }
+    const value: AgentSettings = { providers, defaultProviderId: settings.defaultProviderId, grants, mcpServers, applications };
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.key, iv);
     cipher.setAAD(Buffer.from(userId));

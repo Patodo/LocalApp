@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { PythonEnvironment } from "./python-environment.js";
+import { environmentProbe, summarizeEnvironment, type AgentEnvironment, type EnvironmentCheck } from "./agent-environment.js";
 import fs from "node:fs";
 import SessionPersistence from "@deepseek-ai/dsh-session-persistence-jsonl";
 import * as PiAi from "@deepseek-ai/dsh-llm-pi-ai";
@@ -62,7 +64,32 @@ export class DeepSeekHarness {
   private readonly ready: Promise<void>;
   private readonly timer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string }) {
+  private environmentCheck?: { at: number; result: Promise<AgentEnvironment> };
+  async checkEnvironment(): Promise<AgentEnvironment> {
+    if (this.environmentCheck && Date.now() - this.environmentCheck.at < 15_000) return this.environmentCheck.result;
+    const result = (async () => {
+      const enabled = this.config.capabilities?.includes("terminal") && !this.config.disabledTools?.includes("bash");
+      const selected = this.config.capabilities?.includes("skills") ? this.config.skills ?? [] : [];
+      const checks: EnvironmentCheck[] = [{ id: "terminal", name: "终端执行", status: enabled ? "ready" : "blocked", detail: enabled ? "已在当前用户和应用中开启。" : "请先在 Agent 页签开启终端执行，并确保 bash 工具未关闭。", required: true }];
+      if (!enabled || !this.config.root) return summarizeEnvironment("", selected, checks);
+      try {
+        const spec = this.ctx.shell.resolve({ command: environmentProbe(this.config.pythonEnvironment?.executable), workdir: path.join(this.config.root, "workspace"), timeoutMs: 60_000, stdoutMaxBytes: 32_768 });
+        const execution = await this.ctx.shell.execute(spec);
+        const output = await execution.result();
+        const ok = output.exitCode === 0 && !output.timedOut && !output.sandbox?.denied;
+        checks.push({ id: "runner", name: "工作区命令执行", status: ok ? "ready" : "blocked", detail: ok ? "已通过 Agent 的执行器运行检查。" : "执行检查失败或超时；请检查 Server 的工作区执行支持。", required: true });
+        return summarizeEnvironment(ok ? output.stdout.text : "", selected, checks);
+      } catch {
+        checks.push({ id: "runner", name: "工作区命令执行", status: "blocked", detail: "Server 无法在应用工作区执行检查，请检查执行器支持。", required: true });
+        return summarizeEnvironment("", selected, checks);
+      }
+    })();
+    this.environmentCheck = { at: Date.now(), result };
+    return result;
+  }
+  toolCatalog() { return this.ctx.tools.schemas().map(({ name, description }) => ({ name, description })); }
+
+  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment }) {
     this.ready = (async () => {
       await this.ctx.plugin(LlmRuntime);
       await this.ctx.plugin(SessionRegistry);
@@ -83,7 +110,8 @@ export class DeepSeekHarness {
         this.ctx.provide("sessionController", { resolveAgent: async (id: string) => {
           return { agent: await this.restoreScheduledSession(id) };
         } });
-        await mountHarnessCapabilities(this.ctx, config.root, config.capabilities ?? [], config.mcpServers ?? []);
+        await mountHarnessCapabilities(this.ctx, config.root, config.capabilities ?? [], config.mcpServers ?? [], config.skills ?? [], config.pythonEnvironment);
+        this.ctx.tools.guard((execution) => config.disabledTools?.includes(execution.name) ? "此工具已在应用设置中关闭" : undefined);
         this.ctx.systemPrompt.section({ name: "localapp-application", order: 0, text: () => {
           try { return JSON.parse(fs.readFileSync(path.join(config.root!, "application-prompt.json"), "utf8")).systemPrompt; }
           catch { return "你是 LocalApp 应用中的 Agent，按用户要求使用应用提供的工具。"; }
@@ -103,6 +131,8 @@ export class DeepSeekHarness {
         });
       }
       this.ctx.on("agent/created", ({ agent }): undefined => {
+        const denied = this.ctx.tools.schemas().map((tool) => tool.name).filter((name) => config.disabledTools?.includes(name));
+        if (denied.length) agent.ctx.tools.restrict({ deny: denied });
         const connection = this.connectionFor(agent.id);
         if (!connection || connection === agent.id) return;
         const conversation = this.conversations.get(connection)!;

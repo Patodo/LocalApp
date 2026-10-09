@@ -187,3 +187,8 @@ export function usePlatformAgent({
 
   return { harness: agentRef.current, chatMessages, setChatMessages, isRunning, aiError, agentSend, handleToolResult };
 }
+
+/** Keep the settings tool list available before a model request is sent. */
+export function registerAgentToolCatalog(appId: string, tools: Array<{ name: string; description: string }>) {
+  void fetch("/api/agent/app-tools", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appId, tools: [...SYSTEM_TOOLS, ...tools.filter((tool) => !SYSTEM_TOOL_NAMES.has(tool.name))].map(({ name, description }) => ({ name, description })) }) }).catch(() => {});
+}

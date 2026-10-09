@@ -6,7 +6,7 @@ import { Navbar, type PlatformEditSession, type PresenceSnapshot } from "./navba
 import { IssuesModal } from "./issues-modal";
 import { AiSidebar } from "./ai-sidebar";
 import { NotificationBell } from "./notification-bell";
-import { usePlatformAgent } from "./platform-agent";
+import { usePlatformAgent, registerAgentToolCatalog } from "./platform-agent";
 import { useAuthModals } from "@/components/auth-modals/auth-provider";
 import { Button } from "@/components/ui/button";
 import { CircleAlert, CircleOff, RefreshCw, Settings } from "lucide-react";
@@ -288,6 +288,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
     global[NATIVE_TOOL_REGISTRY_KEY] = {
       registerTools: (tools, executeFns, systemHint) => {
         registeredToolsRef.current = tools;
+        registerAgentToolCatalog(pagePath, tools);
         executeToolsRef.current = new Map(Object.entries(executeFns));
         systemHintRef.current = systemHint || "";
         setAiMode("system");
@@ -649,6 +650,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
       if (isRegisterToolsMessage(event.data)) {
         setAiMode("system");
         registeredToolsRef.current = event.data.tools;
+        registerAgentToolCatalog(pagePath, event.data.tools);
         systemHintRef.current = event.data.systemHint || "";
       } else if (isAiCustomModeMessage(event.data)) {
         setAiMode("custom");

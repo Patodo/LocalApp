@@ -1,8 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
+import { readPythonEnvironment } from "../lib/python-environment.js";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { AgentSettingsStore, AGENT_CAPABILITIES } from "../lib/agent-settings.js";
+import { PUBLIC_AGENT_SKILLS } from "../lib/public-agent-skills.js";
+import { systemAgentEnvironment, publicSkillAvailability } from "../lib/system-agent-environment.js";
 import { resolveAgentApp } from "../lib/agent-app.js";
 
 export async function agentRoutes(app: FastifyInstance) {
@@ -18,16 +21,21 @@ export async function agentRoutes(app: FastifyInstance) {
     const provider = saved.providers.find((p) => p.id === (providerId || saved.defaultProviderId));
     if (!provider) throw new Error("请先在模型与 Agent 设置中配置供应商和默认模型");
     const capabilities = application.capabilities.filter((c) => saved.grants[application.id]?.includes(c));
+    const preferences = saved.applications[application.id];
+    const availableSkills = publicSkillAvailability(await systemAgentEnvironment(app.config.dataDir));
+    const skills = capabilities.includes("skills") ? (preferences?.skills ?? []).filter(id => availableSkills.some(s => s.id === id && s.available)) : [];
+    const disabledTools = preferences?.disabledTools ?? [];
     const key = JSON.stringify([userId, application.id, provider.id]);
     if (opening.has(key)) { await opening.get(key); return runtime(userId, appId, providerId); }
-    const fingerprint = createHash("sha256").update(JSON.stringify([provider, capabilities, saved.mcpServers])).digest("hex");
+    const pythonEnvironment = readPythonEnvironment(app.config.dataDir);
+    const fingerprint = createHash("sha256").update(JSON.stringify([provider, capabilities, saved.mcpServers, skills, disabledTools, pythonEnvironment])).digest("hex");
     const old = runtimes.get(key);
     if (old?.fingerprint === fingerprint) return old.harness;
     if (!old && runtimes.size >= 100) throw new Error("Agent capacity reached");
     const pending = (async () => {
       if (old) { runtimes.delete(key); await old.harness.close(); }
       const root = path.join(app.config.dataDir, "agent", createHash("sha256").update(key).digest("hex"));
-      const harness = new DeepSeekHarness({ llmApiKey: provider.apiKey, llmBaseUrl: provider.baseUrl, llmModel: provider.model, protocol: provider.protocol, ownerId: userId, root, capabilities, mcpServers: saved.mcpServers });
+      const harness = new DeepSeekHarness({ llmApiKey: provider.apiKey, llmBaseUrl: provider.baseUrl, llmModel: provider.model, protocol: provider.protocol, ownerId: userId, root, capabilities, mcpServers: saved.mcpServers, skills, disabledTools, pythonEnvironment });
       try { await harness.initialize(); }
       catch (error) { await harness.close().catch(() => {}); throw error; }
       runtimes.set(key, { userId, fingerprint, harness });
@@ -51,7 +59,7 @@ export async function agentRoutes(app: FastifyInstance) {
     }
   };
   await restoreSchedules();
-  app.get("/api/agent/settings", async (req) => ({ success: true, data: { ...settings.publicSettings(req.userId), settingsUrl: `${(app.config.publicUrl || `${req.protocol}://${req.headers.host}`).replace(/\/$/, "")}/my/models/` }, capabilities: AGENT_CAPABILITIES }));
+  app.get("/api/agent/settings", async (req) => ({ success: true, data: { ...settings.publicSettings(req.userId), settingsUrl: `${(app.config.publicUrl || `${req.protocol}://${req.headers.host}`).replace(/\/$/, "")}/my/models` }, capabilities: AGENT_CAPABILITIES }));
   app.put("/api/agent/settings", async (req, reply) => {
     try {
       const data = settings.write(req.userId, req.body);
@@ -60,6 +68,50 @@ export async function agentRoutes(app: FastifyInstance) {
       await restoreSchedules(req.userId);
       return { success: true, data };
     } catch (error) { return reply.status(400).send({ success: false, error: error instanceof Error ? error.message : "Invalid settings" }); }
+  });
+  const appPreferences = async (userId: string, appId: string) => {
+    const application = resolveAgentApp(app.config.dataDir, userId, appId);
+    if (application.id === "platform") throw new Error("请选择应用");
+    const saved = settings.read(userId);
+    const preferences = saved.applications[application.id] ?? { skills: [], disabledTools: [], tools: [] };
+    const skillCatalog = publicSkillAvailability(await systemAgentEnvironment(app.config.dataDir));
+    let builtins: Array<{ name: string; description: string }> = [];
+    let toolsNotice = "";
+    if (saved.defaultProviderId) {
+      try { builtins = (await runtime(userId, application.id)).toolCatalog(); }
+      catch { toolsNotice = "DSH 工具列表暂时无法加载，请检查模型和 MCP 设置。仍可修改应用能力。"; }
+    } else toolsNotice = "配置模型供应商后可查看 DSH 工具。";
+    return { appId: application.id, capabilities: application.capabilities, enabledCapabilities: saved.grants[application.id] ?? [], skills: skillCatalog.map(({ unavailableReason, ...s }) => ({ ...s, ...(s.available ? {} : { unavailableReason }) })), enabledSkills: preferences.skills.filter(id => skillCatalog.some(s => s.id === id && s.available)), disabledTools: preferences.disabledTools, toolsNotice, tools: [...builtins.map((tool) => ({ ...tool, source: "dsh" })), ...preferences.tools.map((tool) => ({ ...tool, source: "app" }))] };
+  };
+  app.post<{ Body: { appId: string; tools: Array<{ name: string; description: string }> } }>("/api/agent/app-tools", async (req, reply) => {
+    try {
+      const application = resolveAgentApp(app.config.dataDir, req.userId, req.body?.appId);
+      if (application.id === "platform" || !Array.isArray(req.body.tools)) throw new Error("Invalid application tools");
+      const saved = settings.read(req.userId);
+      const preferences = saved.applications[application.id] ?? { skills: [], disabledTools: [], tools: [] };
+      settings.write(req.userId, { ...saved, applications: { ...saved.applications, [application.id]: { ...preferences, tools: req.body.tools.map(({ name, description }) => ({ name, description })) } } });
+      return { success: true };
+    } catch (error) { return reply.status(400).send({ success: false, error: (error as Error).message }); }
+  });
+  app.get<{ Querystring: { appId: string } }>("/api/agent/app-settings", async (req, reply) => {
+    try { return { success: true, data: await appPreferences(req.userId, req.query.appId) }; }
+    catch (error) { return reply.status(400).send({ success: false, error: (error as Error).message }); }
+  });
+  app.put<{ Body: { appId: string; enabledCapabilities: string[]; enabledSkills: string[]; disabledTools: string[] } }>("/api/agent/app-settings", async (req, reply) => {
+    try {
+      const input = req.body;
+      const application = resolveAgentApp(app.config.dataDir, req.userId, input?.appId);
+      if (application.id === "platform" || !Array.isArray(input.enabledCapabilities) || input.enabledCapabilities.some((capability) => !application.capabilities.some((declared) => declared === capability))) throw new Error("Invalid application capabilities");
+      if (!Array.isArray(input.enabledSkills) || input.enabledSkills.some(id => !PUBLIC_AGENT_SKILLS.some(s => s.id === id))) throw new Error("Invalid public skills");
+      const catalog = publicSkillAvailability(await systemAgentEnvironment(app.config.dataDir));
+      if (input.enabledSkills.some(id => !catalog.some(s => s.id === id && s.available))) throw new Error("系统文档处理依赖未就绪，无法启用此 Skill；请联系管理员。");
+      const saved = settings.read(req.userId);
+      settings.write(req.userId, { ...saved, grants: { ...saved.grants, [application.id]: input.enabledCapabilities }, applications: { ...saved.applications, [application.id]: { skills: input.enabledSkills, disabledTools: input.disabledTools, tools: saved.applications[application.id]?.tools ?? [] } } });
+      await Promise.all([...opening.values()].map((promise) => promise.catch(() => undefined)));
+      for (const [key, value] of runtimes) if (value.userId === req.userId && JSON.parse(key)[1] === application.id) { runtimes.delete(key); await value.harness.close(); }
+      await restoreSchedules(req.userId);
+      return { success: true, data: await appPreferences(req.userId, application.id) };
+    } catch (error) { return reply.status(400).send({ success: false, error: (error as Error).message }); }
   });
   app.get<{ Querystring: { appId?: string; providerId?: string } }>("/api/agent/sessions", async (req, reply) => {
     try { return { success: true, data: await (await runtime(req.userId, req.query.appId, req.query.providerId)).listSessions() }; }
@@ -99,6 +151,13 @@ export async function agentRoutes(app: FastifyInstance) {
     let harness: InstanceType<typeof DeepSeekHarness>;
     try { harness = await runtime(req.userId, input.appId, input.providerId); }
     catch (error) { return reply.status(400).send({ success: false, error: (error as Error).message }); }
+    if (input.appId && input.appId !== "platform") {
+      const application = resolveAgentApp(app.config.dataDir, req.userId, input.appId);
+      const saved = settings.read(req.userId);
+      const preferences = saved.applications[application.id] ?? { skills: [], disabledTools: [], tools: [] };
+      settings.write(req.userId, { ...saved, applications: { ...saved.applications, [application.id]: { ...preferences, tools: input.tools.map(({ name, description }) => ({ name, description })) } } });
+      input.tools = input.tools.filter((tool) => !preferences.disabledTools.includes(tool.name));
+    }
     const controller = new AbortController();
     const disconnect = () => controller.abort();
     reply.hijack();

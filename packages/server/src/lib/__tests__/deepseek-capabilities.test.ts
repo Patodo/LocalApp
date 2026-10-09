@@ -165,3 +165,62 @@ it("runs plan commands locally and prevents application actions while planning",
     await harness.run("user", { ...input, prompt: "/plan off" }, () => {}, new AbortController().signal);
   } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
 }, 30_000);
+it("loads only selected public skills and excludes disabled tools from model requests", async () => {
+  const { DeepSeekHarness } = await import("../deepseek-harness.mjs");
+  const requests: any[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return new Response('data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+  }));
+  const harness = new DeepSeekHarness({ llmApiKey: "test", llmBaseUrl: "http://model.test/v1", llmModel: "test", root, capabilities: ["skills", "files"], skills: ["pdf"], disabledTools: ["write"] });
+  try {
+    await harness.initialize();
+    await harness.run("user", { sessionId: "selected-skills", prompt: "list skills", systemPrompt: "", tools: [] }, () => {}, new AbortController().signal);
+    expect(requests[0].tools.map((tool: any) => tool.function.name)).toContain("read");
+    expect(requests[0].tools.map((tool: any) => tool.function.name)).not.toContain("write");
+    expect(JSON.stringify(requests[0].messages)).toContain("pdf");
+    expect(await fs.readdir(path.join(root, "workspace/.localapp-public-skills"))).toEqual(["pdf"]);
+    const ctx = (harness as any).ctx;
+    const agent = (harness as any).conversations.get("selected-skills").handle.agent;
+    const result = await agent.ctx.tools.execute({ callId: "disabled-write", signal: new AbortController().signal, name: "write", arguments: { file_path: "blocked.txt", content: "blocked" }, agent });
+    expect(result.isError).toBe(true);
+    expect(await fs.stat(path.join(root, "workspace/blocked.txt")).catch(() => undefined)).toBeUndefined();
+  } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
+}, 30_000);
+
+it("checks the real Agent execution environment without calling a model", async () => {
+  const { DeepSeekHarness } = await import("../deepseek-harness.mjs");
+  const harness = new DeepSeekHarness({ llmApiKey: "test", llmBaseUrl: "http://model.test/v1", llmModel: "test", root, capabilities: ["files", "terminal", "skills"], skills: ["pdf"] });
+  const model = vi.fn(); vi.stubGlobal("fetch", model);
+  try {
+    await harness.initialize();
+    const report = await harness.checkEnvironment();
+    expect(report.checks.find(c => c.id === "terminal")?.status).toBe("ready");
+    expect(report.checks.some(c => c.id === "runner")).toBe(true);
+    expect(report.checks.some(c => c.id === "pdfplumber")).toBe(true);
+    expect(model).not.toHaveBeenCalled();
+  } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
+}, 30_000);
+
+it("shares the configured runtime read-only while keeping other Server data private", async () => {
+  const { DeepSeekHarness } = await import("../deepseek-harness.mjs");
+  const fsSync = await import("node:fs");
+  const dataDir = path.join(root, "python-server-data");
+  const directory = path.join(dataDir, "python-environments", "test");
+  const executable = path.join(directory, "bin", "python");
+  await fs.mkdir(path.dirname(executable), { recursive: true });
+  // A real executable under the selected environment tests PATH and OS file rules.
+  await fs.symlink(process.execPath, executable);
+  await fs.writeFile(path.join(directory, "library.txt"), "shared-library");
+  const outside = path.join(dataDir, "other-application.txt");
+  await fs.writeFile(outside, "private-other-application");
+  const harness = new DeepSeekHarness({ llmApiKey: "test", llmBaseUrl: "http://model.test/v1", llmModel: "test", root: path.join(dataDir, "agent", "demo"), capabilities: ["files", "terminal"], pythonEnvironment: { executable, directory, baseDirectory: path.dirname(path.dirname(fsSync.realpathSync(process.execPath))), version: "test", revision: "test", managed: true } });
+  try {
+    await harness.initialize();
+    const ctx = (harness as any).ctx;
+    const code = `const fs=require('fs');const result={library:fs.readFileSync(${JSON.stringify(path.join(directory, "library.txt"))},'utf8'),virtual:process.env.VIRTUAL_ENV};for(const [key,file] of [['write',${JSON.stringify(path.join(directory,"write.txt"))}],['read',${JSON.stringify(outside)}]]){try{key==='write'?fs.writeFileSync(file,'bad'):fs.readFileSync(file);result[key]='allowed'}catch{result[key]='denied'}}console.log(JSON.stringify(result));`;
+    const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+    const output = await (await ctx.shell.execute(ctx.shell.resolve({ command: `python -e ${quote(code)}`, workdir: path.join(dataDir, "agent/demo/workspace"), timeoutMs: 15_000 }))).result();
+    expect(JSON.parse(output.stdout.text)).toEqual({ library: "shared-library", virtual: directory, write: "denied", read: "denied" });
+  } finally { await harness.close(); await fs.rm(root, { recursive: true, force: true }); }
+}, 30_000);

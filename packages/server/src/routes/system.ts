@@ -1,3 +1,5 @@
+import { readPythonEnvironment, selectPythonEnvironment, createPythonEnvironment, installDocumentPythonDependencies } from "../lib/python-environment.js";
+import { systemAgentEnvironment } from "../lib/system-agent-environment.js";
 import type { FastifyInstance } from "fastify";
 import { adminAuth } from "../plugins/auth.js";
 import type { ServerConfig } from "../lib/config.js";
@@ -32,6 +34,22 @@ export async function systemRoutes(
 
   await app.register(async (adminScope) => {
     await adminAuth(adminScope);
+
+    adminScope.get("/api/system/agent-environment", async () => ({ success: true, data: await systemAgentEnvironment(adminScope.config.dataDir) }));
+
+    adminScope.get("/api/system/python-environment", async () => ({ success: true, data: { environment: readPythonEnvironment(adminScope.config.dataDir) ?? null } }));
+    adminScope.put<{ Body: { executable: string } }>("/api/system/python-environment", async (req, reply) => {
+      try { return { success: true, data: { environment: await selectPythonEnvironment(adminScope.config.dataDir, req.body?.executable) } }; }
+      catch(error) { return reply.status(400).send({ success: false, error: error instanceof Error ? error.message.slice(0,2000) : "选择 Python 环境失败" }); }
+    });
+    adminScope.post<{ Body: { baseExecutable: string; installDocuments?: boolean } }>("/api/system/python-environment/create", async (req, reply) => {
+      try { return { success: true, data: { environment: await createPythonEnvironment(adminScope.config.dataDir, req.body?.baseExecutable, req.body?.installDocuments === true) } }; }
+      catch(error) { return reply.status(400).send({ success: false, error: error instanceof Error ? error.message.slice(0,2000) : "创建 Python 环境失败" }); }
+    });
+    adminScope.post("/api/system/python-environment/install-document-dependencies", async (_req, reply) => {
+      try { return { success: true, data: { environment: await installDocumentPythonDependencies(adminScope.config.dataDir) } }; }
+      catch(error) { return reply.status(400).send({ success: false, error: error instanceof Error ? error.message.slice(0,2000) : "安装依赖失败" }); }
+    });
 
     adminScope.get("/api/system/settings", async () => ({
       success: true,
