@@ -118,3 +118,57 @@ it("only owners can attach original app source, without replacing installed asse
     ).currentVersion,
   ).toBe(1);
 }, 30000);
+
+it("keeps uploaded binary references out of source and rejects other users and foreign attachment IDs", async () => {
+  const p = (
+    await (await call(alice, "", "POST", { name: "attachment-app" })).json()
+  ).data;
+  const form = () => {
+    const body = new FormData();
+    body.append(
+      "file",
+      new Blob([new Uint8Array([37, 80, 68, 70, 0, 255])], {
+        type: "application/pdf",
+      }),
+      "reference.pdf",
+    );
+    return body;
+  };
+  const url = server.baseUrl + `/api/development/projects/${p.id}/attachments`;
+  expect(
+    (
+      await fetch(url, {
+        method: "POST",
+        headers: { Cookie: bob },
+        body: form(),
+      })
+    ).status,
+  ).toBe(404);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Cookie: alice },
+    body: form(),
+  });
+  expect(res.status).toBe(200);
+  const attachment = (await res.json()).data;
+  expect(attachment.name).toBe("reference.pdf");
+  const bytes = fs.readFileSync(
+    path.join(
+      server.dataDir,
+      "development/projects",
+      p.id,
+      "workspace",
+      attachment.path,
+    ),
+  );
+  expect([...bytes]).toEqual([37, 80, 68, 70, 0, 255]);
+  const source = (await (await call(alice, `/${p.id}/files`)).json()).data;
+  expect(
+    source.some((file: string) => file.includes(".localapp-attachments")),
+  ).toBe(false);
+  const foreign = await call(alice, `/${p.id}/agent/run`, "POST", {
+    prompt: "Read attached file",
+    attachmentIds: ["00000000-0000-0000-0000-000000000000"],
+  });
+  expect(foreign.status).toBe(404);
+});

@@ -13,6 +13,8 @@ import {
   LoaderCircle,
   GitCompareArrows,
   FolderUp,
+  Paperclip,
+  X,
   MessageSquare,
   Check,
 } from "lucide-react";
@@ -47,10 +49,8 @@ export function AppDevelopmentDock(
   const [importError, setImportError] = useState("");
   const transcript = useRef<HTMLDivElement>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const draft = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (p.running || p.error || p.interaction) setExpanded(true);
-  }, [p.running, p.error, p.interaction]);
   useEffect(() => {
     if (p.running && panel === "chat")
       transcript.current?.scrollTo({ top: transcript.current.scrollHeight });
@@ -67,7 +67,6 @@ export function AppDevelopmentDock(
     if (!list?.length || !p.importSource) return;
     setImportError("");
     setImporting(true);
-    setExpanded(true);
     try {
       const files: Record<string, string> = Object.create(null);
       let total = 0;
@@ -419,15 +418,44 @@ export function AppDevelopmentDock(
           </div>
         </>
       )}
+      {p.attachments?.length ? (
+        <div className="dock-attachments" aria-label="待发送附件">
+          {p.attachments.map((file) => (
+            <span key={file.id}>
+              <Paperclip size={14} />
+              <span>{file.name}</span>
+              <button
+                aria-label={`移除附件 ${file.name}`}
+                disabled={p.running || p.pending}
+                onClick={() => p.actions.removeAttachment?.(file.id)}
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {!expanded && p.error && (
+        <p className="dock-error dock-collapsed-error" role="alert">
+          {p.error}
+        </p>
+      )}
+      <input
+        ref={attachmentInput}
+        type="file"
+        hidden
+        multiple
+        aria-label="选择对话附件"
+        onChange={(event) => {
+          p.actions.upload?.(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
       <div className="development-dock-composer">
         <button
-          aria-label="新开发对话"
-          disabled={p.running}
-          onClick={() => {
-            p.actions.newSession();
-            setExpanded(true);
-            setPanel("chat");
-          }}
+          aria-label="上传文件"
+          disabled={p.running || p.pending || !p.project || !p.actions.upload}
+          onClick={() => attachmentInput.current?.click()}
         >
           <Plus size={20} />
         </button>
@@ -440,7 +468,6 @@ export function AppDevelopmentDock(
           }
           value={p.prompt}
           disabled={p.running || !p.project}
-          onFocus={() => setExpanded(true)}
           onChange={(e) => p.actions.setPrompt(e.target.value)}
           onKeyDown={(e) => {
             if (
@@ -486,7 +513,6 @@ export function AppDevelopmentDock(
               !p.project || !p.provider || !p.prompt.trim() || p.pending
             }
             onClick={() => {
-              setExpanded(true);
               setPanel("chat");
               p.actions.run();
             }}

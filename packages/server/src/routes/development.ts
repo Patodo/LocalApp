@@ -1,4 +1,6 @@
 import path from "node:path";
+import fs from "node:fs";
+import { resolveWorkspacePath } from "../lib/workspace-path.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { ProjectStore, DevelopmentError } from "../lib/development/projects.js";
@@ -100,6 +102,87 @@ export async function developmentRoutes(
       data: projects.create(req.userId, req.params.name, files),
     };
   });
+  app.post<{ Params: { id: string } }>(
+    base + "/:id/attachments",
+    async (req) => {
+      const unlock = projects.lock(req.params.id, req.userId);
+      try {
+        const root = path.join(
+          projects.directory,
+          req.params.id,
+          "attachments",
+        );
+        fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+        const used = fs
+          .readdirSync(root)
+          .reduce(
+            (sum, name) =>
+              sum +
+              JSON.parse(fs.readFileSync(path.join(root, name), "utf8")).size,
+            0,
+          );
+        const part = await req.file({
+          limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+        });
+        if (!part) throw new DevelopmentError("请选择文件");
+        const bytes = await part.toBuffer();
+        if (part.file.truncated || used + bytes.length > 200 * 1024 * 1024)
+          throw new DevelopmentError(
+            "文件超过限制（单文件 20MB、项目总计 200MB）",
+          );
+        const id = randomUUID();
+        const name = path
+          .basename(part.filename.replaceAll("\\", "/"))
+          .replace(/[\x00-\x1f]/g, "_")
+          .slice(0, 200);
+        const safeName = !name || name === "." || name === ".." ? "file" : name;
+        const relative = `.localapp-attachments/${id}/${safeName}`;
+        const filename = resolveWorkspacePath(
+          projects.workspace(req.params.id, req.userId),
+          relative,
+        );
+        fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(filename, bytes, { flag: "wx", mode: 0o600 });
+        const data = { id, name: safeName, size: bytes.length, path: relative };
+        fs.writeFileSync(path.join(root, id + ".json"), JSON.stringify(data), {
+          flag: "wx",
+          mode: 0o600,
+        });
+        return { success: true, data };
+      } finally {
+        unlock();
+      }
+    },
+  );
+  function attachmentPrompt(project: string, user: string, ids: unknown) {
+    projects.get(project, user);
+    if (ids === undefined) return "";
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 10 ||
+      ids.some((id) => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))
+    )
+      throw new DevelopmentError("附件标识无效");
+    return ids
+      .map((id) => {
+        const meta = path.join(
+          projects.directory,
+          project,
+          "attachments",
+          id + ".json",
+        );
+        if (!fs.existsSync(meta)) throw new DevelopmentError("附件不存在", 404);
+        const file = JSON.parse(fs.readFileSync(meta, "utf8"));
+        const filename = resolveWorkspacePath(
+          projects.workspace(project, user),
+          file.path,
+        );
+        if (!fs.existsSync(filename))
+          throw new DevelopmentError("附件文件已丢失", 404);
+        return `\n用户上传文件：${JSON.stringify(file.name)}，工作区文件路径：${JSON.stringify(file.path)}`;
+      })
+      .join("");
+  }
   app.get<{ Params: { id: string } }>(base + "/:id/builds", async (req) => ({
     success: true,
     data: options.builds.list(req.params.id, req.userId),
@@ -331,7 +414,12 @@ export async function developmentRoutes(
   );
   app.post<{
     Params: { id: string };
-    Body: { prompt: string; sessionId?: string; providerId?: string };
+    Body: {
+      prompt: string;
+      sessionId?: string;
+      providerId?: string;
+      attachmentIds?: string[];
+    };
   }>(base + "/:id/agent/run", async (req, reply) => {
     if (
       !req.body ||
@@ -340,6 +428,11 @@ export async function developmentRoutes(
       req.body.prompt.length > 100000
     )
       throw new DevelopmentError("请输入开发需求");
+    const uploadedFiles = attachmentPrompt(
+      req.params.id,
+      req.userId,
+      req.body.attachmentIds,
+    );
     const sessionId = req.body.sessionId ?? randomUUID();
     if (
       typeof sessionId !== "string" ||
@@ -376,7 +469,7 @@ export async function developmentRoutes(
         req.userId,
         {
           sessionId,
-          prompt: req.body.prompt,
+          prompt: req.body.prompt + uploadedFiles,
           systemPrompt:
             "你在 LocalApp 的应用开发界面工作。当前目录是应用源码。遵循 AGENTS.md 和 LocalApp 开发 Skills；保留 Named SQL 后端，不能编写 hosted JavaScript backend。修改后说明改动和验证结果。开发命令不能访问网络；依赖和发布由平台提供。不要尝试访问平台会话、其他项目或正式应用数据。",
           tools: [],

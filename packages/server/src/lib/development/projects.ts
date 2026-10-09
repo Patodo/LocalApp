@@ -37,6 +37,7 @@ const excluded = new Set([
   "coverage",
   ".tmp",
   ".localapp-public-skills",
+  ".localapp-attachments",
 ]);
 const MAX_FILE = 2 * 1024 * 1024,
   MAX_SOURCE = 32 * 1024 * 1024,

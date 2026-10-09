@@ -253,3 +253,29 @@
   top: auto;
   bottom: calc(100% + 8px);
 }
+
+.dock-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 20px;
+}
+.dock-attachments > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid #88888825;
+  border-radius: 10px;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+.dock-attachments > span > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-collapsed-error {
+  padding: 0 20px;
+  font-size: 12px;
+}

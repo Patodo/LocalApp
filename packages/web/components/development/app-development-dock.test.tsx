@@ -63,15 +63,19 @@ function props(): DevelopmentShellProps {
   };
 }
 
-it("expands on send, shows a running stop control, and keeps deployment unavailable without a successful build", () => {
+it("only expands from the top-left control, including while sending or running", () => {
   const p = props();
   const view = render(<AppDevelopmentDock {...p} />);
   expect(screen.queryByRole("log")).toBeNull();
   fireEvent.click(screen.getByLabelText("发送修改需求"));
   expect(p.actions.run).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("log")).toBeNull();
+  fireEvent.click(screen.getByLabelText("展开开发对话"));
   expect(screen.getByRole("log")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^上线$/ })).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("收起开发对话"));
   view.rerender(<AppDevelopmentDock {...p} running />);
+  expect(screen.queryByRole("log")).toBeNull();
   expect(screen.getByLabelText("应用修改需求")).toBeDisabled();
   fireEvent.click(screen.getByLabelText("停止开发"));
   expect(p.actions.stop).toHaveBeenCalledOnce();
@@ -85,6 +89,8 @@ it("keeps IME and Shift Enter safe and connects build, preview and release contr
   fireEvent.keyDown(input, { key: "Enter", isComposing: true });
   expect(p.actions.run).not.toHaveBeenCalled();
   fireEvent.focus(input);
+  expect(screen.queryByRole("log")).toBeNull();
+  fireEvent.click(screen.getByLabelText("展开开发对话"));
   fireEvent.click(screen.getByRole("button", { name: /^预览$/ }));
   fireEvent.click(screen.getByRole("button", { name: /^上线$/ }));
   expect(p.actions.preview).toHaveBeenCalledOnce();
@@ -169,4 +175,25 @@ it("uses the title to switch history without changing the expanded state", () =>
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
   expect(screen.getByRole("log")).toBeInTheDocument();
+});
+
+it("uses the composer plus for attachments without creating a conversation or expanding", () => {
+  const p = props();
+  p.actions.upload = vi.fn();
+  p.actions.newSession = vi.fn();
+  render(
+    <AppDevelopmentDock
+      {...p}
+      attachments={[{ id: "file", name: "brief.pdf", size: 20 }]}
+    />,
+  );
+  fireEvent.click(screen.getByLabelText("上传文件"));
+  const files = [new File(["PDF"], "brief.pdf", { type: "application/pdf" })];
+  fireEvent.change(screen.getByLabelText("选择对话附件"), {
+    target: { files },
+  });
+  expect(p.actions.upload).toHaveBeenCalledWith(files);
+  expect(p.actions.newSession).not.toHaveBeenCalled();
+  expect(screen.queryByRole("log")).toBeNull();
+  expect(screen.getByLabelText("待发送附件")).toHaveTextContent("brief.pdf");
 });

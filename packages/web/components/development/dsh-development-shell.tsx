@@ -43,6 +43,7 @@ interface Project {
   name: string;
 }
 export interface DevelopmentShellProps {
+  attachments?: Array<{ id: string; name: string; size: number }>;
   sessions: Array<{ id: string; createdAt: string }>;
   selectedSession: string;
   projects: Project[];
@@ -66,6 +67,8 @@ export interface DevelopmentShellProps {
   interaction: any;
   answer: string;
   actions: {
+    upload?: (files: FileList | null) => void;
+    removeAttachment?: (id: string) => void;
     select: (p: Project) => void;
     selectSession: (id: string) => void;
     create: (name: string) => void;

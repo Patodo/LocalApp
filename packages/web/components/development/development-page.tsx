@@ -43,6 +43,9 @@ export function DevelopmentPage({
     [log, setLog] = useState(""),
     [pending, setPending] = useState(false),
     [settingsReady, setSettingsReady] = useState(false);
+  const [attachments, setAttachments] = useState<
+    Array<{ id: string; name: string; size: number }>
+  >([]);
   const diffBaseline = useRef("");
   const session = useRef(""),
     abort = useRef<AbortController | null>(null),
@@ -99,6 +102,7 @@ export function DevelopmentPage({
     selection.current++;
     abort.current?.abort();
     setProject(p);
+    setAttachments([]);
     diffBaseline.current = "";
     setFile(null);
     setText("");
@@ -161,6 +165,7 @@ export function DevelopmentPage({
     const controller = new AbortController();
     abort.current = controller;
     const submitted = prompt;
+    const submittedAttachments = attachments;
     setPrompt("");
     try {
       const res = await fetch(base + "/agent/run", {
@@ -169,6 +174,7 @@ export function DevelopmentPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: submitted,
+          attachmentIds: submittedAttachments.map((file) => file.id),
           providerId: provider,
           ...(session.current ? { sessionId: session.current } : {}),
         }),
@@ -178,6 +184,7 @@ export function DevelopmentPage({
         const j = await res.json();
         throw new Error(j.error);
       }
+      setAttachments([]);
       const reader = res.body!.getReader(),
         decoder = new TextDecoder();
       let buffer = "";
@@ -262,6 +269,7 @@ export function DevelopmentPage({
             },
           }
         : {})}
+      attachments={attachments}
       sessions={sessions}
       selectedSession={session.current}
       projects={projects}
@@ -285,6 +293,27 @@ export function DevelopmentPage({
       interaction={interaction}
       answer={answer}
       actions={{
+        upload: (files) =>
+          void act(async () => {
+            if (!files?.length || !project || running) return;
+            if (attachments.length + files.length > 10)
+              throw new Error("每次最多发送 10 个附件");
+            for (const file of Array.from(files)) {
+              const body = new FormData();
+              body.append("file", file);
+              const response = await fetch(base + "/attachments", {
+                method: "POST",
+                credentials: "include",
+                body,
+              });
+              const result = await response.json();
+              if (!response.ok || !result.success)
+                throw new Error(result.error ?? "上传失败");
+              setAttachments((current) => [...current, result.data]);
+            }
+          }),
+        removeAttachment: (id) =>
+          setAttachments((current) => current.filter((file) => file.id !== id)),
         select,
         selectSession: (id) =>
           void act(async () => {
@@ -314,6 +343,7 @@ export function DevelopmentPage({
         newSession: () => {
           if (running) return;
           session.current = "";
+          setAttachments([]);
           setMessages([]);
           setLive("");
           setPrompt("");
