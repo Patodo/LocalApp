@@ -27,6 +27,7 @@ export class DevelopmentReleases {
   ) {
     const p = this.projects.get(project, user),
       b = this.builds.get(project, user, buildId);
+    if (b.purpose === "preview") throw new DevelopmentError("预览尚未通过完整检查，请先执行发布构建");
     if (b.status !== "succeeded" || !b.packagePath)
       throw new DevelopmentError("构建尚未通过检查");
     if (typeof key !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(key))

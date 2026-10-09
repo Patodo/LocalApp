@@ -2,6 +2,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {CreateApplicationDialog} from "./create-application-dialog";
 import { ChoiceSelect } from "@/components/ui/choice-select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -22,10 +23,6 @@ import {
   Save,
   RotateCcw,
 } from "lucide-react";
-import {
-  Modal,
-  Button as DshButton,
-} from "@deepseek-ai/dsh-client-ui-primitives";
 import { AppFrame } from "./upstream/AppFrame";
 import { SidebarRoot } from "./upstream/SidebarRoot";
 import { HeroShell } from "./upstream/EmptyHero";
@@ -112,7 +109,6 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
     [panel, setPanel] = useState<"files" | "changes" | "build">("files"),
     [right, setRight] = useState(false),
     [creating, setCreating] = useState(false),
-    [name, setName] = useState(""),
     [newPath, setNewPath] = useState("");
   const [layout, setLayout] = useState<LayoutInfo>({
     viewportWidth: 1280,
@@ -208,7 +204,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
           <div className="dsh-section-label">
             <span>项目</span>
             {iconButton(
-              "创建项目",
+              "创建应用",
               FolderPlus,
               () => setCreating(true),
               p.running,
@@ -442,7 +438,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                   "发布",
                   Rocket,
                   p.actions.publish,
-                  p.running || p.build?.status !== "succeeded",
+                  p.running || p.build?.status !== "succeeded" || p.build?.purpose === "preview",
                 )}
               </div>
             </div>
@@ -487,7 +483,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                           onClick={() => setCreating(true)}
                         >
                           <FolderPlus size={14} />
-                          创建项目
+                          创建应用
                         </Button>
                       </div>
                     </>
@@ -624,52 +620,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
           </div>
         </div>
       );
-    if (slot === "shell.overlay")
-      return (
-        <Modal
-          open={creating}
-          onClose={() => setCreating(false)}
-          title="创建项目"
-          closeLabel="关闭"
-          description="从 LocalApp builtin 模板开始。"
-          className="dsh-development"
-          footer={
-            <DshButton
-              variant="primary"
-              disabled={!name || p.pending}
-              onClick={() => {
-                p.actions.create(name);
-                setCreating(false);
-                setName("");
-              }}
-            >
-              创建
-            </DshButton>
-          }
-        >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (name && !p.pending) {
-                p.actions.create(name);
-                setCreating(false);
-                setName("");
-              }
-            }}
-          >
-            <label className="dsh-create-project-label">
-              项目名称
-              <Input
-                data-modal-autofocus
-                aria-label="新项目名称"
-                placeholder="my-app"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-          </form>
-        </Modal>
-      );
+    if (slot === "shell.overlay") return <CreateApplicationDialog open={creating} onOpenChange={setCreating}/>;
     return options?.fallback ?? null;
   };
   return (

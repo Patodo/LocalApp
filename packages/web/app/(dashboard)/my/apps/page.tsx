@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CircleCheck, CircleOff, ExternalLink, Settings } from "lucide-react";
+import { CircleCheck, CircleOff, ExternalLink, Settings, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {CreateApplicationDialog} from "@/components/development/create-application-dialog";
 import { toast } from "sonner";
 
 interface PageInfo { userId: string; name: string; currentVersion: number; updatedAt: string; lifecycleStatus: "online" | "offline" }
 
 export default function ProfileApps() {
+  const [creating, setCreating] = useState(false);
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -27,8 +29,9 @@ export default function ProfileApps() {
   if (loading) return <p className="text-muted-foreground">加载中...</p>;
 
   return <div>
-    <h1 className="mb-6 text-2xl font-bold">我的应用</h1>
-    {pages.length === 0 ? <Card><CardContent className="flex flex-col items-center py-12 text-center"><p className="text-lg font-medium">暂无应用</p><p className="mt-1 text-sm text-muted-foreground">通过 CLI 创建：<code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">localapp init</code></p></CardContent></Card> :
+    <div className="mb-6 flex items-center justify-between"><h1 className="text-2xl font-bold">我的应用</h1><Button onClick={() => setCreating(true)}><Plus/>创建应用</Button></div>
+    <CreateApplicationDialog open={creating} onOpenChange={setCreating}/>
+    {pages.length === 0 ? <Card><CardContent className="flex flex-col items-center py-12 text-center"><p className="text-lg font-medium">暂无应用</p><p className="mt-1 text-sm text-muted-foreground">点击「创建应用」，和 Agent 一起把想法变成应用。</p></CardContent></Card> :
       <div className="divide-y border-y">{pages.map((page) => <div key={page.name} className="flex min-h-16 items-center justify-between gap-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">

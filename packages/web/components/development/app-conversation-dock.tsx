@@ -7,7 +7,8 @@ import { AppDevelopmentDock } from "./app-development-dock";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
 
 /** Both identities retain their own transport, messages, draft and history. */
-export function AppConversationDock({ application, isOwner, agent, onSend, reveal = 0, minimize = 0, onVisibilityChange }: {
+export function AppConversationDock({ application, isOwner, agent, onSend, reveal = 0, minimize = 0, onVisibilityChange, onPreview }: {
+  onPreview?: (url: string | null) => void;
   application: { owner: string; name: string };
   isOwner: boolean;
   agent: HarnessAgent | null;
@@ -46,6 +47,7 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
     });
     return () => { active = false; unsubscribe(); };
   }, [agent]);
+  useEffect(() => {if (identity === "user") onPreview?.(null);}, [identity]);
   useEffect(() => { if (reveal) setIdentity("user"); }, [reveal]);
   const act = async (operation: () => Promise<void>) => {
     setPending(true); setError("");
@@ -73,7 +75,7 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
     },
   };
   const dock = { identity: isOwner ? identity : "user" as const, userConversation: conversation,
-    onIdentityChange: isOwner ? setIdentity : undefined, reveal, minimize, onVisibilityChange,
+    onIdentityChange: isOwner ? setIdentity : undefined, reveal, minimize, onVisibilityChange, onPreview,
     userInteractions: agent?.state.interactions.map(interaction => <InteractionCard key={interaction.token} interaction={interaction}
       answer={result => void act(() => agent.answerInteraction(interaction.token, result))} />) };
   return isOwner

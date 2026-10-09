@@ -3,18 +3,19 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { sourceBytes, ProjectStore, DevelopmentError } from "./projects.js";
 import { developmentTemplateDirectory } from "./template.js";
-import { buildApplicationPackage } from "../../project/package.js";
+import { writeAppPackage } from "../app-package.js";
+import { loadAndValidateProjectManifest } from "../../project/check.js";
+import {
+  collectCanonicalFiles,
+  buildApplicationPackage,
+} from "../../project/package.js";
 export interface DevelopmentBuild {
   id: string;
   projectId: string;
   sourceVersion: string;
+  purpose?: "release" | "preview";
   status:
-    | "queued"
-    | "running"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "interrupted";
+    "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
   createdAt: string;
   log: string;
   packagePath?: string;
@@ -25,6 +26,7 @@ interface BuildInput {
   signal: AbortSignal;
   log: (text: string) => void;
   id: string;
+  purpose?: "release" | "preview";
 }
 type BuildTask = (
   input: BuildInput,
@@ -136,7 +138,11 @@ export class DevelopmentBuilds {
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       : [];
   }
-  start(project: string, user: string) {
+  start(
+    project: string,
+    user: string,
+    purpose: "release" | "preview" = "release",
+  ) {
     this.projects.assertIdle(project, user);
     if ([...this.active.values()].some((b) => b.projectId === project))
       throw new DevelopmentError("项目已有构建任务", 409);
@@ -147,6 +153,7 @@ export class DevelopmentBuilds {
       id: randomUUID(),
       projectId: project,
       sourceVersion: version.id,
+      purpose,
       status: "queued",
       createdAt: new Date().toISOString(),
       log: "",
@@ -174,6 +181,7 @@ export class DevelopmentBuilds {
       try {
         const result = await (this.task ?? ((input) => this.build(input)))({
           id: b.id,
+          purpose,
           workspace,
           signal: controller.signal,
           log,
@@ -269,6 +277,33 @@ export class DevelopmentBuilds {
     timer.unref();
     try {
       await executor.initialize();
+      if (input.purpose === "preview") {
+        input.log(
+          "预览构建：编译和检查应用包，不代表测试通过，也不能直接发布。\n",
+        );
+        const result = await executor.executeDevelopmentCommand(
+          path.join(path.dirname(process.execPath), "npm"),
+          ["run", "build"],
+          input.signal,
+        );
+        input.log(result.stdout.text + result.stderr.text);
+        if (result.exitCode !== 0 || result.timedOut)
+          throw new DevelopmentError("预览编译失败，请查看日志");
+        const manifest = await loadAndValidateProjectManifest(input.workspace);
+        const files = await collectCanonicalFiles(input.workspace, manifest);
+        const outputPath = path.join(input.workspace, "preview.localapp");
+        const written = await writeAppPackage({
+          outputPath,
+          metadata: {
+            schemaVersion: 1,
+            appId: manifest.name,
+            version: `0.0.0-preview.${input.id.replaceAll("-", "")}`,
+            platformVersion: manifest.platformVersion,
+          },
+          files,
+        });
+        return { path: outputPath, sha256: written.digest };
+      }
       const result = await buildApplicationPackage({
         projectDir: input.workspace,
         versionOverride: `0.0.0-development.${input.id.replaceAll("-", "")}`,

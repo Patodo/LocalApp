@@ -111,13 +111,11 @@ it("submits Enter, keeps Shift Enter editable and stops a running turn", async (
   fireEvent.click(screen.getByLabelText("停止"));
   expect(p.actions.stop).toHaveBeenCalledOnce();
 });
-it("creates projects through the dsh modal and sends the supplied name", async () => {
+it("opens the requirement discussion instead of creating from a name field", async () => {
   const p = props();
   render(<DshDevelopmentShell {...p} />);
-  fireEvent.click((await screen.findAllByLabelText("创建项目"))[0]);
-  const input = await screen.findByLabelText("新项目名称");
-  fireEvent.change(input, { target: { value: "new-app" } });
-  fireEvent.click(screen.getByRole("button", { name: /^创建$/ }));
-  expect(p.actions.create).toHaveBeenCalledWith("new-app");
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click((await screen.findAllByLabelText("创建应用"))[0]);
+  expect(await screen.findByText("我们要构建什么？")).toBeVisible();
+  expect(screen.getByLabelText("创建应用需求")).toBeVisible();
+  expect(p.actions.create).not.toHaveBeenCalled();
 });

@@ -98,9 +98,8 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
   }
   list(ownerId: string) {
     return rows<DevelopmentProject>(
-      "SELECT * FROM development_projects WHERE ownerId=? ORDER BY createdAt DESC",
-      [ownerId],
-    );
+      "SELECT * FROM development_projects WHERE ownerId=? ORDER BY createdAt DESC", [ownerId],
+    ).filter(p => {const file = path.join(this.directory, p.id, "creation.json"); return !fs.existsSync(file) || JSON.parse(fs.readFileSync(file, "utf8")).state === "ready";});
   }
   get(id: string, ownerId: string) {
     const p = rows<DevelopmentProject>(
@@ -147,6 +146,17 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
       flushMetaDb();
       throw e;
     }
+  }
+  nameDraft(id: string, user: string, name: string, description: string) {
+    const project = this.get(id, user);
+    if (validateName(name) || this.list(user).some(p => p.id !== id && p.name === name)) throw new DevelopmentError("应用名称无效或已存在", 409);
+    const root = this.workspace(id, user);
+    const manifest = JSON.parse(this.read(id, user, "manifest.json").content), pkg = JSON.parse(this.read(id, user, "package.json").content);
+    manifest.name = name; manifest.description = description; pkg.name = name;
+    this.save(root, "manifest.json", JSON.stringify(manifest, null, 2));
+    this.save(root, "package.json", JSON.stringify(pkg, null, 2));
+    getDb().run("UPDATE development_projects SET name=? WHERE id=? AND ownerId=?", [name, project.id, user]);
+    this.snapshot(id, user, "确认应用名称"); flushMetaDb();
   }
   private file(id: string, user: string, relative: string) {
     if (!allowed(relative)) throw new DevelopmentError("不允许访问此文件");

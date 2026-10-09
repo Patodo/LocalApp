@@ -86,3 +86,28 @@ it("invalidates the old build after an agent turn and compares changes with its 
     ),
   );
 });
+it("continues the creation session and starts an inline preview build after the turn", async () => {
+  window.history.replaceState({}, "", "/alice/new-app/?creation=new-project");
+  HTMLElement.prototype.scrollTo = vi.fn();
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/agent/run")) return new Response('data: {"type":"session","sessionId":"creation-session"}\n\n');
+    const data = url === "/api/agent/settings" ? {providers: [{id: "provider", name: "Provider", model: "model"}], defaultProviderId: "provider"}
+      : url.includes("/apps/") ? {id: "new-project", name: "new-app"}
+      : url.includes("/creations/") ? {sessionId: "creation-session", providerId: "provider", state: "ready", continued: false}
+      : url.endsWith("/agent/sessions") ? [{id: "creation-session", title: "新应用", createdAt: new Date().toISOString()}]
+      : url.includes("/agent/history") ? [{role: "user", content: "最初的需求"}]
+      : url.endsWith("/builds") && init?.method === "POST" ? {id: "preview-build", purpose: "preview", status: "succeeded"}
+      : url.endsWith("/previews") ? {url: "http://preview.localhost/new-app/"}
+      : [];
+    return new Response(JSON.stringify({success: true, data}));
+  });
+  vi.stubGlobal("fetch", fetcher); const onPreview = vi.fn();
+  const view = render(<DevelopmentPage application={{owner: "alice", name: "new-app"}} dock={{onPreview} as any}/>);
+  await waitFor(() => expect(onPreview).toHaveBeenCalledWith("http://preview.localhost/new-app/"));
+  const run = fetcher.mock.calls.find(([url]) => url.endsWith("/agent/run"));
+  expect(JSON.parse(run![1]!.body as string)).toMatchObject({sessionId: "creation-session", continueCreation: true});
+  const build = fetcher.mock.calls.find(([url, init]) => url.endsWith("/builds") && init?.method === "POST");
+  expect(JSON.parse(build![1]!.body as string)).toEqual({purpose: "preview"});
+  expect(fetcher.mock.calls.filter(([url]) => url.endsWith("/agent/run"))).toHaveLength(1);
+  view.unmount(); window.history.replaceState({}, "", "/");
+});

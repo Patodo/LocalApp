@@ -3,16 +3,25 @@ import fs from "node:fs";
 import { resolveWorkspacePath } from "../lib/workspace-path.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { ProjectStore, DevelopmentError, sourceBytes, sourceDisplay, type SourceFile } from "../lib/development/projects.js";
+import {
+  ProjectStore,
+  DevelopmentError,
+  sourceBytes,
+  sourceDisplay,
+  type SourceFile,
+} from "../lib/development/projects.js";
 import { DevelopmentBuilds } from "../lib/development/builds.js";
 import { DevelopmentPreviews } from "../lib/development/previews.js";
 import { DevelopmentReleases } from "../lib/development/releases.js";
 import { readPageMeta } from "../plugins/storage.js";
 import { validateName } from "../lib/validate-name.js";
+import { ApplicationCreations } from "../lib/development/creation.js";
 import { templateSource } from "../lib/development/template.js";
 import { AgentSettingsStore } from "../lib/agent-settings.js";
 import { readPythonEnvironment } from "../lib/python-environment.js";
-import type { DeepSeekHarness } from "../lib/deepseek-harness.mjs" with { "resolution-mode": "import" };
+import type { DeepSeekHarness } from "../lib/deepseek-harness.mjs" with {
+  "resolution-mode": "import",
+};
 
 export async function developmentRoutes(
   app: FastifyInstance,
@@ -43,7 +52,10 @@ export async function developmentRoutes(
     options.builds,
   );
   // An app's source is never inferred from its compiled assets.
-  const appSource = ["/api/development/apps/:owner/:name/source", "/api/development/apps/:name/source"];
+  const appSource = [
+    "/api/development/apps/:owner/:name/source",
+    "/api/development/apps/:name/source",
+  ];
   function ownedApp(owner: string, name: string, user: string) {
     if (owner !== user)
       throw new DevelopmentError("只有应用拥有者可以编辑应用", 403);
@@ -52,68 +64,92 @@ export async function developmentRoutes(
       throw new DevelopmentError("应用不存在", 404);
   }
   for (const route of appSource) {
-  app.get<{ Params: { owner?: string; name: string } }>(
-    route,
-    async (req) => {
+    app.get<{ Params: { owner?: string; name: string } }>(
+      route,
+      async (req) => {
+        ownedApp(req.params.owner ?? req.userId, req.params.name, req.userId);
+        return {
+          success: true,
+          data:
+            projects.list(req.userId).find((p) => p.name === req.params.name) ??
+            null,
+        };
+      },
+    );
+    app.post<{
+      Params: { owner?: string; name: string };
+      Body: { files: Record<string, SourceFile> };
+    }>(route, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
       ownedApp(req.params.owner ?? req.userId, req.params.name, req.userId);
+      const files = req.body?.files;
+      if (
+        !files ||
+        typeof files !== "object" ||
+        Array.isArray(files) ||
+        Object.keys(files).length > 5000 ||
+        Object.values(files).some(
+          (v) => sourceBytes(v).length > 2 * 1024 * 1024,
+        ) ||
+        Buffer.byteLength(JSON.stringify(files)) > 32 * 1024 * 1024
+      )
+        throw new DevelopmentError("源码文件无效或超过大小限制");
+      let manifest, pkg;
+      try {
+        manifest = JSON.parse(
+          sourceBytes(files["manifest.json"]).toString("utf8"),
+        );
+        pkg = JSON.parse(sourceBytes(files["package.json"]).toString("utf8"));
+      } catch {
+        throw new DevelopmentError(
+          "请选择包含 manifest.json 和 package.json 的应用源码目录",
+        );
+      }
+      if (
+        manifest.name !== req.params.name ||
+        !pkg.scripts?.test ||
+        !pkg.scripts?.build
+      )
+        throw new DevelopmentError(
+          "源码应用名称必须匹配，且保留 test 和 build 脚本",
+        );
       return {
         success: true,
-        data:
-          projects.list(req.userId).find((p) => p.name === req.params.name) ??
-          null,
+        data: projects.create(req.userId, req.params.name, files),
       };
-    },
-  );
-  app.post<{
-    Params: { owner?: string; name: string };
-    Body: { files: Record<string, SourceFile> };
-  }>(route, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
-    ownedApp(req.params.owner ?? req.userId, req.params.name, req.userId);
-    const files = req.body?.files;
-    if (
-      !files ||
-      typeof files !== "object" ||
-      Array.isArray(files) ||
-      Object.keys(files).length > 5000 ||
-      Object.values(files).some(
-        (v) => sourceBytes(v).length > 2 * 1024 * 1024,
-      ) ||
-      Buffer.byteLength(JSON.stringify(files)) > 32 * 1024 * 1024
-    )
-      throw new DevelopmentError("源码文件无效或超过大小限制");
-    let manifest, pkg;
-    try {
-      manifest = JSON.parse(sourceBytes(files["manifest.json"]).toString("utf8"));
-      pkg = JSON.parse(sourceBytes(files["package.json"]).toString("utf8"));
-    } catch {
-      throw new DevelopmentError(
-        "请选择包含 manifest.json 和 package.json 的应用源码目录",
-      );
-    }
-    if (
-      manifest.name !== req.params.name ||
-      !pkg.scripts?.test ||
-      !pkg.scripts?.build
-    )
-      throw new DevelopmentError(
-        "源码应用名称必须匹配，且保留 test 和 build 脚本",
-      );
-    return {
-      success: true,
-      data: projects.create(req.userId, req.params.name, files),
-    };
-  });
+    });
   }
-  app.get<{Params: {id: string}}>(base + "/:id/source", async req => {
+  app.get<{ Params: { id: string } }>(base + "/:id/source", async (req) => {
     const unlock = projects.lock(req.params.id, req.userId);
     try {
       const project = projects.get(req.params.id, req.userId);
       const files = projects.sourceFiles(project.id, req.userId);
-      return {success: true, data: {project, files, digest: createHash("sha256").update(JSON.stringify(files)).digest("hex")}};
-    } finally { unlock(); }
+      return {
+        success: true,
+        data: {
+          project,
+          files,
+          digest: createHash("sha256")
+            .update(JSON.stringify(files))
+            .digest("hex"),
+        },
+      };
+    } finally {
+      unlock();
+    }
   });
-  app.post<{Params: {id: string}; Body: {files: Record<string, SourceFile>; expectedDigest: string}}>(base + "/:id/source", {bodyLimit: 40 * 1024 * 1024}, async req => {
-    return {success: true, data: projects.replaceSource(req.params.id, req.userId, req.body.files, req.body.expectedDigest)};
+  app.post<{
+    Params: { id: string };
+    Body: { files: Record<string, SourceFile>; expectedDigest: string };
+  }>(base + "/:id/source", { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
+    return {
+      success: true,
+      data: projects.replaceSource(
+        req.params.id,
+        req.userId,
+        req.body.files,
+        req.body.expectedDigest,
+      ),
+    };
   });
   app.post<{ Params: { id: string } }>(
     base + "/:id/attachments",
@@ -200,10 +236,21 @@ export async function developmentRoutes(
     success: true,
     data: options.builds.list(req.params.id, req.userId),
   }));
-  app.post<{ Params: { id: string } }>(base + "/:id/builds", async (req) => ({
-    success: true,
-    data: options.builds.start(req.params.id, req.userId),
-  }));
+  app.post<{
+    Params: { id: string };
+    Body: { purpose?: "release" | "preview" };
+  }>(base + "/:id/builds", async (req) => {
+    if (req.body?.purpose && !["preview", "release"].includes(req.body.purpose))
+      throw new DevelopmentError("构建类型无效");
+    return {
+      success: true,
+      data: options.builds.start(
+        req.params.id,
+        req.userId,
+        req.body?.purpose ?? "release",
+      ),
+    };
+  });
   app.get<{ Params: { id: string; buildId: string } }>(
     base + "/:id/builds/:buildId",
     async (req) => ({
@@ -275,13 +322,22 @@ export async function developmentRoutes(
     success: true,
     data: projects.files(req.params.id, req.userId),
   }));
-  app.get<{ Params: { id: string } }>(base + "/:id/source-manifest", async (req) => ({
-    success: true,
-    data: Object.entries(projects.sourceFiles(req.params.id, req.userId)).map(([file, content]) => {
-      const bytes = sourceBytes(content);
-      return { path: file, bytes: bytes.length, hash: createHash("sha256").update(bytes).digest("hex") };
+  app.get<{ Params: { id: string } }>(
+    base + "/:id/source-manifest",
+    async (req) => ({
+      success: true,
+      data: Object.entries(projects.sourceFiles(req.params.id, req.userId)).map(
+        ([file, content]) => {
+          const bytes = sourceBytes(content);
+          return {
+            path: file,
+            bytes: bytes.length,
+            hash: createHash("sha256").update(bytes).digest("hex"),
+          };
+        },
+      ),
     }),
-  }));
+  );
   app.get<{ Params: { id: string }; Querystring: { path: string } }>(
     base + "/:id/file",
     async (req) => {
@@ -348,6 +404,34 @@ export async function developmentRoutes(
       data: projects.restore(req.params.id, req.userId, req.body.version),
     }),
   );
+  const creations = new ApplicationCreations(app.config.dataDir, projects);
+  app.post<{ Body: { providerId: string } }>(
+    "/api/development/creations",
+    async (req) => {
+      const saved = settings.read(req.userId);
+      const providerId =
+        req.body?.providerId ||
+        saved.defaultProviderId ||
+        saved.providers[0]?.id;
+      if (!saved.providers.some((p) => p.id === providerId))
+        throw new DevelopmentError("请先配置模型供应商");
+      return { success: true, data: creations.create(req.userId, providerId!) };
+    },
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/development/creations/:id",
+    async (req) => ({
+      success: true,
+      data: creations.get(req.params.id, req.userId),
+    }),
+  );
+  app.post<{ Params: { id: string }; Body: { name: string } }>(
+    "/api/development/creations/:id/confirm",
+    async (req) => ({
+      success: true,
+      data: await creations.confirm(req.params.id, req.userId, req.body?.name),
+    }),
+  );
   const opening = new Map<string, Promise<DeepSeekHarness>>();
   async function harness(id: string, user: string, providerId?: string) {
     const key = user + ":" + id;
@@ -365,13 +449,20 @@ export async function developmentRoutes(
     projects.get(id, user);
     const saved = settings.read(user);
     const provider = saved.providers.find(
-      (p) => p.id === (providerId ?? saved.defaultProviderId),
+      (p) =>
+        p.id ===
+        (providerId ??
+          (creations.isPlanning(id, user)
+            ? creations.get(id, user).providerId
+            : saved.defaultProviderId) ??
+          saved.providers[0]?.id),
     );
     if (!provider) throw new DevelopmentError("请先配置模型供应商");
     const hash = createHash("sha256")
         .update(
           JSON.stringify({
             provider,
+            planning: creations.isPlanning(id, user),
             pythonEnvironment: readPythonEnvironment(app.config.dataDir),
           }),
         )
@@ -393,7 +484,9 @@ export async function developmentRoutes(
       dataRoot: app.config.dataDir,
       networkBlocked: true,
       autoSessionTitles: true,
-      capabilities: ["files", "skills", "terminal"],
+      capabilities: creations.isPlanning(id, user)
+        ? []
+        : ["files", "skills", "terminal"],
       pythonEnvironment: readPythonEnvironment(app.config.dataDir),
     });
     await instance.initialize();
@@ -441,6 +534,7 @@ export async function developmentRoutes(
       sessionId?: string;
       providerId?: string;
       attachmentIds?: string[];
+      continueCreation?: boolean;
     };
   }>(base + "/:id/agent/run", async (req, reply) => {
     if (
@@ -461,12 +555,28 @@ export async function developmentRoutes(
       !/^[a-zA-Z0-9-]{1,100}$/.test(sessionId)
     )
       throw new DevelopmentError("会话标识无效");
+    const planning = creations.isPlanning(req.params.id, req.userId);
+    if (planning) {
+      const draft = creations.get(req.params.id, req.userId);
+      if (sessionId !== draft.sessionId)
+        throw new DevelopmentError("请使用原创建会话");
+    }
     const instance = await harness(
       req.params.id,
       req.userId,
       req.body.providerId,
     );
     const release = projects.lock(req.params.id, req.userId);
+    let prompt = req.body.prompt;
+    try {
+      if (planning) creations.invalidateProposal(req.params.id, req.userId);
+      if (req.body.continueCreation)
+        prompt = creations.continue(req.params.id, req.userId, sessionId);
+    } catch (error) {
+      release();
+      throw error;
+    }
+
     try {
       projects.snapshot(req.params.id, req.userId, "Agent 修改前自动保存");
     } catch (error) {
@@ -482,6 +592,34 @@ export async function developmentRoutes(
     });
     reply.raw.on("close", disconnect);
     const emit = (event: unknown) => {
+      const tool = event as {
+        type: string;
+        name: string;
+        args: unknown;
+        token: string;
+      };
+      if (
+        planning &&
+        tool.type === "tool_call" &&
+        tool.name === "propose_application"
+      ) {
+        try {
+          const proposal = creations.propose(
+            req.params.id,
+            req.userId,
+            tool.args,
+          );
+          instance.result(req.userId, tool.token, {
+            proposal,
+            requiresUserConfirmation: true,
+          });
+        } catch (error) {
+          instance.result(req.userId, tool.token, {
+            error: (error as Error).message,
+          });
+        }
+        return;
+      }
       if (!reply.raw.destroyed)
         reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     };
@@ -491,10 +629,27 @@ export async function developmentRoutes(
         req.userId,
         {
           sessionId,
-          prompt: req.body.prompt + uploadedFiles,
-          systemPrompt:
-            "你在 LocalApp 的应用开发界面工作。当前目录是应用源码。遵循 AGENTS.md 和 LocalApp 开发 Skills；保留 Named SQL 后端，不能编写 hosted JavaScript backend。修改后说明改动和验证结果。开发命令不能访问网络；依赖和发布由平台提供。不要尝试访问平台会话、其他项目或正式应用数据。",
-          tools: [],
+          prompt: prompt + uploadedFiles,
+          systemPrompt: planning
+            ? "你帮助用户创建 LocalApp 应用。先理解需求，必要时在普通回复中追问。给出简洁英文应用标识（小写字母数字和连字符），使用 propose_application 工具提交名称和中文需求摘要，供用户点击确认。用户可能提出修改，应重新提交。不能创建应用、编辑文件或执行命令，只有用户确认名称后平台才创建。无需调用 ask_user 工具，直接在对话中询问。"
+            : "你在 LocalApp 的应用开发界面工作。当前目录是应用源码。遵循 AGENTS.md 和 LocalApp 开发 Skills；保留 Named SQL 后端，不能编写 hosted JavaScript backend。修改后说明改动和验证结果。源码目录不安装 node_modules，完成修改后平台会自动执行预览编译；不要尝试安装依赖或反复运行缺少依赖的测试。依赖、完整检查和发布由平台提供。开发命令不能访问网络。不要尝试访问平台会话、其他项目或正式应用数据。",
+          tools: planning
+            ? [
+                {
+                  name: "propose_application",
+                  description:
+                    "提出应用名称和需求摘要，等待用户确认后由平台创建应用",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      description: { type: "string" },
+                    },
+                    required: ["name", "description"],
+                  },
+                },
+              ]
+            : [],
         },
         emit,
         controller.signal,
@@ -509,6 +664,11 @@ export async function developmentRoutes(
       }
       release();
       reply.raw.off("close", disconnect);
+      if (planning)
+        emit({
+          type: "creation",
+          creation: creations.get(req.params.id, req.userId),
+        });
       reply.raw.end();
     }
   });

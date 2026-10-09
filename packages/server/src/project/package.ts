@@ -434,7 +434,7 @@ function packageHelperError(code: string | undefined): Error {
   return lifecycleError("package_output_failed", "Could not publish application package safely");
 }
 
-async function collectCanonicalFiles(
+export async function collectCanonicalFiles(
   projectDir: string,
   manifest: Awaited<ReturnType<typeof loadAndValidateProjectManifest>>,
   fileHooks?: ProjectFileReadHooks,

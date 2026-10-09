@@ -147,8 +147,10 @@ export class DevelopmentPreviews {
         preview.cookieHash = digest(cookie);
         reply.setCookie("localapp_preview", cookie, {
           httpOnly: true,
-          sameSite: "lax",
-          secure: preview.origin.startsWith("https:"),
+          // Preview runs in a different-origin frame; partition the cookie by its parent site.
+          sameSite: "none",
+          secure: true,
+          partitioned: true,
           path: "/",
           maxAge: 3600,
         });

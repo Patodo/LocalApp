@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { AppDevelopmentDock, type DockIdentityProps } from "./app-development-dock";
+import {
+  AppDevelopmentDock,
+  type DockIdentityProps,
+} from "./app-development-dock";
 import { DshDevelopmentShell } from "./dsh-development-shell";
 type Project = { id: string; name: string };
 type Version = { id: string; message: string };
@@ -19,7 +22,10 @@ async function request(url: string, method = "GET", body?: unknown) {
 export function DevelopmentPage({
   application,
   dock,
-}: { application?: { owner: string; name: string }; dock?: DockIdentityProps } = {}) {
+}: {
+  application?: { owner: string; name: string };
+  dock?: DockIdentityProps;
+} = {}) {
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null),
     [files, setFiles] = useState<string[]>([]),
@@ -48,6 +54,12 @@ export function DevelopmentPage({
     Array<{ id: string; name: string; size: number }>
   >([]);
   const diffBaseline = useRef("");
+  const [handoff, setHandoff] = useState<{
+    sessionId: string;
+    providerId: string;
+  } | null>(null);
+  const handoffStarted = useRef(false);
+  const previewedBuild = useRef("");
   const session = useRef(""),
     abort = useRef<AbortController | null>(null),
     selection = useRef(0);
@@ -68,7 +80,9 @@ export function DevelopmentPage({
       setProjects(await request("/api/development/projects"));
       const settings = await request("/api/agent/settings");
       setProviders(settings.providers);
-      setProvider(settings.defaultProviderId || settings.providers?.[0]?.id || "");
+      setProvider(
+        settings.defaultProviderId || settings.providers?.[0]?.id || "",
+      );
       setSettingsReady(true);
     });
     return () => abort.current?.abort();
@@ -126,13 +140,29 @@ export function DevelopmentPage({
           `/api/development/projects/${p.id}/agent/sessions`,
         );
         setSessions(sessions);
-        if (sessions.length) {
-          session.current = sessions[sessions.length - 1].id;
-          setMessages(
-            await request(
-              `/api/development/projects/${p.id}/agent/history?sessionId=${encodeURIComponent(session.current)}`,
-            ),
-          );
+        if (sessions.length) session.current = sessions[sessions.length - 1].id;
+        {
+          if (
+            application &&
+            new URLSearchParams(window.location.search).get("creation") === p.id
+          ) {
+            const creation = await request(
+              `/api/development/creations/${p.id}`,
+            );
+            session.current = creation.sessionId;
+            setProvider(creation.providerId);
+            if (!creation.continued)
+              setHandoff({
+                sessionId: creation.sessionId,
+                providerId: creation.providerId,
+              });
+          }
+          if (session.current)
+            setMessages(
+              await request(
+                `/api/development/projects/${p.id}/agent/history?sessionId=${encodeURIComponent(session.current)}`,
+              ),
+            );
         }
       }
     });
@@ -155,8 +185,25 @@ export function DevelopmentPage({
     setBuild(null);
     await refresh(project!.id);
   }
-  async function run() {
-    if (!project || !prompt.trim() || running) return;
+  useEffect(() => {
+    if (
+      !handoff ||
+      !project ||
+      handoffStarted.current ||
+      provider !== handoff.providerId ||
+      running ||
+      pending
+    )
+      return;
+    handoffStarted.current = true;
+    void act(() => run({ continueCreation: true, prompt: "继续创建应用" }));
+  }, [handoff, project, provider, pending, running]);
+  async function run(options?: {
+    continueCreation?: boolean;
+    prompt?: string;
+  }) {
+    const submitted = options?.prompt ?? prompt;
+    if (!project || !submitted.trim() || running) return;
     if (file && file.content !== text) await save();
     setBuild(null);
     setRunning(true);
@@ -165,8 +212,9 @@ export function DevelopmentPage({
     setInteraction(null);
     const controller = new AbortController();
     abort.current = controller;
-    const submitted = prompt;
     const submittedAttachments = attachments;
+    let completed = false,
+      streamError = false;
     setPrompt("");
     try {
       const res = await fetch(base + "/agent/run", {
@@ -175,6 +223,7 @@ export function DevelopmentPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: submitted,
+          ...(options?.continueCreation ? { continueCreation: true } : {}),
           attachmentIds: submittedAttachments.map((file) => file.id),
           providerId: provider,
           ...(session.current ? { sessionId: session.current } : {}),
@@ -202,9 +251,20 @@ export function DevelopmentPage({
             const e = JSON.parse(line.slice(6));
             if (e.type === "session") session.current = e.sessionId;
             if (e.type === "session_title" && e.title) {
-              setSessions(rows => rows.some(row => row.id === e.sessionId)
-                ? rows.map(row => row.id === e.sessionId ? { ...row, title: e.title } : row)
-                : [...rows, { id: e.sessionId, createdAt: new Date().toISOString(), title: e.title }]);
+              setSessions((rows) =>
+                rows.some((row) => row.id === e.sessionId)
+                  ? rows.map((row) =>
+                      row.id === e.sessionId ? { ...row, title: e.title } : row,
+                    )
+                  : [
+                      ...rows,
+                      {
+                        id: e.sessionId,
+                        createdAt: new Date().toISOString(),
+                        title: e.title,
+                      },
+                    ],
+              );
             }
             if (e.type === "messages") {
               setMessages(e.messages);
@@ -213,10 +273,14 @@ export function DevelopmentPage({
             if (e.type === "text_delta")
               setLive((x) => x + (e.delta ?? e.text ?? ""));
             if (e.type === "interaction") setInteraction(e);
-            if (e.type === "error") setError(e.message);
+            if (e.type === "error") {
+              setError(e.message);
+              streamError = true;
+            }
           }
         }
       }
+      completed = !streamError && !controller.signal.aborted;
     } catch (e) {
       if (!controller.signal.aborted) setError((e as Error).message);
     } finally {
@@ -225,6 +289,17 @@ export function DevelopmentPage({
       await refresh(project.id);
       setSessions(await request(base + "/agent/sessions"));
       if (file) await open(file.path);
+      if (completed && application) {
+        try {
+          const previewBuild = await request(base + "/builds", "POST", {
+            purpose: "preview",
+          });
+          setBuild(previewBuild);
+          setLog(previewBuild.log ?? "");
+        } catch (error) {
+          setError((error as Error).message);
+        }
+      }
     }
   }
   useEffect(() => {
@@ -236,10 +311,15 @@ export function DevelopmentPage({
       try {
         const rows = await request(base + "/agent/sessions");
         if (active) setSessions(rows);
-      } catch { /* Keep the last known titles when the Server is unavailable. */ }
+      } catch {
+        /* Keep the last known titles when the Server is unavailable. */
+      }
       if (++attempts >= 10) clearInterval(timer);
     }, 3000);
-    return () => { active = false; clearInterval(timer); };
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [project?.id, running]);
   async function stop() {
     await request(base + "/agent/cancel", "POST", {
@@ -255,9 +335,9 @@ export function DevelopmentPage({
     setInteraction(null);
     setAnswer("");
   }
-  async function buildProject() {
+  async function buildProject(purpose: "release" | "preview" = "release") {
     if (file && text !== file.content) await save();
-    const b = await request(base + "/builds", "POST", {});
+    const b = await request(base + "/builds", "POST", { purpose });
     setBuild(b);
     setLog(b.log ?? "");
   }
@@ -273,6 +353,20 @@ export function DevelopmentPage({
     }, 1000);
     return () => clearInterval(timer);
   }, [base, build]);
+  useEffect(() => {
+    if (
+      !application ||
+      !dock?.onPreview ||
+      build?.status !== "succeeded" ||
+      build.purpose !== "preview" ||
+      previewedBuild.current === build.id
+    )
+      return;
+    previewedBuild.current = build.id;
+    void request(base + "/previews", "POST", { buildId: build.id })
+      .then((preview) => dock.onPreview?.(preview.url))
+      .catch((error) => setError(error.message));
+  }, [build?.id, build?.status, application, base]);
   return (
     <View
       {...(application
@@ -392,13 +486,14 @@ export function DevelopmentPage({
             setFile(null);
             setText("");
           }),
-        build: () => void act(buildProject),
+        build: () => void act(() => buildProject()),
         preview: () =>
           void act(async () => {
             const preview = await request(base + "/previews", "POST", {
               buildId: build.id,
             });
-            window.open(preview.url, "_blank", "noopener");
+            if (application && dock?.onPreview) dock.onPreview(preview.url);
+            else window.open(preview.url, "_blank", "noopener");
           }),
         publish: () =>
           void act(async () => {

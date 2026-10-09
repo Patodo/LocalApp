@@ -157,6 +157,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
   selectedIssueIdRef.current = selectedIssueId;
   selectedIssueNumberRef.current = selectedIssueNumber;
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [developmentPreviewUrl, setDevelopmentPreviewUrl] = useState<string | null>(null);
   const [appLoadError, setAppLoadError] = useState<string | null>(null);
   const [editSession, setEditSession] = useState<PlatformEditSession | null>(null);
   const [presenceSnapshot, setPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
@@ -713,7 +714,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
       data-localapp-native-shell
       data-localapp-app-resource-base={nativeAppResourceBase}
     >
-      <div data-localapp-shell-nav-background data-testid="shell-nav-background" inert={showIssues ? ("true" as unknown as boolean) : undefined} aria-hidden={showIssues ? true : undefined} className="shrink-0">
+      <div hidden={!!meta?.developmentPreview && window.self !== window.top} data-localapp-shell-nav-background data-testid="shell-nav-background" inert={showIssues ? ("true" as unknown as boolean) : undefined} aria-hidden={showIssues ? true : undefined} className="shrink-0">
         <Navbar
           pageName={name}
           user={user}
@@ -764,7 +765,8 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
               </main>
             ) : appOnline ? (
               <>
-                <div id="root" data-localapp-app-root className="min-h-full" />
+                <div id="root" data-localapp-app-root className="min-h-full" hidden={!!developmentPreviewUrl} />
+                {developmentPreviewUrl && isOwner && <div className="flex h-full flex-col"><div className="flex items-center justify-between border-b bg-muted/50 px-4 py-2 text-xs text-muted-foreground"><span>开发预览 · 尚未上线</span><Button variant="ghost" size="sm" onClick={() => setDevelopmentPreviewUrl(null)}>查看已上线版本</Button></div><iframe title="应用开发预览" src={developmentPreviewUrl} className="min-h-0 flex-1 border-0" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"/></div>}
                 {appLoadError && <div className="p-4 text-sm text-destructive">{appLoadError}</div>}
               </>
             ) : (
@@ -788,7 +790,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
         </div>
         {metaMatchesCurrentApp && !meta?.developmentPreview && !showIssues && !!user && (
           <AppConversationDock key={`${pagePath}:${user?.id}`} application={{ owner: userId, name }} isOwner={isOwner}
-            agent={harness} onSend={agentSend} reveal={agentReveal} minimize={agentMinimize}
+            onPreview={setDevelopmentPreviewUrl} agent={harness} onSend={agentSend} reveal={agentReveal} minimize={agentMinimize}
             onVisibilityChange={visible => { aiVisible.current = visible; setAiOpen(visible); }} />
         )}
         {appOnline && <EditingAwarenessOverlay peers={editingPeers} />}

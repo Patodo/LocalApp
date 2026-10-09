@@ -34,6 +34,7 @@ import "./app-development-dock.css";
 
 export interface DockIdentityProps {
   identity?: "developer" | "user";
+  onPreview?: (url: string | null) => void;
   onIdentityChange?: (identity: "developer" | "user") => void;
   userConversation?: DevelopmentShellProps;
   reveal?: number;
@@ -50,6 +51,7 @@ export function AppDevelopmentDock(
   const userMode = input.identity === "user";
   const p = userMode && input.userConversation ? { ...input, ...input.userConversation } : input;
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => {if (input.application && new URLSearchParams(window.location.search).get("creation")) setExpanded(true);}, []);
   const [minimized, setMinimized] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -372,7 +374,7 @@ export function AppDevelopmentDock(
                 预览
               </Button>
               <Button variant="unstyled" size="none"
-                disabled={!ready || p.pending || p.running}
+                disabled={!ready || p.build?.purpose === "preview" || p.pending || p.running}
                 onClick={p.actions.publish}
               >
                 <Rocket size={15} />

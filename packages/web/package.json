@@ -16,6 +16,7 @@
     "@deepseek-ai/dsh-util-code-language": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-util-workspace-path": "0.2.1-alpha.1",
     "@localapp/sdk-agent": "workspace:*",
+    "@radix-ui/react-dialog": "^1.2.0",
     "@radix-ui/react-dropdown-menu": "^2.1.25",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-select": "^2.3.8",

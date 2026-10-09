@@ -67,6 +67,9 @@ it("runs real isolated build scripts and produces a portable package", async () 
     headers: { host: previewUrl.host },
   });
   expect(open.statusCode).toBe(302);
+  expect(String(open.headers["set-cookie"])).toContain("SameSite=None");
+  expect(String(open.headers["set-cookie"])).toContain("Secure");
+  expect(String(open.headers["set-cookie"])).toContain("Partitioned");
   const unknownHost = await server.app.inject({
     url: "/api/me",
     headers: { host: "preview00000000000000000000000000000000.localhost" },
@@ -141,4 +144,22 @@ it("runs real isolated build scripts and produces a portable package", async () 
     idempotencyKey: "another",
   });
   expect(conflict.status).toBe(409);
+}, 60000);
+it("allows compile-only previews but refuses publication and retains full test failures", async () => {
+ const p = new ProjectStore(server.dataDir).create("builder", "preview-only", {
+  ...templateSource("preview-only"),
+  "package.json": JSON.stringify({name: "preview-only", version: "0.0.1", scripts: {test: "node -e \"process.exit(17)\"", build: "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/index.html','<h1>Preview</h1>')\""}}),
+ });
+ const api = (url: string, body?: unknown) => fetch(server.baseUrl + `/api/development/projects/${p.id}${url}`, {method: body ? "POST" : "GET", headers: {Cookie: cookie, "Content-Type": "application/json"}, ...(body ? {body: JSON.stringify(body)} : {})});
+ const build = async (purpose: string) => {
+  const response = await api("/builds", {purpose}); expect(response.status).toBe(200); const id = (await response.json()).data.id;
+  for (let i = 0; i < 200; i++) {const b = (await (await api(`/builds/${id}`)).json()).data; if (!["queued", "running"].includes(b.status)) return b; await new Promise(r => setTimeout(r, 100));}
+  throw new Error("build timed out");
+ };
+ const preview = await build("preview"); expect(preview.status, preview.log).toBe("succeeded"); expect(preview.purpose).toBe("preview");
+ expect((await api("/previews", {buildId: preview.id})).status).toBe(200);
+ expect((await api("/releases", {buildId: preview.id, expectedVersion: 0, idempotencyKey: preview.id})).status).toBe(400);
+ const release = await build("release"); expect(release.status).toBe("failed");
+ expect(release.log).toContain("npm run test");
+ expect(JSON.parse(new ProjectStore(server.dataDir).read(p.id, "builder", "package.json").content).scripts.test).toContain("17");
 }, 60000);
