@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
 import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import "./app-development-dock.css";
 
 export interface DockIdentityProps {
@@ -617,19 +618,16 @@ export function AppDevelopmentDock(
             }
           }}
         />
-        <select
-          aria-label={userMode ? "对话模型" : "开发模型"}
-          value={p.provider}
-          disabled={p.running || p.pending}
-          onChange={(e) => p.actions.setProvider(e.target.value)}
-        >
-          {!p.providers.length && <option value="">先配置模型</option>}
-          {p.providers.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name} · {model.model}
-            </option>
-          ))}
-        </select>
+        <Select value={p.provider || undefined} disabled={p.running || p.pending || !p.providers.length} onValueChange={p.actions.setProvider}>
+          <SelectTrigger className="dock-model-trigger" aria-label={userMode ? "对话模型" : "开发模型"}>
+            <SelectValue placeholder="先配置模型" />
+          </SelectTrigger>
+          <SelectContent side="top" align="end" sideOffset={8}>
+            {p.providers.map((model) => (
+              <SelectItem key={model.id} value={model.id}>{model.name} · {model.model}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {!p.providers.length && <a href="/my/models">配置模型</a>}
         {p.running ? (
           <button

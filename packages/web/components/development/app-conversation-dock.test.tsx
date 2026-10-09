@@ -18,7 +18,7 @@ it("gives ordinary users the shared chat without mounting development APIs", asy
   };
   const onSend = vi.fn(async () => {});
   render(<AppConversationDock application={{ owner: "owner", name: "app" }} isOwner={false} agent={agent as unknown as HarnessAgent} onSend={onSend} />);
-  await waitFor(() => expect(screen.getByLabelText("对话模型")).toHaveValue("model"));
+  await waitFor(() => expect(screen.getByLabelText("对话模型")).toHaveTextContent("我的模型 · test"));
   expect(screen.queryByLabelText("切换对话身份")).toBeNull();
   expect(screen.queryByLabelText("打开完整开发页")).toBeNull();
   fireEvent.change(screen.getByLabelText("应用对话消息"), { target: { value: "添加工作项" } });
