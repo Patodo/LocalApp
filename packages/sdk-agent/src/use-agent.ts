@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Agent } from "@earendil-works/pi-agent-core";
-import type { AgentMessage, AgentEvent } from "@earendil-works/pi-agent-core";
-import { createStreamFn } from "./llm-adapter.js";
+import { HarnessAgent as Agent } from "./harness-client.js";
+import type { AgentMessage, AgentEvent } from "./harness-client.js";
 import { createSystemTools, convertUserTool } from "./tools.js";
 import { fetchSchemaContext, buildSystemPrompt, buildSystemContext } from "./context.js";
 import { postToParent, isToggleChatMessage } from "./postmessage-types.js";
@@ -31,6 +30,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
 
+  const [harness, setHarness] = useState<Agent>();
   const agentRef = useRef<Agent | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -40,7 +40,6 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
 
     async function init() {
       const proxyUrl = window.location.origin;
-      const streamFn = createStreamFn({ proxyUrl });
       const appName = parseAppName();
 
       const [user, schemaCtx] = await Promise.all([
@@ -57,7 +56,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
       }
 
       const agent = new Agent({
-        streamFn,
+        proxyUrl,
         initialState: { systemPrompt },
       });
       agent.state.tools = tools;
@@ -68,6 +67,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
       });
 
       agentRef.current = agent;
+      setHarness(agent);
     }
 
     function handleEvent(event: AgentEvent) {
@@ -103,7 +103,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
     return () => {
       cancelled = true;
       if (agentRef.current) {
-        agentRef.current.abort();
+        agentRef.current.dispose();
       }
     };
   }, []);
@@ -131,7 +131,7 @@ export function useAgent(options?: UseAgentOptions): UseAgentReturn {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  const result: UseAgentReturn = { send, messages, isRunning, error };
+  const result: UseAgentReturn = { send, messages, isRunning, error, harness };
   if (options?.shellIntegration) {
     result.chatOpen = chatOpen;
   }

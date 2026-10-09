@@ -32,14 +32,14 @@ function mockMeResponse(user: { id: string; name: string } | null) {
   };
 }
 
-import { createStreamFn, buildSystemPrompt, fetchSchemaContext, createSystemTools, convertUserTool } from "@localapp/sdk-agent";
+import { HarnessAgent, buildSystemPrompt, fetchSchemaContext, createSystemTools, convertUserTool } from "@localapp/sdk-agent";
 
 describe("agent-runtime > Scenario: 基本初始化", () => {
   it("useAgent 返回 { send, messages, isRunning, error }，messages 初始为空", async () => {
     mockFetch.mockResolvedValueOnce(mockSchemasResponse());
     const { useAgent } = await import("@localapp/sdk-agent");
     // Can't easily test hooks outside React, test the underlying pieces
-    expect(typeof createStreamFn).toBe("function");
+    expect(typeof HarnessAgent).toBe("function");
   });
 });
 
@@ -91,30 +91,23 @@ describe("agent-runtime > Scenario: 带系统提示初始化", () => {
 });
 
 describe("agent-runtime > Scenario: 正常调用", () => {
-  it("createStreamFn 返回一个函数", () => {
-    const streamFn = createStreamFn({ proxyUrl: "http://localhost:3000" });
-    expect(typeof streamFn).toBe("function");
+  it("HarnessAgent 使用 Server 运行入口", async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValueOnce(new Response('data: {"type":"done"}\n\n'));
+    const agent = new HarnessAgent({ initialState: { systemPrompt: "帮助用户" } });
+    await agent.prompt("你好");
+    expect(mockFetch.mock.calls[0][0]).toBe("/api/agent/run");
+    expect(agent.state.errorMessage).toBeUndefined();
   });
 });
 
 describe("agent-runtime > Scenario: LLM 调用失败", () => {
-  it("fetch 失败时 streamFn 返回错误事件流", async () => {
+  it("Server 请求失败时显示错误", async () => {
     mockFetch.mockReset();
     mockFetch.mockRejectedValueOnce(new Error("Network error"));
-
-    const streamFn = createStreamFn({ proxyUrl: "http://localhost:3000" });
-    const stream = streamFn(
-      {} as any,
-      { messages: [] },
-      undefined,
-    );
-
-    const events: any[] = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-    expect(events.some((e) => e.type === "error")).toBe(true);
-    expect(events.some((e) => e.reason === "error")).toBe(true);
+    const agent = new HarnessAgent({ initialState: { systemPrompt: "" } });
+    await agent.prompt("你好");
+    expect(agent.state.errorMessage).toBe("Network error");
   });
 });
 
@@ -156,43 +149,12 @@ describe("agent-runtime > Scenario: 多轮工具调用", () => {
   });
 });
 
-describe("agent-runtime > Scenario: Agent 正在运行时发送消息", () => {
-  it("useAgent 的 send 函数存在且可调用", async () => {
-    // Testing the send function exists - actual running state is managed by Agent
-    mockFetch.mockResolvedValueOnce(mockSchemasResponse());
-    // The send function is created by useAgent, which wraps Agent.prompt
-    // This is tested through the Agent class behavior
-    expect(true).toBe(true);
-  });
-});
-
 describe("agent-runtime > Scenario: 纯文本回复", () => {
-  it("streamFn 处理纯文本 SSE 流", async () => {
+  it("处理 Harness 的流式文本", async () => {
     mockFetch.mockReset();
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"你"}}]}\n\n'));
-        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"好"}}]}\n\n'));
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      body: stream,
-    });
-
-    const streamFn = createStreamFn({ proxyUrl: "http://localhost:3000" });
-    const result = streamFn({} as any, { messages: [] }, undefined);
-
-    const events: any[] = [];
-    for await (const event of result) {
-      events.push(event);
-    }
-    expect(events.some((e) => e.type === "start")).toBe(true);
-    expect(events.some((e) => e.type === "text_delta")).toBe(true);
-    expect(events.some((e) => e.type === "done")).toBe(true);
+    mockFetch.mockResolvedValueOnce(new Response('data: {"type":"assistant_start"}\n\ndata: {"type":"text_delta","text":"你好"}\n\ndata: {"type":"done"}\n\n'));
+    const agent = new HarnessAgent({ initialState: { systemPrompt: "" } });
+    await agent.prompt("你好");
+    expect(agent.state.messages.at(-1)?.content).toEqual([{ type: "text", text: "你好" }]);
   });
 });

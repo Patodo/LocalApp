@@ -75,6 +75,7 @@ test("checkNpmRelease accepts only a complete safe release candidate", async (t)
     ["rejects a wrong package name", (value) => { value.packageJson.name = "other"; }, /package name/i],
     ["rejects a tag and version mismatch", () => {}, /tag.*version/i, "v0.2.0"],
     ["rejects a missing README", (value) => { value.omit.add("README.md"); }, /README\.md/],
+    ["rejects a missing Windows Harness binary", (value) => { value.omit.add("runtime/server/node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe"); }, /ripgrep-win32-x64/],
     ["rejects a missing LICENSE", (value) => { value.omit.add("LICENSE"); }, /LICENSE/],
     ["rejects an incomplete adapter matrix", (value) => { value.targets.pop(); }, /native adapter/i],
     ["rejects an extra adapter target", (value) => { value.targets.push("freebsd-x64"); }, /native adapter/i],
@@ -152,6 +153,17 @@ async function createFixture(name, mutate = () => {}) {
     })}\n`,
     "template/package.json": "{}\n",
   };
+  for (const target of expectedTargets) {
+    const addonTarget = target.startsWith("linux-") ? `${target}-gnu` : target.startsWith("win32-") ? `${target}-msvc` : target;
+    files[`runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/system.node`] = "native addon";
+    files[`runtime/server/node_modules/@vscode/ripgrep-${target}/bin/${target.startsWith("win32-") ? "rg.exe" : "rg"}`] = "search binary";
+  }
+  for (const relative of [
+    "@deepseek-ai/node-addon-system-darwin-arm64/bin/system.node",
+    "@deepseek-ai/node-addon-system-darwin-x64/bin/system.node",
+    "@deepseek-ai/node-addon-system-linux-x64/bin/glibc/system.node",
+    "@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
+  ]) files[`runtime/server/node_modules/${relative}`] = "system binary";
   for (const [relative, contents] of Object.entries(files)) {
     if (state.omit.has(relative)) continue;
     const destination = path.join(packageRoot, relative);

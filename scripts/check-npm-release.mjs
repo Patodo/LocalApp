@@ -15,6 +15,17 @@ const requiredFiles = [
   "runtime/server/bin/server.mjs",
   "runtime/native/adapter-manifest.json",
   "template/package.json",
+  ...["darwin-arm64", "darwin-x64", "linux-x64", "win32-x64"].flatMap((target) => {
+    const addonTarget = target.startsWith("linux-") ? `${target}-gnu` : target.startsWith("win32-") ? `${target}-msvc` : target;
+    return [
+      `runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/system.node`,
+      `runtime/server/node_modules/@vscode/ripgrep-${target}/bin/${target.startsWith("win32-") ? "rg.exe" : "rg"}`,
+    ];
+  }),
+  "runtime/server/node_modules/@deepseek-ai/node-addon-system-darwin-arm64/bin/system.node",
+  "runtime/server/node_modules/@deepseek-ai/node-addon-system-darwin-x64/bin/system.node",
+  "runtime/server/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/glibc/system.node",
+  "runtime/server/node_modules/@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run",
 ];
 
 export async function checkNpmRelease({ tarballPath, expectedTag, releaseTargetsPath, runNpmDryRun = defaultNpmDryRun }) {

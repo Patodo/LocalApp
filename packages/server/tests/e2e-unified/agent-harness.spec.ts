@@ -1,0 +1,113 @@
+import http from "node:http";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildServer } from "../../src/server.js";
+import { SetupTokenStore } from "../../src/lib/setup-token-store.js";
+import { closeMetaDb, createApiKey, createUser, findUserByName } from "../../src/lib/meta-sqlite.js";
+const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../tmp/deepseek-harness-http-e2e", String(process.pid));
+const adminKey = "harness-e2e-admin-key";
+describe("unified Server DeepSeek Harness HTTP", () => {
+  let app: Awaited<ReturnType<typeof buildServer>>;
+  let model: http.Server;
+  let baseUrl: string;
+  let outsiderKey: string;
+  const modelRequests: any[] = [];
+  beforeAll(async () => {
+    model = http.createServer(async (req, res) => {
+      let raw = ""; for await (const chunk of req) raw += chunk;
+      const request = JSON.parse(raw);
+      modelRequests.push({ ...request, authorization: req.headers.authorization });
+      const hasResult = request.messages.at(-1)?.role === "tool";
+      const delta = hasResult ? { content: "工具已完成" } : { tool_calls: [{ index: 0, id: "http-call", function: { name: "echo", arguments: '{"text":"hello"}' } }] };
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: hasResult ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
+    const tokens = new SetupTokenStore();
+    app = await buildServer({ setupTokens: tokens, env: { DATA_DIR: dataDir, JWT_SECRET: "harness-http-e2e", BOOTSTRAP_API_KEY: adminKey, LLM_API_KEY: "mock-key", LLM_BASE_URL: `http://127.0.0.1:${(model.address() as any).port}/v1`, LLM_MODEL: "mock-model" } });
+    const token = tokens.issue();
+    expect((await app.inject({ method: "POST", url: "/api/setup/initialize", payload: { token: token.token, username: "harness-http-admin", password: "harness-test-password" } })).statusCode).toBe(201);
+    createUser("harness-outsider", "harness-outsider", "not-used");
+    outsiderKey = createApiKey("harness-outsider").key;
+    expect((await app.inject({ method: "PUT", url: "/api/agent/settings", headers: { "X-API-Key": adminKey }, payload: { providers: [{ id: "mock", name: "Mock", protocol: "openai-completions", baseUrl: `http://127.0.0.1:${(model.address() as any).port}/v1`, model: "mock-model", apiKey: "mock-key" }], defaultProviderId: "mock", grants: {}, mcpServers: [] } })).statusCode).toBe(200);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    baseUrl = `http://127.0.0.1:${app.addresses()[0].port}`;
+  });
+  afterAll(async () => {
+    await app?.close();
+    await new Promise<void>((resolve) => model?.close(() => resolve()));
+    closeMetaDb();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+  it("requires authentication and validates input", async () => {
+    const send = (key?: string) => fetch(`${baseUrl}/api/agent/run`, { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "X-API-Key": key } : {}) }, body: "{}" });
+    expect((await send()).status).toBe(401);
+    expect((await send(adminKey)).status).toBe(400);
+  });
+  it("streams a harness turn and accepts tool results only from the owning user", async () => {
+    const response = await fetch(`${baseUrl}/api/agent/run`, { method: "POST", headers: { "X-API-Key": adminKey, "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "http-e2e-session", prompt: "echo hello", systemPrompt: "Use echo", tools: [{ name: "echo", description: "Echo", parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }] }) });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const events: any[] = [];
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const event = JSON.parse(line.slice(5)); events.push(event);
+        if (event.type !== "tool_call") continue;
+        const submit = (key: string) => fetch(`${baseUrl}/api/agent/tool-result`, { method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json" }, body: JSON.stringify({ token: event.token, result: { echo: event.args.text } }) });
+        expect((await submit(outsiderKey)).status).toBe(404);
+        expect((await submit(adminKey)).status).toBe(200);
+        expect((await submit(adminKey)).status).toBe(404);
+      }
+    }
+    expect(events.some((e) => e.type === "text_delta" && e.text === "工具已完成")).toBe(true);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.at(-1).type).toBe("done");
+  });
+  it("keeps provider credentials and settings separate for each user", async () => {
+    const get = (key: string) => app.inject({ method: "GET", url: "/api/agent/settings", headers: { "X-API-Key": key } });
+    const own = (await get(adminKey)).json();
+    expect(own.data.providers[0].hasApiKey).toBe(true);
+    expect(JSON.stringify(own)).not.toContain("mock-key");
+    expect((await get(outsiderKey)).json().data.providers).toEqual([]);
+    expect((await app.inject({ method: "POST", url: "/api/agent/run", headers: { "X-API-Key": outsiderKey }, payload: { sessionId: "not-configured", prompt: "hi", systemPrompt: "", tools: [] } })).statusCode).toBe(400);
+    const saved = await app.inject({ method: "PUT", url: "/api/agent/settings", headers: { "X-API-Key": outsiderKey }, payload: { ...own.data, providers: [{ ...own.data.providers[0], model: "outsider-model", apiKey: "outsider-model-key" }] } });
+    expect(saved.statusCode).toBe(200);
+    const response = await fetch(`${baseUrl}/api/agent/run`, { method: "POST", headers: { "X-API-Key": outsiderKey, "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "http-e2e-session", prompt: "hello", systemPrompt: "", tools: [] }) });
+    expect(response.status).toBe(200);
+    // With no echo tool registered the loop records its unknown-tool error;
+    // the provider still completes the next model step and the turn settles.
+    await response.text();
+    expect(modelRequests.at(-1).model).toBe("outsider-model");
+    expect(modelRequests.at(-1).authorization).toBe("Bearer outsider-model-key");
+    expect((await get(adminKey)).json().data.providers[0].model).toBe("mock-model");
+    expect((await app.inject({ method: "GET", url: "/api/agent/sessions", headers: { "X-API-Key": adminKey } })).json().data.map((s: any) => s.id)).toContain("http-e2e-session");
+  });
+  it("requires both application declarations and user grants before exposing extra tools", async () => {
+    const owner = findUserByName("harness-http-admin")!;
+    const directory = path.join(dataDir, owner.id, "agent-app");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "meta.json"), JSON.stringify({ name: "agent-app", userId: owner.id, currentVersion: 1, versions: [], metadata: {}, pageAccess: { level: "owner" } }));
+    await fs.writeFile(path.join(directory, "manifest.json"), JSON.stringify({ name: "agent-app", agent: { capabilities: ["files", "subagents"] } }));
+    const own = (await app.inject({ method: "GET", url: "/api/agent/settings", headers: { "X-API-Key": adminKey } })).json().data;
+    expect((await app.inject({ method: "PUT", url: "/api/agent/settings", headers: { "X-API-Key": adminKey }, payload: { ...own, grants: { "harness-http-admin/agent-app": ["files", "terminal"] } } })).statusCode).toBe(200);
+    const input = { appId: "harness-http-admin/agent-app", sessionId: "declared-capabilities", prompt: "hello", systemPrompt: "Application prompt", tools: [] };
+    const response = await fetch(`${baseUrl}/api/agent/run`, { method: "POST", headers: { "X-API-Key": adminKey, "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    expect(response.status).toBe(200);
+    await response.text();
+    const names = modelRequests.at(-1).tools.map((t: any) => t.function.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("subagent");
+    expect(names).not.toContain("bash");
+    expect(modelRequests.at(-1).authorization).toBe("Bearer mock-key");
+    expect((await app.inject({ method: "POST", url: "/api/agent/run", headers: { "X-API-Key": outsiderKey }, payload: input })).statusCode).toBe(400);
+  });
+
+});

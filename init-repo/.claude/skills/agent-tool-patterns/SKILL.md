@@ -193,3 +193,10 @@ const agent = useAgent({
 3. 表单填写工具是否通过 `setState` 更新 React 状态？
 4. 没有直接使用 `fetch` 调 REST API？
 5. `systemHint` 是否指导 LLM 使用正确的工具调用顺序？
+
+
+## LocalApp 提供 Agent 和模型配置
+
+Platform Shell、DevShell 和 `AgentChat` 共用统一 Server 中的 DeepSeek Harness。应用用 `useRegisterTools({ tools, systemHint })` 注册工具和系统提示词（也可只注册 `systemHint`），不保存模型密钥、不直接连接模型供应商。每个用户在平台的“模型与 Agent”页面配置自己的模型；聊天界面支持选择供应商及历史对话。
+
+需要页面工具以外的能力时，在 `manifest.json` 添加 `agent.capabilities`，可选值为 `files`、`terminal`、`mcp`、`skills`、`subagents`、`jobs`、`web`、`workflow`、`schedule`。用户必须在自己的设置中按 `owner/app` 允许相应能力，Server 才会启用。文件和 Skills 使用 Server 上该用户、应用、供应商配置的 Agent 工作目录，不是应用上传文件目录或用户电脑目录。终端执行需要操作系统隔离支持。后台工作调用页面工具、询问用户或等待确认时，需要应用保持打开。

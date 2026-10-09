@@ -25,7 +25,8 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
-    "unified": "^11.0.5"
+    "unified": "^11.0.5",
+    "@localapp/sdk-agent": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",

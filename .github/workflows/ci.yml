@@ -10,7 +10,7 @@ permissions:
 
 env:
   NODE_VERSION: "24"
-  PNPM_VERSION: "10"
+  PNPM_VERSION: "10.34.6"
 
 jobs:
   verify:
@@ -69,6 +69,7 @@ jobs:
           pnpm test:windows-release-script
           pnpm test:release-manifest
           pnpm test:release-workflow
+          node --test scripts/check-npm-release.node-test.mjs
           pnpm test:public-source
 
       - name: Validate OpenSpec

@@ -21,7 +21,7 @@ class MockEventSource {
 const runningTask = {
   id: "task-1", workspaceId: "workspace-1", kind: "build", executable: "npm", args: ["run", "build"],
   timeoutMs: 60000, requestedBy: "admin", status: "running", pid: 1, processIdentity: "p", exitCode: null,
-  error: null, createdAt: "2026-08-09T00:00:00.000Z", startedAt: "2026-08-09T00:00:00.000Z", completedAt: null,
+  error: null, createdAt: "2026-08-09T00:00:00.000Z", startedAt: "2026-08-09T00:00:00.000Z", completedAt: null as string | null,
 };
 
 describe("TasksPage", () => {

@@ -29,6 +29,7 @@ import { favoritesRoutes } from "./routes/favorites.js";
 import { subscribeRoutes } from "./routes/subscribe.js";
 import { inboxRoutes } from "./routes/inbox.js";
 import { wsRoutes } from "./routes/ws.js";
+import { agentRoutes } from "./routes/agent.js";
 import { llmRoutes } from "./routes/llm.js";
 import { platformDataRoutes } from "./routes/platform-data.js";
 import { dbRoutes } from "./routes/db.js";
@@ -168,6 +169,7 @@ async function registerServerPluginsAndRoutes(
   app.register(async (llmScope) => {
     await authPlugin(llmScope);
     llmScope.register(llmRoutes);
+    llmScope.register(agentRoutes);
   });
   app.register(issuesRoutes);
   app.register(favoritesRoutes);

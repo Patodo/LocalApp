@@ -1,7 +1,7 @@
 {
   "name": "@localapp/sdk-agent",
   "version": "0.1.0",
-  "description": "LocalApp Agent SDK — AI agent integration for LocalApp apps",
+  "description": "LocalApp Agent SDK \u2014 AI agent integration for LocalApp apps",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -11,13 +11,15 @@
     "./native-registry": "./src/native-registry.ts",
     "./platform-runtime": "./src/platform-runtime.ts",
     "./postmessage-types": "./src/postmessage-types.ts",
-    "./use-register-edit-session": "./src/use-register-edit-session.ts"
+    "./use-register-edit-session": "./src/use-register-edit-session.ts",
+    "./harness-client": "./src/harness-client.ts",
+    "./agent-controls": "./src/agent-controls.tsx"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "license": "MIT",
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.75.5",
-    "@earendil-works/pi-ai": "^0.75.5",
     "@sinclair/typebox": "^0.34.49"
   },
   "peerDependencies": {

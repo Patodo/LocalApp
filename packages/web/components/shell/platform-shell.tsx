@@ -257,7 +257,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
       });
   }, []);
 
-  const { chatMessages, isRunning, aiError, agentSend, handleToolResult } = usePlatformAgent({
+  const { harness, chatMessages, isRunning, aiError, agentSend, handleToolResult } = usePlatformAgent({
     appName: name,
     userName: user?.name,
     pagePath,
@@ -782,6 +782,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
             <AiSidebar
               open={aiOpen}
               onClose={() => setAiOpen(false)}
+              agent={harness}
               messages={chatMessages}
               isRunning={isRunning}
               error={aiError}

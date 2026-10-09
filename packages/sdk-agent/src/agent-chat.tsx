@@ -1,3 +1,4 @@
+import { AgentControls } from "./agent-controls.js";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   useExternalStoreRuntime,
@@ -43,6 +44,7 @@ export function AgentChat({ agent }: AgentChatProps) {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <div style={{ display: "flex", flexDirection: "column", height: "100%", fontSize: 14 }}>
+        <AgentControls agent={agent.harness ?? null} />
         {error && (
           <div style={{ padding: "8px 12px", background: "#fff3e0", color: "#d84315", borderBottom: "1px solid #ffe0b2", fontSize: 13 }}>
             {error}

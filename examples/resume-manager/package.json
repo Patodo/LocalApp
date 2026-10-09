@@ -2,8 +2,6 @@
   "dependencies": {
     "@assistant-ui/react": "^0.14.7",
     "@base-ui/react": "^1.5.0",
-    "@earendil-works/pi-agent-core": "^0.75.5",
-    "@earendil-works/pi-ai": "^0.75.5",
     "@localapp/app-kit": "file:./.localapp/runtime",
     "@localapp/sdk": "file:./.localapp/runtime/sdk/core",
     "@localapp/sdk-react": "file:./.localapp/runtime/sdk/react",

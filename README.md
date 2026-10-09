@@ -18,6 +18,22 @@ LocalApp 面向表单、台账、协作流程、内部工具等中轻度复杂�
 
 LocalApp 默认采用 **Named SQL first**。稳定后端能力由 migration、声明式 query/mutation 和事务 mutation 组成；平台不要求应用开发者编写独立服务，也不把任意 Hosted JavaScript Action 作为默认生产后端。
 
+## Agent 核心
+
+应用 SDK、平台 Shell 和本地 Dev Shell 共用 DeepSeek Harness（固定版本 `0.2.1-alpha.1`）。Harness 的 Agent 循环、消息历史和工具调度运行在统一 Server 内；浏览器通过 `/api/agent/run` 接收流式事件，执行已注册的页面工具，再通过 `/api/agent/tool-result` 返回结果。无需安装额外的 `dsh` CLI 或启动另一个服务。
+
+每个用户在 `/my/models/` 配置自己的模型供应商、默认模型和密钥，可添加多个配置并在聊天侧栏切换。支持 OpenAI Chat Completions、Responses、Anthropic Messages 和 Google Generative AI 协议。Agent 请求使用当前用户的配置，不使用 Server 全局 LLM 密钥。密钥在 Server 数据目录加密保存，设置读取接口不返回密钥。
+
+应用继续通过 `useRegisterTools()` 注册页面工具，通过 `useRegisterTools({ tools, systemHint })` 或 `useAgent({ systemHint })` 注册系统提示词。页面工具执行应用原有 API，仍经过应用的数据权限检查。应用在 `manifest.json` 声明额外能力，用户在模型与 Agent 设置中按 `owner/app` 选择允许的能力；Server 只启用两者共同允许的部分：
+
+```json
+{ "agent": { "capabilities": ["files", "terminal", "mcp", "skills", "subagents", "jobs", "web", "workflow", "schedule"] } }
+```
+
+文件、终端、Skills、MCP、子 Agent、后台任务、网页读取、代码工作流和定时任务均由统一 Server 提供。文件和 Skills 使用每个用户、每个应用独立的 Agent 工作目录；Skills 放在该目录的 `skills/` 下。MCP 支持 HTTP 和 stdio，由用户配置地址或命令及凭据。终端、stdio MCP 和工作流使用操作系统隔离：macOS 使用 Seatbelt，Linux 使用 bubblewrap 或 Landlock；其他环境若不能隔离文件读取，则拒绝执行这些操作。后台任务需要页面保持打开才能调用页面工具、询问用户或请求确认。无需页面工具的定时任务可在 Server 中执行，重启后恢复已保存的任务。
+
+共享聊天控件提供模型切换、新对话、历史、停止、操作确认和问题回答；输入 `/plan`、`/plan off` 或 `/compact` 可使用 dsh 的计划模式与历史压缩命令。会话按用户、应用及供应商配置保存到 Server，重启后可恢复历史；闲置 Agent 实例会释放。更新已有应用时运行 `localapp sync-template`，重新构建并安装。SDK 的 `useAgent()`、自定义工具和聊天组件接口保持可用，底层 `createStreamFn` 已移除，直接使用旧 pi 类型的代码应改为从 `@localapp/sdk-agent` 导入。
+
 ## 应用开发流程
 
 ### 1. 安装工具

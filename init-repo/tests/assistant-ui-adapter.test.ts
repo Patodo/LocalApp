@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { convertMessages } from "@localapp/sdk-agent";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@localapp/sdk-agent";
 
 describe("assistant-ui-adapter > convertMessages", () => {
   it("转换空消息数组", () => {

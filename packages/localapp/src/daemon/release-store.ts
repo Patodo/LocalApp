@@ -128,11 +128,11 @@ async function inspectReleaseArtifact(directory: string): Promise<InspectedArtif
       throw invalidArtifact();
     }
     const files = new Map<string, Buffer>();
-    for (const entry of manifest.files) {
+    await forEachConcurrent(manifest.files, async (entry) => {
       const bytes = await readRegularFile(path.join(directory, ...entry.path.split("/")));
       if (bytes.byteLength !== entry.size || sha256(bytes) !== entry.sha256) throw invalidArtifact();
       files.set(entry.path, bytes);
-    }
+    });
     validatePackedNativeManifest(manifest, files);
     return { manifest, files, manifestBytes };
   } catch (error) {
@@ -297,11 +297,11 @@ async function publishImmutableDirectory(
   const staging = await fs.mkdtemp(path.join(releasesDirectory, ".release-stage-"));
   if (process.platform !== "win32") await fs.chmod(staging, 0o700);
   try {
-    for (const [relativePath, bytes] of inspected.files) {
+    await forEachConcurrent([...inspected.files], async ([relativePath, bytes]) => {
       const destination = path.join(staging, ...relativePath.split("/"));
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       await fs.writeFile(destination, bytes, { flag: "wx", mode: isExecutableReleaseFile(relativePath, inspected.manifest) ? 0o700 : 0o600 });
-    }
+    });
     await fs.writeFile(path.join(staging, ".localapp-artifact.json"), inspected.manifestBytes, { flag: "wx", mode: 0o600 });
     await inspectReleaseArtifact(staging);
     try {
@@ -316,8 +316,21 @@ async function publishImmutableDirectory(
   }
 }
 
+// Bound open descriptors while checking every file and preserving the same
+// before/open/after identity checks. Await all workers before staging cleanup.
+async function forEachConcurrent<T>(items: readonly T[], operation: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(16, items.length) }, async () => {
+    while (next < items.length) await operation(items[next++]);
+  });
+  const results = await Promise.allSettled(workers);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+}
+
 function isExecutableReleaseFile(relativePath: string, manifest: ReleaseArtifactManifest): boolean {
   if (relativePath === manifest.entrypoint) return true;
+  if (relativePath.startsWith("runtime/server/node_modules/") && /\/(?:landlock-run|rg|rg\.exe|spawn-helper)$/.test(relativePath)) return true;
   return /^runtime\/native\/[^/]+\/(?:LocalAppBridge\.app\/Contents\/(?:MacOS\/LocalAppBridge|Resources\/localapp-native-ipc-client\.mjs)|localapp-native\.exe|localapp-notifications|localapp-native-ipc-client\.mjs)$/.test(relativePath);
 }
 

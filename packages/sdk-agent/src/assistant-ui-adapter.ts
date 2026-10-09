@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "./harness-client.js";
 import type { ThreadMessageLike } from "@assistant-ui/react";
 
 function extractText(content: unknown): string {

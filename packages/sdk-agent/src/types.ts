@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool } from "./harness-client.js";
 
 export interface UserToolDef {
   description: string;
@@ -24,4 +24,5 @@ export interface UseAgentReturn {
   isRunning: boolean;
   error: string | null;
   chatOpen?: boolean;
+  harness?: import("./harness-client.js").HarnessAgent;
 }

@@ -51,8 +51,9 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     const workerEnv: NodeJS.ProcessEnv = { ...env };
     delete workerEnv.LOCALAPP_USE_PENDING_CONFIG;
     if (usePendingConfig) workerEnv.LOCALAPP_USE_PENDING_CONFIG = "1";
-    const workerPath = process.env.LOCALAPP_WORKER_PATH ?? path.join(__dirname, "worker.js");
-    return spawn(process.execPath, [workerPath], {
+    const sourceMode = __filename.endsWith(".ts");
+    const workerPath = process.env.LOCALAPP_WORKER_PATH ?? path.join(__dirname, sourceMode ? "worker.ts" : "worker.js");
+    return spawn(process.execPath, [...(sourceMode ? process.execArgv : []), workerPath], {
       env: workerEnv,
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });

@@ -59,12 +59,18 @@ describe("release store", () => {
 
     const published = await publishRelease({ sourceDirectory: packageArtifact, layout });
 
-    expect(await verifyReleaseArtifact(published.releasePath)).toMatchObject({
+    const packed = await verifyReleaseArtifact(published.releasePath);
+    expect(packed).toMatchObject({
       schemaVersion: 2,
       name: "@patodo/localapp",
       entrypoint: "bin/localapp.mjs",
       bootstrapEntrypoint: "runtime/bootstrap/localapp-daemon-bootstrap.mjs",
     });
+    if (process.platform !== "win32") {
+      const helper = packed.files.find((file) => file.path.endsWith("/node-pty/prebuilds/darwin-arm64/spawn-helper"));
+      expect(helper, "dsh terminal helper must be present in the installed release").toBeDefined();
+      expect((await fs.stat(path.join(published.releasePath, helper!.path))).mode & 0o700).toBe(0o700);
+    }
     expect(await fs.readFile(layout.launcherPath, "utf8")).not.toContain(repositoryRoot);
   }, 30_000);
 

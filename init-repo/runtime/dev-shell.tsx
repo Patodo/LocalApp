@@ -1,3 +1,5 @@
+import { AgentControls } from "@localapp/sdk-agent/agent-controls";
+import { HarnessAgent, toChatMessages } from "@localapp/sdk-agent/harness-client";
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -2079,175 +2081,49 @@ export function DevShell({ children }: { children: React.ReactNode }) {
     setToolsOpen(false);
   }, []);
 
+  const agentRef = useRef<HarnessAgent | null>(null);
+  useEffect(() => {
+    const agent = new HarnessAgent({ initialState: { systemPrompt: "" }, appId: getDevIssuePagePath(devContext) });
+    agentRef.current = agent;
+    setChatMessages([]); setAiError(null);
+    const unsubscribe = agent.subscribe(() => {
+      if (agentRef.current !== agent) return;
+      setChatMessages(toChatMessages(agent.state.messages));
+      setIsRunning(agent.state.isStreaming);
+      setAiError(agent.state.errorMessage ?? null);
+    });
+    return () => { unsubscribe(); agent.dispose(); };
+  }, [devContext?.pageName, devContext?.pageOwnerId, devContext?.user?.id]);
+
   const agentSend = useCallback(async (text: string) => {
-    setChatMessages((prev) => [...prev, { role: "user", content: text }]);
-    setIsRunning(true);
-    setAiError(null);
-
-    const tools = Array.from(toolsRef.current.values()).map((t) => ({
-      type: "function" as const,
-      function: { name: t.schema.name, description: t.schema.description, parameters: t.schema.parameters },
-    }));
-
-    const systemPrompt = [
+    if (!text.trim() || agentRef.current?.state.isStreaming) return;
+    let agent = agentRef.current;
+    if (!agent) {
+      agent = new HarnessAgent({ initialState: { systemPrompt: "" }, appId: getDevIssuePagePath(devContext) });
+      const current = agent;
+      agent.subscribe(() => {
+        setChatMessages(toChatMessages(current.state.messages));
+        setIsRunning(current.state.isStreaming);
+        setAiError(current.state.errorMessage ?? null);
+      });
+      agentRef.current = agent;
+    }
+    agent.state.systemPrompt = [
       "你是一个运行在 LocalApp 应用中的 AI 助手。",
       "当前运行在本地开发模式。",
       systemHintRef.current,
       "当用户的需求可以映射到工具操作时，必须调用工具执行。",
       "请用中文回复用户。",
     ].filter(Boolean).join("\n");
-
-    const messages: Array<Record<string, unknown>> = [{ role: "user", content: text }];
-
-    try {
-      const res = await fetch("/api/llm/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [{ role: "system", content: systemPrompt }, ...messages],
-          ...(tools.length > 0 ? { tools } : {}),
-        }),
-      });
-
-      if (!res.ok) throw new Error(`LLM 请求失败: ${res.status}`);
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("无响应体");
-
-      const decoder = new TextDecoder();
-      let assistantContent = "";
-      let currentToolCalls: Array<{ id: string; name: string; args: string }> = [];
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta;
-            if (!delta) continue;
-            if (delta.content) {
-              assistantContent += delta.content;
-              setChatMessages((prev) => {
-                const last = prev[prev.length - 1];
-                if (last?.role === "assistant") return [...prev.slice(0, -1), { ...last, content: assistantContent }];
-                return [...prev, { role: "assistant", content: assistantContent, toolCalls: [] }];
-              });
-            }
-            if (delta.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                if (tc.id) {
-                  currentToolCalls.push({ id: tc.id, name: tc.function?.name || "", args: tc.function?.arguments || "" });
-                } else if (currentToolCalls.length > 0) {
-                  const last = currentToolCalls[currentToolCalls.length - 1];
-                  if (tc.function?.arguments) last.args += tc.function.arguments;
-                  if (tc.function?.name) last.name = tc.function.name;
-                }
-              }
-            }
-          } catch {}
-        }
-      }
-
-      // Ensure assistant message with tool calls
-      const parsedToolCalls = currentToolCalls.map((tc) => {
-        let args: Record<string, unknown> = {};
-        try { args = JSON.parse(tc.args); } catch {}
-        return { id: tc.id, name: tc.name, args, status: "running" as const };
-      });
-      setChatMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant") return [...prev.slice(0, -1), { ...last, toolCalls: parsedToolCalls }];
-        return [...prev, { role: "assistant", content: assistantContent, toolCalls: parsedToolCalls }];
-      });
-
-      // Execute tool calls directly through the same-page registry.
-      if (currentToolCalls.length > 0) {
-        const results = await Promise.all(
-          currentToolCalls.map(async (tc) => {
-            let args: Record<string, unknown> = {};
-            try { args = JSON.parse(tc.args); } catch {};
-            const entry = toolsRef.current.get(tc.name);
-            let result: unknown;
-            let isError = false;
-            try {
-              if (entry) {
-                result = await entry.execute(args);
-              } else {
-                result = `未知工具: ${tc.name}`;
-                isError = true;
-              }
-            } catch (e) {
-              result = e instanceof Error ? e.message : String(e);
-              isError = true;
-            }
-            // Update tool call status
-            setChatMessages((prev) =>
-              prev.map((msg) => {
-                if (msg.role !== "assistant" || !msg.toolCalls) return msg;
-                return { ...msg, toolCalls: msg.toolCalls.map((t) => t.id === tc.id ? { ...t, result, isError, status: "completed" as const } : t) };
-              })
-            );
-            return { id: tc.id, name: tc.name, result: String(result), isError };
-          })
-        );
-
-        // Follow-up LLM call with tool results
-        messages.push({ role: "assistant", content: assistantContent || "", tool_calls: currentToolCalls.map((tc) => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: tc.args } })) });
-        for (const r of results) messages.push({ role: "tool", content: JSON.stringify(r), tool_call_id: r.id });
-
-        const followRes = await fetch("/api/llm/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: [{ role: "system", content: systemPrompt }, ...messages], tools }),
-        });
-
-        if (followRes.ok) {
-          const followReader = followRes.body?.getReader();
-          if (followReader) {
-            let followContent = "";
-            const followDecoder = new TextDecoder();
-            let followBuffer = "";
-            while (true) {
-              const { done, value } = await followReader.read();
-              if (done) break;
-              followBuffer += followDecoder.decode(value, { stream: true });
-              const lines = followBuffer.split("\n");
-              followBuffer = lines.pop() || "";
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                const data = line.slice(6).trim();
-                if (data === "[DONE]") continue;
-                try {
-                  const parsed = JSON.parse(data);
-                  const delta = parsed.choices?.[0]?.delta;
-                  if (delta?.content) {
-                    followContent += delta.content;
-                    setChatMessages((prev) => [...prev, { role: "assistant", content: followContent, toolCalls: [] }]);
-                  }
-                } catch {}
-              }
-            }
-            if (!followContent) {
-              setChatMessages((prev) => [...prev, { role: "assistant", content: "工具执行完成。", toolCalls: [] }]);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      setAiError(e instanceof Error ? e.message : "未知错误");
-    } finally {
-      setIsRunning(false);
-    }
-  }, []);
+    agent.state.tools = Array.from(toolsRef.current.values()).map((entry) => ({
+      ...entry.schema,
+      execute: async (_id, args) => {
+        const result = await entry.execute(args);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) ?? "null" }], details: result };
+      },
+    }));
+    await agent.prompt(text);
+  }, [devContext]);
 
   const resolveConfirmDialog = useCallback((confirmed: boolean) => {
     if (!confirmDialog) return;
@@ -2305,6 +2181,7 @@ export function DevShell({ children }: { children: React.ReactNode }) {
             onUpdateContext={updateDevContext}
           />
           <DevSidebar
+            agent={agentRef.current}
             messages={chatMessages}
             isRunning={isRunning}
             error={aiError}
@@ -6116,6 +5993,7 @@ function DevToolkitSidebar({
 }
 
 function DevSidebar({
+  agent,
   messages,
   isRunning,
   error,
@@ -6123,6 +6001,7 @@ function DevSidebar({
   open,
   onClose,
 }: {
+  agent?: HarnessAgent | null;
   messages: ChatMessage[];
   isRunning: boolean;
   error: string | null;
@@ -6212,6 +6091,7 @@ function DevSidebar({
         </button>
       </div>
 
+      <AgentControls agent={agent ?? null} />
       {error && (
         <div className="border-b border-localapp-dev-danger bg-localapp-dev-danger-muted px-3 py-2 text-xs text-localapp-dev-danger">{error}</div>
       )}

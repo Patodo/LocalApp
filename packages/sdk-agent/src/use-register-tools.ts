@@ -81,9 +81,9 @@ export function useRegisterTools(options: UseRegisterToolsOptions = {}): void {
 
   useEffect(() => {
     const { tools, systemHint } = optionsRef.current;
-    if (!tools || Object.keys(tools).length === 0) return;
+    if ((!tools || Object.keys(tools).length === 0) && !systemHint) return;
 
-    cleanupRef.current = registerToolsForShell(tools, systemHint);
+    cleanupRef.current = registerToolsForShell(tools ?? {}, systemHint);
     return () => {
       cleanupRef.current?.();
       cleanupRef.current = undefined;

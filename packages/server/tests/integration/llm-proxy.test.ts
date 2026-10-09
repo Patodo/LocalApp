@@ -6,7 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { AgentSettingsStore } from "../../src/lib/agent-settings.js";
 import { storagePlugin } from "../../src/plugins/storage.js";
 import { authPlugin } from "../../src/plugins/auth.js";
 import { sessionPlugin } from "../../src/plugins/session.js";
@@ -22,7 +22,9 @@ function getAppUrl(app: FastifyInstance): string {
 }
 
 async function createLlmTestServer(envOverrides?: Record<string, string | undefined>) {
-  const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "localapp-llm-test-"));
+  const testRoot = path.resolve(__dirname, "../../../../tmp/llm-proxy-tests");
+  await fs.promises.mkdir(testRoot, { recursive: true });
+  const dataDir = await fs.promises.mkdtemp(path.join(testRoot, "run-"));
   const env: Record<string, string | undefined> = {
     DATA_DIR: dataDir,
     BOOTSTRAP_API_KEY: "test-api-key-1234567890abcdef",
@@ -90,6 +92,7 @@ describe("LLM 代理端点", () => {
       baseUrl = server.baseUrl;
       stop = server.stop;
       authCookie = await registerAndLogin(baseUrl, "alice");
+      new AgentSettingsStore(process.env.DATA_DIR!).write("alice", { providers: [{ id: "own", name: "Own model", protocol: "openai-completions", baseUrl: process.env.LLM_BASE_URL!, apiKey: "user-model-key", model: "gpt-4o-mini" }], defaultProviderId: "own", grants: {}, mcpServers: [] });
     });
 
     afterAll(async () => {
@@ -124,7 +127,7 @@ describe("LLM 代理端点", () => {
     });
   });
 
-  describe("未配置 LLM_API_KEY", () => {
+  describe("用户未配置模型供应商", () => {
     let baseUrl: string;
     let stop: () => Promise<void>;
 
@@ -138,14 +141,14 @@ describe("LLM 代理端点", () => {
       await stop();
     });
 
-    it("返回 503 提示服务未配置", async () => {
+    it("返回 400 提示用户配置模型", async () => {
       const authCookie = await registerAndLogin(baseUrl, "alice");
       const res = await fetch(`${baseUrl}/api/llm/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: authCookie },
         body: JSON.stringify({ messages: [{ role: "user", content: "你好" }] }),
       });
-      expect(res.status).toBe(503);
+      expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.error).toBeDefined();
     });
@@ -187,6 +190,7 @@ describe("LLM 代理端点", () => {
       baseUrl = server.baseUrl;
       stop = server.stop;
       authCookie = await registerAndLogin(baseUrl, "alice");
+      new AgentSettingsStore(process.env.DATA_DIR!).write("alice", { providers: [{ id: "own", name: "Own model", protocol: "openai-completions", baseUrl: process.env.LLM_BASE_URL!, apiKey: "user-model-key", model: "gpt-4o-mini" }], defaultProviderId: "own", grants: {}, mcpServers: [] });
     });
 
     afterAll(async () => {
@@ -238,6 +242,7 @@ describe("LLM 代理端点", () => {
       baseUrl = server.baseUrl;
       stop = server.stop;
       authCookie = await registerAndLogin(baseUrl, "alice");
+      new AgentSettingsStore(process.env.DATA_DIR!).write("alice", { providers: [{ id: "own", name: "Own model", protocol: "openai-completions", baseUrl: process.env.LLM_BASE_URL!, apiKey: "user-model-key", model: "gpt-4o-mini" }], defaultProviderId: "own", grants: {}, mcpServers: [] });
     });
 
     afterAll(async () => {
@@ -278,6 +283,7 @@ describe("LLM 代理端点", () => {
       baseUrl = server.baseUrl;
       stop = server.stop;
       authCookie = await registerAndLogin(baseUrl, "alice");
+      new AgentSettingsStore(process.env.DATA_DIR!).write("alice", { providers: [{ id: "own", name: "Own model", protocol: "openai-completions", baseUrl: process.env.LLM_BASE_URL!, apiKey: "user-model-key", model: "gpt-4o-mini" }], defaultProviderId: "own", grants: {}, mcpServers: [] });
     });
 
     afterAll(async () => {

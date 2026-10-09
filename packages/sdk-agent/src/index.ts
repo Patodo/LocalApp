@@ -4,7 +4,8 @@ export { useRegisterTools, registerToolsForShell } from "./use-register-tools.js
 export { useRegisterEditSession, registerEditSessionForShell } from "./use-register-edit-session.js";
 export { buildSystemContext, buildSystemPrompt, fetchSchemaContext } from "./context.js";
 export { convertMessages } from "./assistant-ui-adapter.js";
-export { createStreamFn } from "./llm-adapter.js";
+export { HarnessAgent } from "./harness-client.js";
+export type { AgentMessage, AgentTool, AgentEvent } from "./harness-client.js";
 export { createSystemTools, convertUserTool } from "./tools.js";
 export { createPlatformRuntime, platform, isPlatformResponseMessage } from "./platform-runtime.js";
 export type { UseAgentOptions, UseAgentReturn, UserToolDef } from "./types.js";
@@ -17,3 +18,5 @@ export type { ToolSchema, RegisterToolsMessage, ToolCallMessage, ToolResultMessa
 export { getDevRegistry, setDevRegistry, isDevMode } from "./dev-bridge.js";
 export { isRegisterToolsMessage, isAiCustomModeMessage, isToolResultMessage, isToolCallMessage, isToggleChatMessage, isHideShellMessage, isPlatformRequestMessage, postToParent, postToIframe, hideShell } from "./postmessage-types.js";
 export type { DevShellRegistry } from "./dev-bridge.js";
+
+export { AgentControls } from "./agent-controls.js";

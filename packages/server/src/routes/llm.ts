@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { AgentSettingsStore } from "../lib/agent-settings.js";
 
 interface ChatMessage {
   role: string;
@@ -12,10 +13,12 @@ interface ChatRequest {
 }
 
 export async function llmRoutes(app: FastifyInstance) {
+  const settings = new AgentSettingsStore(app.config.dataDir);
   app.post<{ Body: ChatRequest }>("/api/llm/chat", async (req, reply) => {
-    if (!app.config.llmApiKey) {
-      return reply.status(503).send({ success: false, error: "LLM service not configured" });
-    }
+    const saved = settings.read(req.userId);
+    const provider = saved.providers.find((p) => p.id === saved.defaultProviderId);
+    if (!provider) return reply.status(400).send({ success: false, error: "请先配置自己的模型供应商" });
+    if (provider.protocol !== "openai-completions") return reply.status(400).send({ success: false, error: "此接口仅支持 Chat Completions，请使用 /api/agent/run" });
 
     const { messages } = req.body ?? {};
     if (!messages) {
@@ -25,9 +28,9 @@ export async function llmRoutes(app: FastifyInstance) {
       return reply.status(400).send({ success: false, error: "messages must be an array" });
     }
 
-    const model = req.body.model || app.config.llmModel;
-    const baseUrl = app.config.llmBaseUrl;
-    const apiKey = app.config.llmApiKey;
+    const model = req.body.model || provider.model;
+    const baseUrl = provider.baseUrl;
+    const apiKey = provider.apiKey;
 
     let llmRes: Response;
     try {

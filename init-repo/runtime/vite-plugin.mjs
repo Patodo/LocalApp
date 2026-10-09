@@ -97,6 +97,7 @@ export function buildProxy(devConfig, serverUrl) {
     "/api/users",
     "/api/groups",
     "/api/llm",
+    "/api/agent",
     "/api/issues",
     "/api/platform",
   ];

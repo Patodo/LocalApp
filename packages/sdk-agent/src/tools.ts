@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "./harness-client.js";
 import type { UserToolDef } from "./types.js";
 
 function createGetCurrentUserTool(): AgentTool {

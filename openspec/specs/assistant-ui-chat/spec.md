@@ -18,7 +18,7 @@ This spec describes the expected behavior, acceptance criteria, and integration 
 
 ### Requirement: 消息格式转换适配器
 
-SHALL 提供 `convertMessages()` 函数，将 pi-agent-core 的 `AgentMessage[]` 转换为 assistant-ui 的 `ThreadMessageLike[]`。转换规则：
+SHALL 提供 `convertMessages()` 函数，将 LocalApp SDK 的 `AgentMessage[]` 转换为 assistant-ui 的 `ThreadMessageLike[]`。转换规则：
 
 1. `UserMessage` → `{ role: "user", content: text }`
 2. `AssistantMessage` 的 `TextContent` → `{ type: "text", text }`
@@ -48,7 +48,7 @@ SHALL 提供 `convertMessages()` 函数，将 pi-agent-core 的 `AgentMessage[]`
 
 #### Scenario: 用户在 assistant-ui 输入框发送消息
 - **WHEN** 用户在 Thread 组件的输入框中输入文字并按发送
-- **THEN** 文字内容通过 `agent.send(text)` 传递给 pi-agent-core Agent
+- **THEN** 文字内容通过 `agent.send(text)` 传递给统一 Server 中的 DeepSeek Harness
 
 ### Requirement: 流式状态传递
 

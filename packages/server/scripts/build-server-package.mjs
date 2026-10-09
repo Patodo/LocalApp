@@ -4,6 +4,8 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { harnessBundlePlugin } from "./harness-bundle-plugin.mjs";
+import { copyHarnessDependencies } from "./harness-package-dependencies.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(scriptDirectory, "../../..");
@@ -27,18 +29,20 @@ export async function buildServerPackage(options = {}) {
 
   await fs.rm(outputDirectory, { recursive: true, force: true });
   await fs.mkdir(binDirectory, { recursive: true, mode: 0o755 });
+  await fs.copyFile(path.join(serverDirectory, "THIRD_PARTY_NOTICES.txt"), path.join(outputDirectory, "THIRD_PARTY_NOTICES.txt"));
   await fs.cp(webOutput, webDirectory, { recursive: true });
   await fs.mkdir(runnerDirectory, { recursive: true, mode: 0o755 });
   await fs.cp(path.join(serverDirectory, "runner/localapp-runner.mjs"), path.join(runnerDirectory, "localapp-runner.mjs"));
 
   const bundleOptions = {
     bundle: true,
+    plugins: [harnessBundlePlugin()],
     platform: "node",
     format: "cjs",
     target: "node24",
     sourcemap: false,
     legalComments: "none",
-    external: ["sql.js"],
+    external: ["sql.js", "@deepseek-ai/*"],
     define: { "process.env.LOCALAPP_PACKAGE_ENTRY": '"1"' },
     absWorkingDir: projectDirectory,
     logLevel: "warning",
@@ -50,6 +54,8 @@ export async function buildServerPackage(options = {}) {
   await fs.chmod(path.join(binDirectory, "server-cli.cjs"), 0o755);
   await fs.chmod(path.join(binDirectory, "worker.cjs"), 0o755);
   await fs.chmod(path.join(binDirectory, "server.mjs"), 0o755);
+
+  await copyHarnessDependencies(serverDirectory, outputDirectory);
 
   const require = createRequire(import.meta.url);
   const sqlEntry = require.resolve("sql.js", { paths: [serverDirectory] });

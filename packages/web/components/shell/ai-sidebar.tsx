@@ -1,5 +1,7 @@
 "use client";
 
+import { AgentControls } from "@localapp/sdk-agent/agent-controls";
+import type { HarnessAgent } from "@localapp/sdk-agent/harness-client";
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,6 +30,7 @@ interface ToolCallInfo {
 }
 
 interface AiSidebarProps {
+  agent?: HarnessAgent | null;
   open: boolean;
   onClose: () => void;
   messages: ChatMessage[];
@@ -36,7 +39,7 @@ interface AiSidebarProps {
   onSend: (text: string) => void;
 }
 
-export function AiSidebar({ open, onClose, messages, isRunning, error, onSend }: AiSidebarProps) {
+export function AiSidebar({ agent, open, onClose, messages, isRunning, error, onSend }: AiSidebarProps) {
   const [width, setWidth] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_WIDTH;
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -126,6 +129,8 @@ export function AiSidebar({ open, onClose, messages, isRunning, error, onSend }:
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      <AgentControls agent={agent ?? null} />
 
       {/* Error bar */}
       {error && (

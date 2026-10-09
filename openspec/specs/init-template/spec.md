@@ -49,7 +49,7 @@ init-repo/
 
 ### Requirement: 模板依赖配置
 
-模板的 `package.json` SHALL 声明 `react`、`react-dom`、`vite`、`@vitejs/plugin-react`、`typescript` 作为开发依赖，`@earendil-works/pi-agent-core`、`@earendil-works/pi-ai` 作为运行时依赖。此外 SHALL 声明 `@assistant-ui/react` 作为运行时依赖，`tailwindcss` 和 `@tailwindcss/postcss` 作为开发依赖。不依赖任何外部 SDK npm 包。
+模板的 `package.json` SHALL 声明 `react`、`react-dom`、`vite`、`@vitejs/plugin-react`、`typescript` 作为开发依赖，Agent 运行时通过统一 Server 的 DeepSeek Harness 提供，模板不依赖 pi Agent 包。此外 SHALL 声明 `@assistant-ui/react` 作为运行时依赖，`tailwindcss` 和 `@tailwindcss/postcss` 作为开发依赖。不依赖任何外部 SDK npm 包。
 模板的 `package.json` SHALL 将 `dev` 脚本设置为 `localapp dev`，并提供内部 `dev:vite` 脚本运行裸 Vite。CLI 在启动前端开发服务器时 SHALL 优先调用 `dev:vite`，避免 `dev` 脚本递归调用 `localapp dev`。
 DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 DevShell 依赖（如 `react-markdown`、`remark-gfm`），不得 include 未在模板 package.json 中直接声明的传递依赖。
 
@@ -260,7 +260,7 @@ DevShell 的 Vite dependency prebundle SHALL 只 include 模板直接声明的 D
 
 ### Requirement: assistant-ui 消息格式适配器
 
-`src/lib/localapp/agent/assistant-ui-adapter.ts` SHALL 导出 `convertMessages` 函数，将 pi-agent-core 的 `AgentMessage[]` 转换为 assistant-ui 的 `ThreadMessageLike[]`。
+`src/lib/localapp/agent/assistant-ui-adapter.ts` SHALL 导出 `convertMessages` 函数，将 LocalApp SDK 的 `AgentMessage[]` 转换为 assistant-ui 的 `ThreadMessageLike[]`。
 
 #### Scenario: 适配器文件存在且导出正确
 - **WHEN** 从 `./lib/localapp/agent/assistant-ui-adapter` 导入 `convertMessages`

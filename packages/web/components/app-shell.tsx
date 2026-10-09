@@ -42,6 +42,7 @@ interface UserData {
 const homeNavItem = { href: "/", label: "首页", icon: House };
 
 const profileNavItems = [
+  { href: "/my/models", label: "模型与 Agent", icon: Settings },
   { href: "/my/info", label: "个人资料", icon: UserCircle },
   { href: "/my/studio", label: "Studio", icon: FolderKanban },
   { href: "/my/tasks", label: "任务", icon: ListChecks },
