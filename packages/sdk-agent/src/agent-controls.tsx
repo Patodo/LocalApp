@@ -35,7 +35,7 @@ export function AgentControls({ agent }: { agent: HarnessAgent | null }) {
   </div>;
 }
 
-function InteractionCard({ interaction, answer }: { interaction: AgentInteraction; answer: (result: unknown) => void }) {
+export function InteractionCard({ interaction, answer }: { interaction: AgentInteraction; answer: (result: unknown) => void }) {
   const [answers, setAnswers] = useState<Record<string, { selected: string[]; custom: string }>>({});
   if (interaction.kind === "approval") return <div role="group" aria-label="操作确认" className="space-y-2 rounded border p-2">
     <p>{interaction.toolName}: {interaction.reason || "此操作需要确认"}</p>

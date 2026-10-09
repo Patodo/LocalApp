@@ -215,7 +215,7 @@ it("minimizes without stopping work, shows a spinner, then previews only the fin
   expect(screen.queryByLabelText("应用修改需求")).toBeNull();
   expect(
     screen
-      .getByLabelText("开发任务进行中，恢复对话")
+      .getByLabelText("任务进行中，恢复对话")
       .querySelector(".dock-spinner"),
   ).not.toBeNull();
   expect(p.actions.stop).not.toHaveBeenCalled();
@@ -270,4 +270,35 @@ it("shows the selected conversation title in the header, history and minimized p
   fireEvent.click(screen.getByLabelText("最小化开发对话"));
   fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
   expect(screen.getByRole("tooltip").textContent).toContain("添加工作项筛选");
+});
+
+it("switches identity above history and hides developer actions in user mode", () => {
+  const developer = props(), user = props();
+  user.sessions = [{ id: "user-session", createdAt: "2026-10-09", title: "创建工作项" }];
+  user.selectedSession = "user-session";
+  user.prompt = "帮我创建工作项";
+  const switchIdentity = vi.fn();
+  const view = render(<AppDevelopmentDock {...developer} identity="developer" userConversation={user} onIdentityChange={switchIdentity} />);
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.click(screen.getByLabelText("切换对话身份"));
+  expect(switchIdentity).toHaveBeenCalledWith("user");
+  view.rerender(<AppDevelopmentDock {...developer} identity="user" userConversation={user} onIdentityChange={switchIdentity} />);
+  expect(screen.getByLabelText("应用对话消息")).toHaveValue("帮我创建工作项");
+  fireEvent.click(screen.getByLabelText("展开应用对话"));
+  expect(screen.queryByLabelText("开发操作")).toBeNull();
+  expect(screen.queryByLabelText("打开完整开发页")).toBeNull();
+  fireEvent.click(screen.getByLabelText("发送对话消息"));
+  expect(user.actions.run).toHaveBeenCalledOnce();
+  expect(developer.actions.run).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByLabelText("切换对话身份"));
+  expect(switchIdentity).toHaveBeenLastCalledWith("developer");
+  view.rerender(<AppDevelopmentDock {...developer} identity="user" userConversation={{ ...user, running: true }} onIdentityChange={switchIdentity} />);
+  expect(screen.getByLabelText("切换对话身份")).toBeDisabled();
+});
+
+it("allows an owner without imported source to switch to user conversations", () => {
+  render(<AppDevelopmentDock {...props()} project={null} identity="developer" onIdentityChange={vi.fn()} />);
+  expect(screen.getByLabelText("切换历史对话")).toBeEnabled();
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  expect(screen.getByLabelText("切换对话身份")).toBeEnabled();
 });

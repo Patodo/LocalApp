@@ -52,7 +52,8 @@ it("saves per-user choices and enforces them in a real Server/DSH model request"
   const run = await api(alice, "run", "POST", { appId, sessionId: "selected-tools", prompt: "Read", systemPrompt: "Application", tools: ["deleteRecord", "listRecords"].map((name) => ({ name, description: name, parameters: { type: "object", properties: {} } })) });
   expect(run.status).toBe(200);
   expect(await run.text()).toContain('"type":"done"');
-  const names = requests.at(-1).tools.map((tool: any) => tool.function.name);
+  // The auxiliary naming request has no tools; inspect the application request.
+  const names = [...requests].reverse().find(request => request.tools)?.tools.map((tool: any) => tool.function.name);
   expect(names).toContain("read"); expect(names).toContain("listRecords");
   expect(names).not.toContain("write"); expect(names).not.toContain("deleteRecord");
   const stored = await (await api(alice, `app-settings?appId=${appId}`)).json();

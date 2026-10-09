@@ -126,6 +126,7 @@ export function usePlatformAgent({
   }, []);
 
   const agentRef = useRef<HarnessAgent | null>(null);
+  const [harness, setHarness] = useState<HarnessAgent | null>(null);
 
   useEffect(() => () => {
     agentRef.current?.abort();
@@ -140,6 +141,7 @@ export function usePlatformAgent({
   useEffect(() => {
     const agent = new HarnessAgent({ initialState: { systemPrompt: "" }, appId: pagePath });
     agentRef.current = agent;
+    setHarness(agent);
     setChatMessages([]);
     setAiError(null);
     const unsubscribe = agent.subscribe(() => {
@@ -185,7 +187,7 @@ export function usePlatformAgent({
     await agent.prompt(text);
   }, [appName, userName, pagePath, registeredToolsRef, systemHintRef, sendToolCallToApp]);
 
-  return { harness: agentRef.current, chatMessages, setChatMessages, isRunning, aiError, agentSend, handleToolResult };
+  return { harness, chatMessages, setChatMessages, isRunning, aiError, agentSend, handleToolResult };
 }
 
 /** Keep the settings tool list available before a model request is sent. */

@@ -18,7 +18,7 @@ export interface AgentInteraction {
   reason?: string;
   questions?: Array<{ id: string; question: string; detail?: string; options?: Array<{ label: string; description?: string }>; multiSelect?: boolean }>;
 }
-export type AgentEvent = { type: "agent_start" | "agent_end" | "message_end" | "message_update" | "tool_execution_start" | "tool_execution_end" };
+export type AgentEvent = { type: "agent_start" | "agent_end" | "message_end" | "message_update" | "tool_execution_start" | "tool_execution_end" | "session_title" };
 
 export class HarnessAgent {
   readonly state: { systemPrompt: string; tools: AgentTool[]; messages: AgentMessage[]; isStreaming: boolean; errorMessage?: string; interactions: AgentInteraction[] };
@@ -47,7 +47,7 @@ export class HarnessAgent {
     await this.api("app-tools", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appId: this.appId, tools: this.state.tools.map(({ name, description }) => ({ name, description })) }) });
   }
   settings(): Promise<{ providers: Array<{ id: string; name: string; model: string }>; defaultProviderId: string; settingsUrl?: string }> { return this.api("settings"); }
-  listSessions(): Promise<Array<{ id: string; createdAt: number }>> { return this.api(`sessions?${new URLSearchParams({ appId: this.appId, ...(this.providerId ? { providerId: this.providerId } : {}) })}`); }
+  listSessions(): Promise<Array<{ id: string; createdAt: number; title?: string }>> { return this.api(`sessions?${new URLSearchParams({ appId: this.appId, ...(this.providerId ? { providerId: this.providerId } : {}) })}`); }
   async selectSession(id: string) {
     if (this.state.isStreaming) return;
     this.state.messages = await this.api(`sessions/${encodeURIComponent(id)}?${new URLSearchParams({ appId: this.appId, ...(this.providerId ? { providerId: this.providerId } : {}) })}`);
@@ -121,6 +121,7 @@ export class HarnessAgent {
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
   }
   private handleEvent(event: any, signal: AbortSignal) {
+    if (event.type === "session_title") this.emit("session_title");
     if (event.type === "command_result") {
       this.state.messages.push({ role: "assistant", content: [{ type: "text", text: event.result.text ?? "操作已完成" }] });
       this.emit("message_update");

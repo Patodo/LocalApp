@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar, type PlatformEditSession, type PresenceSnapshot } from "./navbar";
 import { IssuesModal } from "./issues-modal";
-import { DevelopmentPage } from "../development/development-page";
-import { AiSidebar } from "./ai-sidebar";
+import { AppConversationDock } from "../development/app-conversation-dock";
 import { NotificationBell } from "./notification-bell";
 import { usePlatformAgent, registerAgentToolCatalog } from "./platform-agent";
 import { useAuthModals } from "@/components/auth-modals/auth-provider";
@@ -175,6 +174,11 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
 
   const [aiMode, setAiMode] = useState<AiMode>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  const [agentReveal, setAgentReveal] = useState(0);
+  const [agentMinimize, setAgentMinimize] = useState(0);
+  const aiVisible = useRef(false);
+  const showAgent = () => { aiVisible.current = true; setAiOpen(true); setAgentReveal(value => value + 1); };
+  const hideAgent = () => { aiVisible.current = false; setAiOpen(false); setAgentMinimize(value => value + 1); };
 
   const nativeAppLoadedRef = useRef<string | null>(null);
   const registeredToolsRef = useRef<Array<{ name: string; description: string; parameters: { type: "object"; properties: Record<string, unknown>; required?: string[] } }>>([]);
@@ -258,7 +262,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
       });
   }, []);
 
-  const { harness, chatMessages, isRunning, aiError, agentSend, handleToolResult } = usePlatformAgent({
+  const { harness, agentSend, handleToolResult } = usePlatformAgent({
     appName: name,
     userName: user?.name,
     pagePath,
@@ -623,16 +627,16 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
           break;
         case "ai.open":
           setAiMode((prev) => prev ?? "system");
-          setAiOpen(true);
+          showAgent();
           respondToPlatformRequest(message.id, true, { success: true });
           break;
         case "ai.close":
-          setAiOpen(false);
+          hideAgent();
           respondToPlatformRequest(message.id, true, { success: true });
           break;
         case "ai.toggle":
           setAiMode((prev) => prev ?? "system");
-          setAiOpen((prev) => !prev);
+          if (aiVisible.current) hideAgent(); else showAgent();
           respondToPlatformRequest(message.id, true, { success: true });
           break;
         default:
@@ -718,9 +722,9 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
           onToggleFavorite={toggleFavorite}
           onOpenIssues={openIssues}
           openIssueCount={openIssueCount}
-          aiMode={aiMode}
+          aiMode={meta?.developmentPreview ? aiMode : "system"}
           aiOpen={aiOpen}
-          onToggleAI={() => setAiOpen((prev) => !prev)}
+          onToggleAI={() => { if (!user) { openLogin({ returnTo: window.location.pathname }); return; } if (aiVisible.current) hideAgent(); else showAgent(); }}
           editSession={editSession}
           presenceSnapshot={presenceSnapshot}
           bell={
@@ -781,20 +785,11 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
               </main>
             )}
           </div>
-          {aiMode === "system" && (
-            <AiSidebar
-              open={aiOpen}
-              onClose={() => setAiOpen(false)}
-              agent={harness}
-              messages={chatMessages}
-              isRunning={isRunning}
-              error={aiError}
-              onSend={agentSend}
-            />
-          )}
         </div>
-        {isOwner && metaMatchesCurrentApp && !meta?.developmentPreview && !showIssues && (
-          <DevelopmentPage key={pagePath} application={{ owner: userId, name }} />
+        {metaMatchesCurrentApp && !meta?.developmentPreview && !showIssues && !!user && (
+          <AppConversationDock key={`${pagePath}:${user?.id}`} application={{ owner: userId, name }} isOwner={isOwner}
+            agent={harness} onSend={agentSend} reveal={agentReveal} minimize={agentMinimize}
+            onVisibilityChange={visible => { aiVisible.current = visible; setAiOpen(visible); }} />
         )}
         {appOnline && <EditingAwarenessOverlay peers={editingPeers} />}
         {showIssues && (

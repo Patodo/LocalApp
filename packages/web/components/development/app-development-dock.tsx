@@ -1,9 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
   Minus,
   CircleAlert,
+  UserRound,
+  ArrowLeftRight,
+  Settings,
   Square,
   Maximize2,
   Minimize2,
@@ -25,12 +28,23 @@ import type { DevelopmentShellProps } from "./dsh-development-shell";
 import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
 import "./app-development-dock.css";
 
+export interface DockIdentityProps {
+  identity?: "developer" | "user";
+  onIdentityChange?: (identity: "developer" | "user") => void;
+  userConversation?: DevelopmentShellProps;
+  reveal?: number;
+  userInteractions?: ReactNode;
+  minimize?: number;
+  onVisibilityChange?: (visible: boolean) => void;
+}
 export function AppDevelopmentDock(
-  p: DevelopmentShellProps & {
+  input: DevelopmentShellProps & DockIdentityProps & {
     application?: { owner: string; name: string };
     importSource?: (files: Record<string, string>) => Promise<void>;
   },
 ) {
+  const userMode = input.identity === "user";
+  const p = userMode && input.userConversation ? { ...input, ...input.userConversation } : input;
   const [expanded, setExpanded] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
@@ -67,6 +81,20 @@ export function AppDevelopmentDock(
       Math.min(draft.current.scrollHeight, 160) + "px";
   }, [p.prompt]);
   const conversationTitle = p.sessions.find(item => item.id === p.selectedSession)?.title || (p.selectedSession ? "未命名对话" : "新对话");
+  useEffect(() => {
+    if (input.reveal) { setMinimized(false); setExpanded(true); setPanel("chat"); }
+  }, [input.reveal]);
+  useEffect(() => { if (input.minimize) setMinimized(true); }, [input.minimize]);
+  useEffect(() => { setPanel("chat"); setHistoryOpen(false); }, [input.identity]);
+  const switchIdentity = input.onIdentityChange ? (
+    <button type="button" className="dock-identity"
+      disabled={p.running || p.pending || !!input.userConversation?.running || !!input.running || ["queued", "running"].includes(input.build?.status)}
+      aria-label="切换对话身份" title={userMode ? "切换为开发者" : "切换为用户"}
+      onClick={() => input.onIdentityChange?.(userMode ? "developer" : "user")}>
+      {userMode ? <UserRound size={15} /> : <Code2 size={15} />}
+      {userMode ? "用户" : "开发者"}<ArrowLeftRight size={13} />
+    </button>
+  ) : null;
   const building = ["queued", "running"].includes(p.build?.status);
   const ready = p.build?.status === "succeeded";
   const working = p.running || building || importing;
@@ -156,7 +184,7 @@ export function AppDevelopmentDock(
     return (
       <section
         className="development-mini dsh-development"
-        aria-label="已最小化的开发对话"
+        aria-label={userMode ? "已最小化的应用对话" : "已最小化的开发对话"}
         onMouseEnter={() => setPreviewVisible(true)}
         onMouseLeave={() => setPreviewVisible(false)}
         onFocusCapture={() => setPreviewVisible(true)}
@@ -189,7 +217,7 @@ export function AppDevelopmentDock(
         )}
         <button
           className="development-mini-restore"
-          aria-label={working ? "开发任务进行中，恢复对话" : "恢复开发对话"}
+          aria-label={working ? "任务进行中，恢复对话" : userMode ? "恢复应用对话" : "恢复开发对话"}
           aria-describedby={
             !working && completion && previewVisible
               ? "development-mini-reply"
@@ -197,6 +225,7 @@ export function AppDevelopmentDock(
           }
           onClick={() => {
             setMinimized(false);
+            input.onVisibilityChange?.(true);
             setPreviewVisible(false);
           }}
         >
@@ -219,15 +248,16 @@ export function AppDevelopmentDock(
   return (
     <section
       className={`app-development-dock dsh-development ${expanded ? "is-expanded" : ""} ${p.running ? "is-running" : ""}`}
-      aria-label="应用开发对话"
+      aria-label={userMode ? "应用 AI 对话" : "应用开发对话"}
     >
       <header className="development-dock-header">
         <button
-          aria-label="最小化开发对话"
+          aria-label={userMode ? "最小化应用对话" : "最小化开发对话"}
           title="最小化"
           onClick={() => {
             setHistoryOpen(false);
             setMinimized(true);
+            input.onVisibilityChange?.(false);
           }}
         >
           <Minus size={16} />
@@ -277,7 +307,7 @@ export function AppDevelopmentDock(
             aria-label="切换历史对话"
             aria-haspopup="menu"
             aria-expanded={historyOpen}
-            disabled={p.running || p.pending || !p.project}
+            disabled={p.running || p.pending || (!p.project && !input.onIdentityChange)}
             onClick={() => setHistoryOpen(!historyOpen)}
           >
             {conversationTitle}
@@ -287,8 +317,9 @@ export function AppDevelopmentDock(
             <div
               className="dock-history-menu"
               role="menu"
-              aria-label="开发历史对话"
+              aria-label={userMode ? "应用历史对话" : "开发历史对话"}
             >
+              {switchIdentity}
               <button
                 role="menuitemradio"
                 aria-checked={!p.selectedSession}
@@ -332,7 +363,7 @@ export function AppDevelopmentDock(
             </div>
           )}
         </div>
-        <a
+        {!userMode && <a
           href={
             p.project
               ? `/my/development?projectId=${encodeURIComponent(p.project.id)}`
@@ -342,9 +373,11 @@ export function AppDevelopmentDock(
           aria-label="打开完整开发页"
         >
           <Code2 size={17} />
-        </a>
+        </a>}
+        {userMode && <a href={`/my/agent?${new URLSearchParams({ appId: `${p.application?.owner}/${p.application?.name}` })}`}
+          title="应用 Agent 设置" aria-label="应用 Agent 设置"><Settings size={17} /></a>}
         <button
-          aria-label={expanded ? "收起开发对话" : "展开开发对话"}
+          aria-label={userMode ? expanded ? "收起应用对话" : "展开应用对话" : expanded ? "收起开发对话" : "展开开发对话"}
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
@@ -352,7 +385,8 @@ export function AppDevelopmentDock(
       </header>
       {expanded && (
         <>
-          {p.project ? (
+          {switchIdentity && !historyOpen && <div className="development-dock-tools" aria-label="当前对话身份">{switchIdentity}</div>}
+          {!userMode && p.project ? (
             <nav className="development-dock-tools" aria-label="开发操作">
               <button
                 aria-pressed={panel === "chat"}
@@ -399,7 +433,7 @@ export function AppDevelopmentDock(
             className="development-dock-transcript"
             ref={transcript}
             role="log"
-            aria-label="开发对话记录"
+            aria-label={userMode ? "应用对话记录" : "开发对话记录"}
           >
             {!p.project && !p.pending && (
               <div className="development-source-empty">
@@ -431,7 +465,7 @@ export function AppDevelopmentDock(
                 )}
                 {p.project && !p.messages.length && !p.running && (
                   <p className="dock-hint">
-                    描述你想修改的功能。修改先保存在源码中，检查和预览后再上线。
+                    {userMode ? "告诉 AI 你想在应用中完成什么，它会使用应用提供的工具。" : "描述你想修改的功能。修改先保存在源码中，检查和预览后再上线。"}
                   </p>
                 )}
               </>
@@ -471,7 +505,8 @@ export function AppDevelopmentDock(
                 {p.error || importError}
               </p>
             )}
-            {p.interaction && (
+            {userMode && input.userInteractions}
+            {!userMode && p.interaction && (
               <div className="dock-interaction">
                 {p.interaction.kind === "approval" ? (
                   <>
@@ -562,9 +597,9 @@ export function AppDevelopmentDock(
         <textarea
           ref={draft}
           rows={1}
-          aria-label="应用修改需求"
+          aria-label={userMode ? "应用对话消息" : "应用修改需求"}
           placeholder={
-            p.project ? "描述你想修改的功能…" : "与 Agent 一起编辑应用…"
+            userMode ? "向应用 AI 提问…" : p.project ? "描述你想修改的功能…" : "与 Agent 一起编辑应用…"
           }
           value={p.prompt}
           disabled={p.running || !p.project}
@@ -584,7 +619,7 @@ export function AppDevelopmentDock(
           }}
         />
         <select
-          aria-label="开发模型"
+          aria-label={userMode ? "对话模型" : "开发模型"}
           value={p.provider}
           disabled={p.running || p.pending}
           onChange={(e) => p.actions.setProvider(e.target.value)}
@@ -600,7 +635,7 @@ export function AppDevelopmentDock(
         {p.running ? (
           <button
             className="dock-send"
-            aria-label="停止开发"
+            aria-label={userMode ? "停止对话" : "停止开发"}
             onClick={p.actions.stop}
           >
             <Square size={14} fill="currentColor" />
@@ -608,7 +643,7 @@ export function AppDevelopmentDock(
         ) : (
           <button
             className="dock-send"
-            aria-label="发送修改需求"
+            aria-label={userMode ? "发送对话消息" : "发送修改需求"}
             disabled={
               !p.project || !p.provider || !p.prompt.trim() || p.pending
             }

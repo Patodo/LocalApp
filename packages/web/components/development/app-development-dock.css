@@ -366,3 +366,6 @@
   color: var(--foreground, #171717);
   cursor: pointer;
 }
+
+.dock-identity { display: inline-flex; align-items: center; gap: 6px; }
+.dock-history-menu > .dock-identity { border-bottom: 1px solid #88888820; border-radius: 0; margin-bottom: 4px; }

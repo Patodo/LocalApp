@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { AppDevelopmentDock } from "./app-development-dock";
+import { AppDevelopmentDock, type DockIdentityProps } from "./app-development-dock";
 import { DshDevelopmentShell } from "./dsh-development-shell";
 type Project = { id: string; name: string };
 type Version = { id: string; message: string };
@@ -18,7 +18,8 @@ async function request(url: string, method = "GET", body?: unknown) {
 }
 export function DevelopmentPage({
   application,
-}: { application?: { owner: string; name: string } } = {}) {
+  dock,
+}: { application?: { owner: string; name: string }; dock?: DockIdentityProps } = {}) {
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null),
     [files, setFiles] = useState<string[]>([]),
@@ -277,6 +278,7 @@ export function DevelopmentPage({
       {...(application
         ? {
             application,
+            ...dock,
             importSource: async (files: Record<string, string>) => {
               const p = await request(
                 `/api/development/apps/${encodeURIComponent(application.owner)}/${encodeURIComponent(application.name)}/source`,

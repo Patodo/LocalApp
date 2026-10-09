@@ -35,7 +35,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const pending = (async () => {
       if (old) { runtimes.delete(key); await old.harness.close(); }
       const root = path.join(app.config.dataDir, "agent", createHash("sha256").update(key).digest("hex"));
-      const harness = new DeepSeekHarness({ llmApiKey: provider.apiKey, llmBaseUrl: provider.baseUrl, llmModel: provider.model, protocol: provider.protocol, ownerId: userId, root, capabilities, mcpServers: saved.mcpServers, skills, disabledTools, pythonEnvironment });
+      const harness = new DeepSeekHarness({ llmApiKey: provider.apiKey, llmBaseUrl: provider.baseUrl, llmModel: provider.model, protocol: provider.protocol, autoSessionTitles: true, ownerId: userId, root, capabilities, mcpServers: saved.mcpServers, skills, disabledTools, pythonEnvironment });
       try { await harness.initialize(); }
       catch (error) { await harness.close().catch(() => {}); throw error; }
       runtimes.set(key, { userId, fingerprint, harness });
