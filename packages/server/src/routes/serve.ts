@@ -125,7 +125,7 @@ function sendOfflineAppError(reply: FastifyReply) {
 
 export async function serveRoutes(app: FastifyInstance, options: { webRoot?: string } = {}) {
   const webOutDir = options.webRoot ?? path.resolve(__dirname, "../../../web/out");
-  const dataDir = () => app.config.dataDir;
+  const dataDir = (req?: FastifyRequest) => req?.developmentPreview?.dataDir ?? app.config.dataDir;
 
   // Serve Next.js HTML pages for auth routes
   function serveNextHtml(page: string) {
@@ -156,7 +156,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
     }
   });
 
-  app.get("/api/home/stats", async () => {
+  app.get("/api/home/stats", async (req) => {
     let totalPages = 0;
     let totalSchemas = 0;
     let totalDeploys = 0;
@@ -165,15 +165,15 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
 
-    if (fs.existsSync(dataDir())) {
-      const userDirs = fs.readdirSync(dataDir(), { withFileTypes: true });
+    if (fs.existsSync(dataDir(req))) {
+      const userDirs = fs.readdirSync(dataDir(req), { withFileTypes: true });
       for (const userDir of userDirs) {
         if (!userDir.isDirectory()) continue;
-        const userPath = path.join(dataDir(), userDir.name);
+        const userPath = path.join(dataDir(req), userDir.name);
         const pageDirs = fs.readdirSync(userPath, { withFileTypes: true });
         for (const pageDir of pageDirs) {
           if (!pageDir.isDirectory()) continue;
-          const meta = readPageMeta(dataDir(), userDir.name, pageDir.name);
+          const meta = readPageMeta(dataDir(req), userDir.name, pageDir.name);
           if (!meta) continue;
 
           totalPages += 1;
@@ -207,7 +207,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
     "/:userId/:name",
     async (req, reply) => {
       const { userId, name } = req.params;
-      const meta = readPageMeta(dataDir(), userId, name);
+      const meta = readPageMeta(dataDir(req), userId, name);
 
       if (!meta) {
         return reply.status(404).type("text/html").send(HTML_404);
@@ -245,7 +245,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
     async (req, reply) => {
       const { userId, name } = req.params;
 
-      const meta = readPageMeta(dataDir(), userId, name);
+      const meta = readPageMeta(dataDir(req), userId, name);
       if (!meta) return reply.status(404).send({ success: false, error: "Page not found" });
       if (isAppOffline(meta)) return sendOfflineAppError(reply);
 
@@ -265,7 +265,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
       }
 
       const version = verification?.version ?? meta.currentVersion;
-      const versionDir = path.join(getPageDir(dataDir(), userId, name), "versions", `v${version}`);
+      const versionDir = path.join(getPageDir(dataDir(req), userId, name), "versions", `v${version}`);
       const indexPath = path.join(versionDir, "index.html");
       if (fs.existsSync(indexPath)) {
         return sendAppFile(req, reply, indexPath, "index.html");
@@ -285,7 +285,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
       const pageName = pathParts[3];
       const restPath = pathParts.slice(4).join("/");
 
-      const meta = readPageMeta(dataDir(), userId, pageName);
+      const meta = readPageMeta(dataDir(req), userId, pageName);
       if (!meta) {
         return reply.status(404).send({ success: false, error: "Page not found" });
       }
@@ -333,27 +333,27 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
         }
 
         if (restPath === "api/collaboration/commit" && req.method === "POST") {
-          return handleCollaborationCommit(req, reply, dataDir(), userId, pageName);
+          return handleCollaborationCommit(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/collaboration/events" && req.method === "GET") {
-          return handleCollaborationEvents(req, reply, dataDir(), userId, pageName);
+          return handleCollaborationEvents(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/crdt/sync" && req.method === "POST") {
-          return handleCrdtSync(req, reply, dataDir(), userId, pageName);
+          return handleCrdtSync(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/crdt/update" && req.method === "POST") {
-          return handleCrdtUpdate(req, reply, dataDir(), userId, pageName);
+          return handleCrdtUpdate(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/crdt/events" && req.method === "GET") {
-          return handleCrdtEvents(req, reply, dataDir(), userId, pageName);
+          return handleCrdtEvents(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/crdt/awareness" && req.method === "POST") {
-          return handleCrdtAwareness(req, reply, dataDir(), userId, pageName);
+          return handleCrdtAwareness(req, reply, dataDir(req), userId, pageName);
         }
 
         if (restPath === "api/presence/events" && req.method === "GET") {
@@ -369,12 +369,12 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
         }
 
         if (appRoute.kind === "action") {
-          return handleActionRequest(req, reply, dataDir(), userId, pageName, appRoute.name);
+          return handleActionRequest(req, reply, dataDir(req), userId, pageName, appRoute.name);
         }
 
         // Content upload/read routes: /serve/{userId}/{name}/api/content/upload|{key}
         if (appRoute.kind === "content-upload") {
-          return handleContentUpload(req, reply, userId, pageName, getPageDir(dataDir(), userId, pageName));
+          return handleContentUpload(req, reply, userId, pageName, getPageDir(dataDir(req), userId, pageName));
         }
         if (appRoute.kind === "content-read") {
           return handleContentRead(req, reply, userId, pageName, appRoute.key);
@@ -400,7 +400,7 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
           const perm = await checkNotifyPermission(
             req.visitorId,
             meta.userId,
-            getPageDir(dataDir(), userId, pageName),
+            getPageDir(dataDir(req), userId, pageName),
             meta.notify?.permission,
           );
           if (perm.status !== 200) {
@@ -431,12 +431,12 @@ export async function serveRoutes(app: FastifyInstance, options: { webRoot?: str
           };
         }
 
-        return handleCrudRequest(req, reply, dataDir(), userId, pageName, restPath, appRoute);
+        return handleCrudRequest(req, reply, dataDir(req), userId, pageName, restPath, appRoute);
       }
 
       // Static file serving
       const version = req.verificationSession?.version ?? meta.currentVersion;
-      const versionDir = path.join(getPageDir(dataDir(), userId, pageName), "versions", `v${version}`);
+      const versionDir = path.join(getPageDir(dataDir(req), userId, pageName), "versions", `v${version}`);
 
       if (restPath === ".localapp" || restPath.startsWith(".localapp/")) {
         return reply.status(404).send({ success: false, error: "File not found" });

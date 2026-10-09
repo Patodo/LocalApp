@@ -73,7 +73,7 @@ export class DeepSeekHarness {
       const checks: EnvironmentCheck[] = [{ id: "terminal", name: "终端执行", status: enabled ? "ready" : "blocked", detail: enabled ? "已在当前用户和应用中开启。" : "请先在 Agent 页签开启终端执行，并确保 bash 工具未关闭。", required: true }];
       if (!enabled || !this.config.root) return summarizeEnvironment("", selected, checks);
       try {
-        const spec = this.ctx.shell.resolve({ command: environmentProbe(this.config.pythonEnvironment?.executable), workdir: path.join(this.config.root, "workspace"), timeoutMs: 60_000, stdoutMaxBytes: 32_768 });
+        const spec = this.ctx.shell.resolve({ command: environmentProbe(this.config.pythonEnvironment?.executable), workdir: this.config.workspaceRoot ?? path.join(this.config.root, "workspace"), timeoutMs: 60_000, stdoutMaxBytes: 32_768 });
         const execution = await this.ctx.shell.execute(spec);
         const output = await execution.result();
         const ok = output.exitCode === 0 && !output.timedOut && !output.sandbox?.denied;
@@ -87,9 +87,17 @@ export class DeepSeekHarness {
     this.environmentCheck = { at: Date.now(), result };
     return result;
   }
+  async executeDevelopmentCommand(command: string, args: string[], signal?: AbortSignal): Promise<{ exitCode: number | null; timedOut: boolean; stdout: { text: string }; stderr: { text: string } }> {
+    if (!this.config.workspaceRoot || !this.config.networkBlocked) throw new Error("Development executor is not configured");
+    await this.ready;
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+    const spec = this.ctx.shell.resolve({ command: [command, ...args].map(quote).join(" "), workdir: this.config.workspaceRoot, timeoutMs: 120_000, stdoutMaxBytes: 1024 * 1024, signal });
+    const execution = await this.ctx.shell.execute(spec);
+    return await execution.result();
+  }
   toolCatalog() { return this.ctx.tools.schemas().map(({ name, description }) => ({ name, description })); }
 
-  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment }) {
+  constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment; workspaceRoot?: string; dataRoot?: string; networkBlocked?: boolean; readDirectories?: string[] }) {
     this.ready = (async () => {
       await this.ctx.plugin(LlmRuntime);
       await this.ctx.plugin(SessionRegistry);
@@ -110,7 +118,7 @@ export class DeepSeekHarness {
         this.ctx.provide("sessionController", { resolveAgent: async (id: string) => {
           return { agent: await this.restoreScheduledSession(id) };
         } });
-        await mountHarnessCapabilities(this.ctx, config.root, config.capabilities ?? [], config.mcpServers ?? [], config.skills ?? [], config.pythonEnvironment);
+        await mountHarnessCapabilities(this.ctx, config.root, config.capabilities ?? [], config.mcpServers ?? [], config.skills ?? [], config.pythonEnvironment, config);
         this.ctx.tools.guard((execution) => config.disabledTools?.includes(execution.name) ? "此工具已在应用设置中关闭" : undefined);
         this.ctx.systemPrompt.section({ name: "localapp-application", order: 0, text: () => {
           try { return JSON.parse(fs.readFileSync(path.join(config.root!, "application-prompt.json"), "utf8")).systemPrompt; }
@@ -184,12 +192,13 @@ export class DeepSeekHarness {
         const stored = this.config.root && await this.ctx.sessionPersistence.stat(SessionId(input.sessionId));
         const handle = stored
           ? await this.ctx.agents.resume({ ...options, resumeSessionId: SessionId(input.sessionId) })
-          : await this.ctx.agents.create({ ...options, sessionId: SessionId(input.sessionId), ...(this.config.root ? { meta: { cwd: path.join(this.config.root, "workspace") } } : {}) });
+          : await this.ctx.agents.create({ ...options, sessionId: SessionId(input.sessionId), ...(this.config.root ? { meta: { cwd: this.config.workspaceRoot ?? path.join(this.config.root, "workspace") } } : {}) });
         conversation = { userId, handle, registrations: [], busy: false, touched: Date.now() };
         this.conversations.set(input.sessionId, conversation);
       } finally { this.creating.delete(input.sessionId); }
     }
     if (this.config.root) {
+      fs.mkdirSync(this.config.root, { recursive: true, mode: 0o700 });
       const filename = path.join(this.config.root, "application-prompt.json");
       const temporary = `${filename}.${randomUUID()}.tmp`;
       fs.writeFileSync(temporary, JSON.stringify({ systemPrompt: input.systemPrompt }), { mode: 0o600 });

@@ -17,6 +17,30 @@
     "./device-action-ticket": {
       "types": "./dist/device-action-ticket.d.ts",
       "default": "./dist/device-action-ticket.js"
+    },
+    "./project-api": {
+      "types": "./dist/project-api.d.ts",
+      "default": "./dist/project-api.js"
+    },
+    "./project-api/backend": {
+      "types": "./dist/project/backend.d.ts",
+      "default": "./dist/project/backend.js"
+    },
+    "./project-api/check": {
+      "types": "./dist/project/check.d.ts",
+      "default": "./dist/project/check.js"
+    },
+    "./project-api/files": {
+      "types": "./dist/project/files.d.ts",
+      "default": "./dist/project/files.js"
+    },
+    "./project-api/manifest": {
+      "types": "./dist/project/manifest.d.ts",
+      "default": "./dist/project/manifest.js"
+    },
+    "./project-api/package": {
+      "types": "./dist/project/package.d.ts",
+      "default": "./dist/project/package.js"
     }
   },
   "scripts": {

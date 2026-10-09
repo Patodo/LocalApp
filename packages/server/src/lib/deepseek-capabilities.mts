@@ -115,6 +115,7 @@ class ApplicationFileSystem extends SandboxedFileSystem {
 class ApplicationSandbox extends LocalSandboxProvider {
   dataRoot?: string;
   pythonDirectories: string[] = [];
+  networkBlocked = false;
   async confine(...args: Parameters<LocalSandboxProvider["confine"]>) {
     const result = await super.confine(...args);
     const workspace = fs.realpathSync(args[1].workspaceRoot);
@@ -122,9 +123,10 @@ class ApplicationSandbox extends LocalSandboxProvider {
     // Only runtime packages and the Node installation supplement the system paths.
     const packageEntry = require.resolve("@deepseek-ai/dsh-ptc-runtime-node");
     const runtimePackages = packageEntry.slice(0, packageEntry.indexOf("/node_modules/") + "/node_modules".length);
-    const roots = ["/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/dev", "/proc", "/System", "/Library", "/opt", ...this.pythonDirectories, workspace, runtimePackages, path.dirname(path.dirname(fs.realpathSync(process.execPath)))].filter((root) => fs.existsSync(root));
+    const roots = ["/bin", "/sbin", "/usr", "/lib", "/lib64", "/etc", "/dev", "/proc", "/System", "/Library", "/private/var/select", "/opt", ...this.pythonDirectories, workspace, runtimePackages, path.dirname(path.dirname(fs.realpathSync(process.execPath)))].filter((root) => fs.existsSync(root));
     const profile = result.argv.indexOf("-p");
     if (profile !== -1 && process.platform === "darwin") {
+      if (this.networkBlocked) result.argv[profile + 1] += " (deny network*)";
       const quote = (value: string) => JSON.stringify(value);
       const ancestors = new Set<string>();
       for (const root of roots.flatMap((root) => [root, fs.realpathSync(root)])) {
@@ -135,10 +137,11 @@ class ApplicationSandbox extends LocalSandboxProvider {
       return result;
     }
     if (process.platform === "linux" && path.basename(result.argv[0]) === "bwrap") {
-      result.argv = [result.argv[0], "--die-with-parent", "--unshare-pid", "--dev", "/dev", "--proc", "/proc", ...roots.filter((root) => !["/dev", "/proc", workspace].includes(root)).flatMap((root) => ["--ro-bind", root, root]), ...(this.dataRoot ? ["--tmpfs", this.dataRoot, ...this.pythonDirectories.filter(root => root.startsWith(this.dataRoot! + path.sep)).flatMap(root => ["--ro-bind", root, root])] : []), "--bind", workspace, workspace, "--chdir", workspace, "--", ...args[0]];
+      result.argv = [result.argv[0], "--die-with-parent", "--unshare-pid", ...(this.networkBlocked ? ["--unshare-net"] : []), "--dev", "/dev", "--proc", "/proc", ...roots.filter((root) => !["/dev", "/proc", workspace].includes(root)).flatMap((root) => ["--ro-bind", root, root]), ...(this.dataRoot ? ["--tmpfs", this.dataRoot, ...this.pythonDirectories.filter(root => root.startsWith(this.dataRoot! + path.sep)).flatMap(root => ["--ro-bind", root, root])] : []), "--bind", workspace, workspace, "--chdir", workspace, "--", ...args[0]];
       return result;
     }
     if (process.platform === "linux" && path.basename(result.argv[0]) === "landlock-run") {
+      if (this.networkBlocked) throw new Error("开发命令需要支持网络隔离的执行器；请配置 bubblewrap");
       // Landlock grants cannot exclude a child of a readable directory. Split
       // only the branch containing Server data, then allow this workspace.
       const protectedRoot = this.dataRoot && fs.realpathSync(this.dataRoot);
@@ -165,8 +168,8 @@ class ApplicationSandbox extends LocalSandboxProvider {
     throw new Error("This Server has no runner that isolates application file reads; terminal and workflow execution are unavailable");
   }
 }
-export async function mountHarnessCapabilities(ctx: Context, root: string, capabilities: AgentCapability[], mcpServers: AgentSettings["mcpServers"], skills: string[] = [], pythonEnvironment?: PythonEnvironment) {
-  const workspace = path.join(root, "workspace");
+export async function mountHarnessCapabilities(ctx: Context, root: string, capabilities: AgentCapability[], mcpServers: AgentSettings["mcpServers"], skills: string[] = [], pythonEnvironment?: PythonEnvironment, development?: { workspaceRoot?: string; dataRoot?: string; networkBlocked?: boolean; readDirectories?: string[] }) {
+  const workspace = development?.workspaceRoot ?? path.join(root, "workspace");
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
   const mount = async (name: string, config: unknown = {}) => {
     const namespace = plugins[name] as { default?: Plugin };
@@ -195,10 +198,19 @@ export async function mountHarnessCapabilities(ctx: Context, root: string, capab
   if (capabilities.some((c) => ["files", "terminal", "workflow"].includes(c)) || capabilities.includes("mcp") && mcpServers.some((s) => s.transport === "stdio")) {
     await mount("subprocess-local");
     await ctx.plugin(ApplicationSandbox);
-    (ctx.sandbox as ApplicationSandbox).dataRoot = path.dirname(path.dirname(root));
-    if (pythonEnvironment) (ctx.sandbox as ApplicationSandbox).pythonDirectories = pythonReadDirectories(pythonEnvironment);
+    (ctx.sandbox as ApplicationSandbox).dataRoot = development?.dataRoot ?? path.dirname(path.dirname(root));
+    (ctx.sandbox as ApplicationSandbox).networkBlocked = development?.networkBlocked ?? false;
+    (ctx.sandbox as ApplicationSandbox).pythonDirectories = [...(development?.readDirectories ?? []), ...(pythonEnvironment ? pythonReadDirectories(pythonEnvironment) : [])];
     await mount("shell-env");
     await mount("bash-sandbox", { timeoutMs: 60_000 });
+    if (development?.workspaceRoot) {
+      const temporary = path.join(workspace, ".tmp"); fs.mkdirSync(temporary, { recursive: true });
+      const environment = { HOME: workspace, TMPDIR: temporary, TMP: temporary, TEMP: temporary, npm_config_cache: path.join(workspace, ".npm"), NODE_OPTIONS: "--max-old-space-size=512" };
+      const spawn = ctx.subprocess.spawn.bind(ctx.subprocess);
+      ctx.subprocess.spawn = input => spawn({ ...input, env: { ...input.env, ...environment } });
+      const resolve = ctx.shell.resolve.bind(ctx.shell);
+      ctx.shell.resolve = request => resolve({ ...request, env: { ...request.env, ...environment } });
+    }
     if (pythonEnvironment) {
       const spawn = ctx.subprocess.spawn.bind(ctx.subprocess);
       ctx.subprocess.spawn = input => spawn({ ...input, env: { ...input.env, ...pythonShellEnvironment(pythonEnvironment) } });
@@ -231,7 +243,7 @@ export async function mountHarnessCapabilities(ctx: Context, root: string, capab
   if (capabilities.includes("terminal")) await mount("tool-bash", { enableRunInBackground: capabilities.includes("jobs"), promoteOnTimeout: capabilities.includes("jobs") });
   if (capabilities.includes("skills")) {
     await mount("skill");
-    await mount("skill-filesystem", { includeDefaultRoots: false, customSkillDirs: [preparePublicSkills(workspace, skills), path.join(workspace, "skills")], watch: false });
+    await mount("skill-filesystem", { includeDefaultRoots: false, customSkillDirs: [preparePublicSkills(workspace, skills), path.join(workspace, "skills"), ...(development?.workspaceRoot ? [path.join(workspace, ".claude", "skills")] : [])], watch: false });
     await mount("tool-skill");
   }
   if (capabilities.includes("subagents") || capabilities.includes("workflow")) {

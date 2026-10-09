@@ -76,6 +76,7 @@ export interface InstallAppPackageInput {
   uploaderDisplayName?: string;
   requireExisting?: boolean;
   preserveTargetAccess?: boolean;
+  expectedLocalVersion?: number;
 }
 
 export interface InstallOutcome {
@@ -122,7 +123,12 @@ export async function installAppPackage(input: InstallAppPackageInput): Promise<
   }
   assertPlatformCompatible(inspected.metadata.platformVersion);
   const pageDir = getPageDir(input.dataDir, input.ownerId, inspected.name);
-  return withAppDataMaintenance(pageDir, async () => installInspectedPackage(input, inspected, pageDir));
+  return withAppDataMaintenance(pageDir, async () => {
+    if (input.expectedLocalVersion !== undefined && (readPageMeta(input.dataDir, input.ownerId, inspected.name)?.currentVersion ?? 0) !== input.expectedLocalVersion) {
+      throw new AppInstallError("VERSION_CONFLICT", "正式应用版本已改变，请重新检查", 409);
+    }
+    return installInspectedPackage(input, inspected, pageDir);
+  });
 }
 
 export async function reconcileAppInstallTransactions(dataDir: string): Promise<number> {

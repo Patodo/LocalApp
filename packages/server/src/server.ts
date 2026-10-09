@@ -46,6 +46,10 @@ import { assertAppDataWritable } from "./lib/app-data-maintenance.js";
 import { SetupTokenStore } from "./lib/setup-token-store.js";
 import { createServerConfigStore, type ServerConfigStore } from "./lib/server-config-store.js";
 import { systemRoutes, type RestartController } from "./routes/system.js";
+import { ProjectStore } from "./lib/development/projects.js";
+import { DevelopmentBuilds } from "./lib/development/builds.js";
+import { DevelopmentPreviews } from "./lib/development/previews.js";
+import { developmentRoutes } from "./routes/development.js";
 import { appsRoutes } from "./routes/apps.js";
 import { MAX_APP_PACKAGE_BYTES } from "./lib/app-package.js";
 import { WorkspaceStore } from "./lib/workspace-store.js";
@@ -118,6 +122,11 @@ async function registerServerPluginsAndRoutes(
   await app.register(multipart, { limits: { fileSize: MAX_APP_PACKAGE_BYTES } });
   await app.register(sessionPlugin);
   if (options.enableDevTools) await installDevRequestContext(app);
+  const developmentProjects = new ProjectStore(app.config.dataDir);
+  const developmentBuilds = new DevelopmentBuilds(app.config.dataDir, developmentProjects);
+  const developmentPreviews = new DevelopmentPreviews(app.config.dataDir, developmentProjects, developmentBuilds);
+  developmentPreviews.attach(app);
+  app.addHook("onClose", async () => developmentBuilds.close());
   const workspaceStore = new WorkspaceStore({
     workspaceDir: app.config.workspaceDir,
     archiveLimits: {
@@ -202,6 +211,7 @@ async function registerServerPluginsAndRoutes(
     authScope.register(configRoutes);
     authScope.register(uploadRoutes);
     authScope.register(appsRoutes);
+    authScope.register(developmentRoutes, { projects: developmentProjects, builds: developmentBuilds, previews: developmentPreviews });
     authScope.register(dbRoutes);
     authScope.register(pagesRoutes);
     authScope.register(schemasRoutes);

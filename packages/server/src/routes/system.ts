@@ -1,3 +1,4 @@
+import { developmentEnvironment, saveDevelopmentSettings, type DevelopmentSettings } from "../lib/development/environment.js";
 import { readPythonEnvironment, selectPythonEnvironment, createPythonEnvironment, installDocumentPythonDependencies } from "../lib/python-environment.js";
 import { systemAgentEnvironment } from "../lib/system-agent-environment.js";
 import type { FastifyInstance } from "fastify";
@@ -35,6 +36,8 @@ export async function systemRoutes(
   await app.register(async (adminScope) => {
     await adminAuth(adminScope);
 
+    adminScope.get("/api/system/development-environment", async () => ({success:true,data:await developmentEnvironment(adminScope.config.dataDir)}));
+    adminScope.put<{Body:DevelopmentSettings}>("/api/system/development-environment",async(req,reply)=>{try{return {success:true,data:saveDevelopmentSettings(adminScope.config.dataDir,req.body??{})};}catch(e){return reply.code(400).send({success:false,error:(e as Error).message});}});
     adminScope.get("/api/system/agent-environment", async () => ({ success: true, data: await systemAgentEnvironment(adminScope.config.dataDir) }));
 
     adminScope.get("/api/system/python-environment", async () => ({ success: true, data: { environment: readPythonEnvironment(adminScope.config.dataDir) ?? null } }));
