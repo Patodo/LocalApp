@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    server: { deps: { inline: [/@deepseek-ai\/dsh-client-ui-primitives/] } },
     setupFiles: ["./vitest.setup.ts"],
     include: ["tests/**/*.test.{ts,tsx}", "components/**/*.test.{ts,tsx}"],
   },

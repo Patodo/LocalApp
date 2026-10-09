@@ -139,6 +139,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (checkingSession) return null;
   if (!user) return isPublicHome ? <>{children}</> : null;
 
+  if (pathname === "/my/development") return <main className="h-dvh overflow-hidden">{children}</main>;
+
   const sidebar = (
     <aside
       className={`flex h-full flex-col border-r bg-card transition-all duration-200 ${

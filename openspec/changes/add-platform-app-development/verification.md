@@ -7,7 +7,7 @@
 - 项目归属、模板源码、带内容摘要的文件保存、Agent 写入锁、源码快照与恢复。
 - 统一 Server 提供开发 API；模型请求使用当前用户保存的模型供应商配置。
 - 开发 Agent 直接使用 dsh，工作目录为项目源码，会话文件单独存放；文件、Skills、终端能力已接入。
-- 页面直接使用 dsh 0.2.1-alpha.1 发布的 Markdown、文件读取、终端和 diff 组件。完整 dsh Web 主界面依赖自己的 Cordis RPC 与配置服务，因此未另启 dsh Server。LocalApp 提供项目、构建、预览、发布操作。
+- 页面移入 dsh 的 AppFrame、SidebarRoot、EmptyHero 源码（commit 5badb15009ae1756c3afe0ae0cef1faafc290ccc），沿用原版对话、消息、输入区、字体和主题样式；Markdown、文件读取、终端和 diff 使用 0.2.1-alpha.1 发布组件。布局保留原版折叠和拖动行为，输入状态和项目接口由 LocalApp 接入；没有启动另一套 dsh Server。
 - CLI 与 Server 共用项目检查和打包模块；构建输入使用已保存源码版本，产物摘要用于预览与发布校验。
 - 每个预览独立域名、Cookie 和数据目录，一次性打开凭证；远程部署需要管理员配置 HTTPS 预览域名。
 - 显式发布复用现有 installer；目标版本在 installer 的应用维护锁内检查。
@@ -33,3 +33,11 @@
 - 导入导出、多人开发、外部 Git 同步属于后续阶段，尚未实施。
 
 不能把当前结果描述为第一阶段全部验收通过。
+
+## dsh 界面调整验证（2026-10-09）
+
+- Web 生产构建通过；开发界面与原有 Shell 相关测试 3 个文件、13 项通过。
+- 浏览器确认项目与历史会话展示、工具折叠、源码读取和保存；重新加载后文件内容保留。
+- 原版右侧面板拖动调整宽度正常；390px 窄屏自动折叠侧栏，页面宽度和 scrollWidth 均为 390px。
+- 浏览器 console 无 error/warn；截图位于 tmp/platform-development/dsh-workspace-ui.png。
+- 独立 tsc 检查仍有原有 agent-settings.test.tsx 的 3 项 ByRoleOptions 类型错误；此次代码没有新增该类错误。

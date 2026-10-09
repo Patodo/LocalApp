@@ -6,6 +6,8 @@ import {
   ReadBlock,
 } from "@deepseek-ai/dsh-client-ui-primitives";
 import "./dsh-theme.css";
+import userCss from "./upstream/MessageItem.module.css";
+import assistantCss from "./upstream/AssistantMarkdown.module.css";
 const toolbar = {
   codeLabel: "代码",
   wrapLabel: "自动换行",
@@ -100,7 +102,7 @@ export function DshMessages({ messages }: { messages: any[] }) {
           const tool = tools.get(m.toolCallId),
             text = (m.content ?? []).map((b: any) => b.text ?? "").join("\n");
           return (
-            <details key={i} className="rounded-lg border p-2">
+            <details key={i} className="dsh-tool-result">
               <summary>
                 {tool?.name ?? "工具结果"}
                 {m.isError ? " · 失败" : ""}
@@ -111,34 +113,41 @@ export function DshMessages({ messages }: { messages: any[] }) {
                   output={text}
                 />
               ) : (
-                <DshRead text={text} path={tool?.arguments?.path} />
+                <DshRead
+                  text={text}
+                  path={tool?.arguments?.file_path ?? tool?.arguments?.path}
+                />
               )}
             </details>
           );
         }
         return (
-          <article key={i} className="rounded-lg border p-3">
-            <div className="mb-2 text-xs text-muted-foreground">
-              {m.role === "user" ? "你" : "Agent"}
+          <article
+            key={i}
+            className={m.role === "user" ? userCss.userRow : assistantCss.root}
+          >
+            <div
+              className={
+                m.role === "user" ? userCss.userStack : assistantCss.body
+              }
+            >
+              <div className={m.role === "user" ? userCss.bubble : undefined}>
+                {typeof m.content === "string" ? (
+                  <DshMarkdown text={m.content} />
+                ) : (
+                  m.content?.map((b: any, j: number) =>
+                    b.type === "text" ? (
+                      <DshMarkdown key={j} text={b.text} />
+                    ) : b.type === "reasoning" ? (
+                      <details key={j}>
+                        <summary>思考</summary>
+                        <DshMarkdown text={b.text} />
+                      </details>
+                    ) : b.type === "toolCall" ? null : null,
+                  )
+                )}
+              </div>
             </div>
-            {typeof m.content === "string" ? (
-              <DshMarkdown text={m.content} />
-            ) : (
-              m.content?.map((b: any, j: number) =>
-                b.type === "text" ? (
-                  <DshMarkdown key={j} text={b.text} />
-                ) : b.type === "reasoning" ? (
-                  <details key={j}>
-                    <summary>思考</summary>
-                    <DshMarkdown text={b.text} />
-                  </details>
-                ) : b.type === "toolCall" ? (
-                  <div key={j} className="text-sm text-muted-foreground">
-                    {b.name} · {JSON.stringify(b.arguments)}
-                  </div>
-                ) : null,
-              )
-            )}
           </article>
         );
       })}

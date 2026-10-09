@@ -1,20 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import {
-  Code2,
-  FileCode,
-  Play,
-  Save,
-  Square,
-  RotateCcw,
-  Plus,
-  Rocket,
-  Eye,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
+import { DshDevelopmentShell } from "./dsh-development-shell";
 type Project = { id: string; name: string };
 type Version = { id: string; message: string };
 type FileValue = { path: string; content: string; hash: string };
@@ -32,27 +18,27 @@ async function request(url: string, method = "GET", body?: unknown) {
 export function DevelopmentPage() {
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null),
-    [name, setName] = useState(""),
     [files, setFiles] = useState<string[]>([]),
     [file, setFile] = useState<FileValue | null>(null),
     [text, setText] = useState(""),
     [prompt, setPrompt] = useState(""),
     [messages, setMessages] = useState<any[]>([]),
+    [sessions, setSessions] = useState<
+      Array<{ id: string; createdAt: string }>
+    >([]),
     [live, setLive] = useState(""),
     [running, setRunning] = useState(false),
     [error, setError] = useState(""),
     [versions, setVersions] = useState<Version[]>([]),
     [version, setVersion] = useState(""),
     [changes, setChanges] = useState<any[]>([]),
-    [tab, setTab] = useState("source"),
     [interaction, setInteraction] = useState<any>(null),
     [answer, setAnswer] = useState(""),
     [providers, setProviders] = useState<any[]>([]),
     [provider, setProvider] = useState(""),
     [build, setBuild] = useState<any>(null),
     [log, setLog] = useState(""),
-    [pending, setPending] = useState(false),
-    [newPath, setNewPath] = useState("");
+    [pending, setPending] = useState(false);
   const session = useRef(""),
     abort = useRef<AbortController | null>(null),
     selection = useRef(0);
@@ -91,6 +77,7 @@ export function DevelopmentPage() {
     setFile(null);
     setText("");
     setMessages([]);
+    setSessions([]);
     setLive("");
     setBuild(null);
     setLog("");
@@ -105,6 +92,7 @@ export function DevelopmentPage() {
         const sessions = await request(
           `/api/development/projects/${p.id}/agent/sessions`,
         );
+        setSessions(sessions);
         if (sessions.length) {
           session.current = sessions[sessions.length - 1].id;
           setMessages(
@@ -122,7 +110,6 @@ export function DevelopmentPage() {
     if (seq !== selection.current) return;
     setFile(f);
     setText(f.content);
-    setTab("source");
   }
   async function save() {
     if (!file) return;
@@ -193,6 +180,7 @@ export function DevelopmentPage() {
       setRunning(false);
       setInteraction(null);
       await refresh(project.id);
+      setSessions(await request(base + "/agent/sessions"));
       if (file) await open(file.path);
     }
   }
@@ -214,7 +202,6 @@ export function DevelopmentPage() {
     if (file && text !== file.content) await save();
     const b = await request(base + "/builds", "POST", {});
     setBuild(b);
-    setTab("build");
   }
   useEffect(() => {
     if (!build || !["queued", "running"].includes(build.status)) return;
@@ -229,389 +216,123 @@ export function DevelopmentPage() {
     return () => clearInterval(timer);
   }, [base, build]);
   return (
-    <div className="dsh-development space-y-4 p-4 md:p-6">
-      <div className="flex flex-wrap items-center gap-2">
-        <Code2 className="h-6 w-6" />
-        <h1 className="text-xl font-semibold">应用开发</h1>
-        <select
-          aria-label="开发项目"
-          disabled={running || pending}
-          className="rounded border bg-background p-2"
-          value={project?.id ?? ""}
-          onChange={(e) => {
-            const p = projects.find((p) => p.id === e.target.value);
-            if (p) select(p);
-          }}
-        >
-          <option value="">选择项目</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <Input
-          aria-label="新项目名称"
-          placeholder="my-app"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="w-44"
-        />
-        <Button
-          disabled={pending || running || !name}
-          onClick={() =>
-            void act(async () => {
-              const p = await request("/api/development/projects", "POST", {
-                name,
-              });
-              setProjects((x) => [p, ...x]);
-              setName("");
-              select(p);
-            })
-          }
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          创建
-        </Button>
-      </div>
-      {error && (
-        <div
-          role="alert"
-          className="rounded border border-destructive p-3 text-destructive"
-        >
-          {error}
-        </div>
-      )}
-      {!project ? (
-        <p className="text-muted-foreground">
-          从 builtin 模板创建项目，在网页中让 Agent
-          修改源码、查看改动并构建应用。
-        </p>
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => setTab("source")}>
-              源码
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                void act(async () => {
-                  setChanges(await request(base + `/diff?version=${version}`));
-                  setTab("changes");
-                })
-              }
-            >
-              改动
-            </Button>
-            <Button
-              disabled={running || pending}
-              onClick={() => void act(buildProject)}
-            >
-              <Play className="mr-1 h-4 w-4" />
-              构建
-            </Button>
-            {build && (
-              <>
-                <Button variant="outline" onClick={() => setTab("build")}>
-                  构建记录
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={build.status !== "succeeded"}
-                  onClick={() =>
-                    void act(async () => {
-                      const preview = await request(
-                        base + "/previews",
-                        "POST",
-                        { buildId: build.id },
-                      );
-                      window.open(preview.url, "_blank", "noopener");
-                    })
-                  }
-                >
-                  <Eye className="mr-1 h-4 w-4" />
-                  预览
-                </Button>
-                <Button
-                  disabled={running || build.status !== "succeeded"}
-                  onClick={() =>
-                    void act(async () => {
-                      const expected = await request(base + "/release-target");
-                      if (
-                        !window.confirm(
-                          `发布 ${project.name} 的这次构建？当前源码后续的修改不会包含在内。`,
-                        )
-                      )
-                        return;
-                      const result = await request(base + "/releases", "POST", {
-                        buildId: build.id,
-                        expectedVersion: expected.version,
-                        idempotencyKey: build.id,
-                      });
-                      setLog((x) => x + "\n已发布：" + result.url);
-                      setTab("build");
-                    })
-                  }
-                >
-                  <Rocket className="mr-1 h-4 w-4" />
-                  发布
-                </Button>
-              </>
-            )}
-            <select
-              aria-label="源码版本"
-              value={version}
-              onChange={(e) => setVersion(e.target.value)}
-              className="max-w-64 rounded border bg-background p-2"
-            >
-              {versions.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.message} · {v.id.slice(0, 8)}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="outline"
-              disabled={running || !version}
-              onClick={() =>
-                void act(async () => {
-                  if (
-                    !window.confirm(
-                      "恢复这个源码版本？当前改动会自动保存。正式应用不会改变。",
-                    )
-                  )
-                    return;
-                  await request(base + "/restore", "POST", { version });
-                  await refresh(project.id);
-                  setFile(null);
-                  setText("");
-                })
-              }
-            >
-              <RotateCcw className="mr-1 h-4 w-4" />
-              恢复源码
-            </Button>
-          </div>
-          <div className="grid min-h-[65vh] gap-4 xl:grid-cols-[180px_minmax(0,1fr)_minmax(300px,0.8fr)]">
-            <aside className="max-h-[65vh] overflow-auto rounded-lg border p-2">
-              <div className="mb-2 font-medium">项目文件</div>
-              <Input
-                aria-label="新文件路径"
-                placeholder="src/new.ts"
-                value={newPath}
-                onChange={(e) => setNewPath(e.target.value)}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={running || !newPath}
-                onClick={() =>
-                  void act(async () => {
-                    await request(base + "/file", "PUT", {
-                      path: newPath,
-                      content: "",
-                      hash: null,
-                    });
-                    await refresh(project.id);
-                    await open(newPath);
-                    setNewPath("");
-                  })
-                }
-              >
-                新建文件
-              </Button>
-              {files.map((f) => (
-                <button
-                  key={f}
-                  className={`flex w-full items-center gap-1 rounded p-1 text-left text-xs ${file?.path === f ? "bg-accent" : ""}`}
-                  onClick={() => void act(() => open(f))}
-                >
-                  <FileCode className="h-3 w-3 shrink-0" />
-                  <span className="break-all">{f}</span>
-                </button>
-              ))}
-            </aside>
-            <section className="min-w-0 rounded-lg border p-3">
-              {tab === "source" ? (
-                <>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="truncate text-sm">
-                      {file?.path ?? "选择文件"}
-                      {file && text !== file.content ? " · 未保存" : ""}
-                    </span>
-                    <Button
-                      size="sm"
-                      disabled={
-                        !file || running || pending || text === file.content
-                      }
-                      onClick={() => void act(save)}
-                    >
-                      <Save className="mr-1 h-4 w-4" />
-                      保存
-                    </Button>
-                  </div>
-                  <Textarea
-                    aria-label="源码编辑器"
-                    spellCheck={false}
-                    readOnly={running || !file}
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    className="min-h-[55vh] font-mono text-xs"
-                  />
-                </>
-              ) : tab === "changes" ? (
-                <>
-                  {changes.length ? (
-                    <DshDiff changes={changes} />
-                  ) : (
-                    <p>当前没有改动</p>
-                  )}
-                </>
-              ) : (
-                <>
-                  <p>构建状态：{build?.status ?? "尚未构建"}</p>
-                  <DshTerminal
-                    command="localapp check / build"
-                    output={log}
-                    running={build?.status === "running"}
-                  />
-                  {build?.status === "running" && (
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        void act(async () => {
-                          await request(
-                            base + `/builds/${build.id}/cancel`,
-                            "POST",
-                            {},
-                          );
-                        })
-                      }
-                    >
-                      停止构建
-                    </Button>
-                  )}
-                </>
-              )}
-            </section>
-            <section className="flex min-w-0 flex-col rounded-lg border p-3">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="font-medium">开发 Agent</span>
-                <select
-                  aria-label="模型供应商"
-                  disabled={running}
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value)}
-                  className="min-w-0 rounded border bg-background p-1 text-sm"
-                >
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} · {p.model}
-                    </option>
-                  ))}
-                </select>
-                <a href="/my/models" className="text-xs text-primary">
-                  设置
-                </a>
-              </div>
-              <div className="max-h-[48vh] flex-1 overflow-auto">
-                <DshMessages messages={messages} />
-                {live && <DshMarkdown text={live} streaming />}
-                {running && (
-                  <p className="text-sm text-muted-foreground">
-                    Agent 正在工作，源码编辑暂时锁定。
-                  </p>
-                )}
-              </div>
-              {interaction && (
-                <div className="my-2 rounded border p-2">
-                  {interaction.kind === "approval" ? (
-                    <>
-                      <p>
-                        {interaction.toolName}：{interaction.reason}
-                      </p>
-                      <Button
-                        onClick={() => void act(() => respond("allowed-once"))}
-                      >
-                        允许本次
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => void act(() => respond("rejected"))}
-                      >
-                        拒绝
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <p>
-                        {interaction.questions
-                          ?.map((q: any) => q.question)
-                          .join("\n")}
-                      </p>
-                      <Input
-                        aria-label="回答 Agent"
-                        value={answer}
-                        onChange={(e) => setAnswer(e.target.value)}
-                      />
-                      <Button
-                        onClick={() =>
-                          void act(() =>
-                            respond(
-                              Object.fromEntries(
-                                interaction.questions.map((q: any) => [
-                                  q.id,
-                                  answer,
-                                ]),
-                              ),
-                            ),
-                          )
-                        }
-                      >
-                        回答
-                      </Button>
-                    </>
-                  )}
-                </div>
-              )}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void act(run);
-                }}
-                className="mt-3 space-y-2"
-              >
-                <Textarea
-                  aria-label="开发需求"
-                  placeholder="描述你希望应用实现的功能…"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  disabled={running}
-                />
-                <div className="flex gap-2">
-                  <Button
-                    disabled={!provider || running || !prompt.trim()}
-                    type="submit"
-                  >
-                    开始开发
-                  </Button>
-                  {running && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void act(stop)}
-                    >
-                      <Square className="mr-1 h-4 w-4" />
-                      停止
-                    </Button>
-                  )}
-                </div>
-              </form>
-            </section>
-          </div>
-        </>
-      )}
-    </div>
+    <DshDevelopmentShell
+      sessions={sessions}
+      selectedSession={session.current}
+      projects={projects}
+      project={project}
+      files={files}
+      file={file}
+      text={text}
+      prompt={prompt}
+      messages={messages}
+      live={live}
+      running={running}
+      pending={pending}
+      error={error}
+      versions={versions}
+      version={version}
+      changes={changes}
+      providers={providers}
+      provider={provider}
+      build={build}
+      log={log}
+      interaction={interaction}
+      answer={answer}
+      actions={{
+        select,
+        selectSession: (id) =>
+          void act(async () => {
+            if (running) return;
+            session.current = id;
+            setMessages(
+              await request(
+                base + `/agent/history?sessionId=${encodeURIComponent(id)}`,
+              ),
+            );
+            setLive("");
+          }),
+        create: (name) =>
+          void act(async () => {
+            const p = await request("/api/development/projects", "POST", {
+              name,
+            });
+            setProjects((x) => [p, ...x]);
+            select(p);
+          }),
+        open: (path) => void act(() => open(path)),
+        setText,
+        save: () => void act(save),
+        setPrompt,
+        run: () => void act(run),
+        stop: () => void act(stop),
+        setProvider,
+        newSession: () => {
+          if (running) return;
+          session.current = "";
+          setMessages([]);
+          setLive("");
+          setPrompt("");
+        },
+        setVersion,
+        diff: () =>
+          void act(async () => {
+            setChanges(await request(base + `/diff?version=${version}`));
+          }),
+        restore: () =>
+          void act(async () => {
+            if (
+              !window.confirm(
+                "恢复这个源码版本？当前改动会自动保存。正式应用不会改变。",
+              )
+            )
+              return;
+            await request(base + "/restore", "POST", { version });
+            await refresh(project!.id);
+            setFile(null);
+            setText("");
+          }),
+        build: () => void act(buildProject),
+        preview: () =>
+          void act(async () => {
+            const preview = await request(base + "/previews", "POST", {
+              buildId: build.id,
+            });
+            window.open(preview.url, "_blank", "noopener");
+          }),
+        publish: () =>
+          void act(async () => {
+            const expected = await request(base + "/release-target");
+            if (
+              !window.confirm(
+                `发布 ${project!.name} 的这次构建？当前源码后续的修改不会包含在内。`,
+              )
+            )
+              return;
+            const result = await request(base + "/releases", "POST", {
+              buildId: build.id,
+              expectedVersion: expected.version,
+              idempotencyKey: build.id,
+            });
+            setLog((x) => x + "\n已发布：" + result.url);
+          }),
+        cancelBuild: () =>
+          void act(async () => {
+            await request(base + `/builds/${build.id}/cancel`, "POST", {});
+          }),
+        newFile: (path) =>
+          void act(async () => {
+            await request(base + "/file", "PUT", {
+              path,
+              content: "",
+              hash: null,
+            });
+            await refresh(project!.id);
+            await open(path);
+          }),
+        respond: (result) => void act(() => respond(result)),
+        setAnswer,
+      }}
+    />
   );
 }
