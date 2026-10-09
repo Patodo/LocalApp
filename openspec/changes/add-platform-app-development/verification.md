@@ -51,3 +51,9 @@
 - 独立 preview-browser-fixture 正式入口真实调用用户模型修改页面文字；底部按钮执行检查与构建、独立 origin 预览、确认上线；正式页面从 Development preview marker 改为 Application dock verified，发布版本从 1 到 2。此测试应用使用专门的离线 fixture 脚本，不能等同于完整 builtin 模板在 macOS 通过。
 - 原有 macOS builtin 的 2 项代理网络测试与独立 tsc 的 3 项既有测试类型错误仍按前文记录，未关闭或放宽检查。
 - 执行中截图：tmp/platform-development/document-app-dock-running.png；完成后截图：tmp/platform-development/document-app-dock.png。
+
+## 底部对话历史菜单调整（2026-10-09）
+
+- 标题点击打开历史菜单，展示会话时间、标识和当前选择，支持切换历史与新建对话；标题操作保留面板展开状态，左侧按钮负责展开和收起。菜单支持 Escape、键盘方向和点击外部关闭。
+- 历史加载成功后才更新当前会话，避免加载失败时消息与会话标识不一致。
+- 3 个相关测试文件、10 项通过，生产构建通过；浏览器验证新对话清空记录、切换历史恢复真实消息、标题点击不改变面板展开状态。截图：tmp/platform-development/app-dock-history.png。

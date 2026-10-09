@@ -289,12 +289,11 @@ export function DevelopmentPage({
         selectSession: (id) =>
           void act(async () => {
             if (running) return;
-            session.current = id;
-            setMessages(
-              await request(
-                base + `/agent/history?sessionId=${encodeURIComponent(id)}`,
-              ),
+            const history = await request(
+              base + `/agent/history?sessionId=${encodeURIComponent(id)}`,
             );
+            session.current = id;
+            setMessages(history);
             setLive("");
           }),
         create: (name) =>

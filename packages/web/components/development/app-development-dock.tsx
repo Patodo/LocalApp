@@ -13,6 +13,8 @@ import {
   LoaderCircle,
   GitCompareArrows,
   FolderUp,
+  MessageSquare,
+  Check,
 } from "lucide-react";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
 import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
@@ -25,6 +27,21 @@ export function AppDevelopmentDock(
   },
 ) {
   const [expanded, setExpanded] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const history = useRef<HTMLDivElement>(null);
+  const historyTrigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!historyOpen) return;
+    history.current
+      ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
+      ?.focus();
+    const outside = (event: PointerEvent) => {
+      if (!history.current?.contains(event.target as Node))
+        setHistoryOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [historyOpen]);
   const [panel, setPanel] = useState<"chat" | "changes" | "build">("chat");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
@@ -117,10 +134,111 @@ export function AppDevelopmentDock(
           {expanded ? <Minus size={16} /> : <Plus size={16} />}
         </button>
         {p.running && <LoaderCircle className="dock-spinner" size={15} />}
-        <button className="dock-title" onClick={() => setExpanded(!expanded)}>
-          编辑 {p.application?.name ?? p.project?.name}
-          <ChevronDown size={14} />
-        </button>
+        <div
+          className="dock-history"
+          ref={history}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node))
+              setHistoryOpen(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setHistoryOpen(false);
+              historyTrigger.current?.focus();
+            }
+            if (
+              historyOpen &&
+              ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
+            ) {
+              event.preventDefault();
+              const items = Array.from(
+                history.current?.querySelectorAll<HTMLButtonElement>(
+                  '[role="menuitemradio"]',
+                ) ?? [],
+              );
+              const index = items.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              const next =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? items.length - 1
+                    : (index +
+                        (event.key === "ArrowUp" ? -1 : 1) +
+                        items.length) %
+                      items.length;
+              items[next]?.focus();
+            }
+          }}
+        >
+          <button
+            ref={historyTrigger}
+            className="dock-title"
+            aria-label="切换历史对话"
+            aria-haspopup="menu"
+            aria-expanded={historyOpen}
+            disabled={p.running || p.pending || !p.project}
+            onClick={() => setHistoryOpen(!historyOpen)}
+          >
+            编辑 {p.application?.name ?? p.project?.name}
+            <ChevronDown size={14} />
+          </button>
+          {historyOpen && (
+            <div
+              className="dock-history-menu"
+              role="menu"
+              aria-label="开发历史对话"
+            >
+              <button
+                role="menuitemradio"
+                aria-checked={!p.selectedSession}
+                onClick={() => {
+                  p.actions.newSession();
+                  setPanel("chat");
+                  setHistoryOpen(false);
+                  historyTrigger.current?.focus();
+                }}
+              >
+                <Plus size={16} />
+                <span>新对话</span>
+                {!p.selectedSession && <Check size={15} />}
+              </button>
+              {[...p.sessions]
+                .sort(
+                  (a, b) =>
+                    new Date(b.createdAt).getTime() -
+                    new Date(a.createdAt).getTime(),
+                )
+                .map((session) => (
+                  <button
+                    key={session.id}
+                    role="menuitemradio"
+                    aria-checked={p.selectedSession === session.id}
+                    onClick={() => {
+                      p.actions.selectSession(session.id);
+                      setPanel("chat");
+                      setHistoryOpen(false);
+                      historyTrigger.current?.focus();
+                    }}
+                  >
+                    <MessageSquare size={16} />
+                    <span>
+                      {new Date(session.createdAt).toLocaleString("zh-CN", {
+                        month: "numeric",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
+                      · {session.id.slice(0, 8)}
+                    </span>
+                    {p.selectedSession === session.id && <Check size={15} />}
+                  </button>
+                ))}
+              {!p.sessions.length && <p>暂无历史对话</p>}
+            </div>
+          )}
+        </div>
         <a
           href={
             p.project

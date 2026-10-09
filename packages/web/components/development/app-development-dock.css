@@ -11,7 +11,7 @@
   color: var(--foreground, #171717);
   box-shadow: 0 12px 36px #00000012;
   font-family: inherit;
-  overflow: hidden;
+  overflow: visible;
   transition:
     box-shadow 0.2s,
     border-color 0.2s;
@@ -199,4 +199,57 @@
   .app-development-dock {
     transition: none;
   }
+}
+
+.dock-history {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.dock-history .dock-title {
+  width: 100%;
+}
+.dock-history-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  width: max-content;
+  min-width: 240px;
+  max-width: min(480px, calc(100vw - 90px));
+  max-height: 300px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid #88888825;
+  border-radius: 16px;
+  background: var(--background, #fff);
+  color: var(--foreground, #171717);
+  box-shadow: 0 8px 30px #00000015;
+  z-index: 40;
+}
+.app-development-dock .dock-history-menu button {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 9px 12px;
+  border-radius: 11px;
+  font-size: 13px;
+}
+.dock-history-menu button span {
+  flex: 1;
+  text-align: left;
+}
+.dock-history-menu button[aria-checked="true"] {
+  background: #88888810;
+}
+.dock-history-menu button:focus-visible {
+  outline: 2px solid #4587ff;
+  outline-offset: -2px;
+}
+.dock-history-menu p {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted-foreground, #737373);
+}
+.app-development-dock:not(.is-expanded) .dock-history-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
 }

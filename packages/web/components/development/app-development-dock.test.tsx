@@ -145,3 +145,28 @@ it("imports source while excluding generated packages, dependencies and credenti
     "src/App.tsx": "export default App",
   });
 });
+it("uses the title to switch history without changing the expanded state", () => {
+  const p = props();
+  p.sessions = [
+    { id: "old-session", createdAt: "2026-10-09T01:00:00Z" },
+    { id: "current-session", createdAt: "2026-10-09T02:00:00Z" },
+  ];
+  p.selectedSession = "current-session";
+  p.actions.selectSession = vi.fn();
+  render(<AppDevelopmentDock {...p} />);
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  expect(screen.getByRole("menu")).toBeInTheDocument();
+  expect(screen.queryByRole("log")).toBeNull();
+  expect(
+    screen.getByRole("menuitemradio", { name: /current-/ }),
+  ).toHaveAttribute("aria-checked", "true");
+  fireEvent.click(screen.getByRole("menuitemradio", { name: /old-sess/ }));
+  expect(p.actions.selectSession).toHaveBeenCalledWith("old-session");
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(screen.queryByRole("log")).toBeNull();
+  fireEvent.click(screen.getByLabelText("展开开发对话"));
+  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(screen.getByRole("log")).toBeInTheDocument();
+});
