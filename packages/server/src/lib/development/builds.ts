@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ProjectStore, DevelopmentError } from "./projects.js";
+import { sourceBytes, ProjectStore, DevelopmentError } from "./projects.js";
 import { developmentTemplateDirectory } from "./template.js";
 import { buildApplicationPackage } from "../../project/package.js";
 export interface DevelopmentBuild {
@@ -158,7 +158,7 @@ export class DevelopmentBuilds {
     )) {
       const target = path.join(workspace, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content, { mode: 0o600 });
+      fs.writeFileSync(target, sourceBytes(content), { mode: 0o600 });
     }
     this.save(b);
     const controller = new AbortController();

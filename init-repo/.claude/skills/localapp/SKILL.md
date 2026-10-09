@@ -20,6 +20,8 @@ cd my-app
 
 Run those commands from the repository root. Keep generated projects, Server data, uploads and downloads under that repository's `tmp/` during local acceptance; never use the operating-system temp directory.
 
+For an existing installed application that needs its original source hosted on a Server, use [localapp-migrate](../localapp-migrate/SKILL.md). It uploads source without replacing the running deployment.
+
 ## Development loop
 
 1. Write the migration and backend contract before UI code that consumes it.

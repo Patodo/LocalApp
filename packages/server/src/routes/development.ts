@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { resolveWorkspacePath } from "../lib/workspace-path.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { ProjectStore, DevelopmentError } from "../lib/development/projects.js";
+import { ProjectStore, DevelopmentError, sourceBytes, sourceDisplay, type SourceFile } from "../lib/development/projects.js";
 import { DevelopmentBuilds } from "../lib/development/builds.js";
 import { DevelopmentPreviews } from "../lib/development/previews.js";
 import { DevelopmentReleases } from "../lib/development/releases.js";
@@ -65,7 +65,7 @@ export async function developmentRoutes(
   );
   app.post<{
     Params: { owner: string; name: string };
-    Body: { files: Record<string, string> };
+    Body: { files: Record<string, SourceFile> };
   }>(appSource, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
     ownedApp(req.params.owner, req.params.name, req.userId);
     const files = req.body?.files;
@@ -75,15 +75,15 @@ export async function developmentRoutes(
       Array.isArray(files) ||
       Object.keys(files).length > 5000 ||
       Object.values(files).some(
-        (v) => typeof v !== "string" || Buffer.byteLength(v) > 2 * 1024 * 1024,
+        (v) => sourceBytes(v).length > 2 * 1024 * 1024,
       ) ||
       Buffer.byteLength(JSON.stringify(files)) > 32 * 1024 * 1024
     )
       throw new DevelopmentError("源码文件无效或超过大小限制");
     let manifest, pkg;
     try {
-      manifest = JSON.parse(files["manifest.json"]);
-      pkg = JSON.parse(files["package.json"]);
+      manifest = JSON.parse(sourceBytes(files["manifest.json"]).toString("utf8"));
+      pkg = JSON.parse(sourceBytes(files["package.json"]).toString("utf8"));
     } catch {
       throw new DevelopmentError(
         "请选择包含 manifest.json 和 package.json 的应用源码目录",
@@ -262,6 +262,13 @@ export async function developmentRoutes(
     success: true,
     data: projects.files(req.params.id, req.userId),
   }));
+  app.get<{ Params: { id: string } }>(base + "/:id/source-manifest", async (req) => ({
+    success: true,
+    data: Object.entries(projects.sourceFiles(req.params.id, req.userId)).map(([file, content]) => {
+      const bytes = sourceBytes(content);
+      return { path: file, bytes: bytes.length, hash: createHash("sha256").update(bytes).digest("hex") };
+    }),
+  }));
   app.get<{ Params: { id: string }; Querystring: { path: string } }>(
     base + "/:id/file",
     async (req) => {
@@ -309,12 +316,13 @@ export async function developmentRoutes(
         req.query.version,
       );
       const changes = [];
-      const files = projects.files(req.params.id, req.userId);
+      const current = projects.sourceFiles(req.params.id, req.userId);
+      const files = Object.keys(current);
       for (const file of new Set([...files, ...Object.keys(previous)])) {
         const after = files.includes(file)
-            ? projects.read(req.params.id, req.userId, file).content
+            ? sourceDisplay(current[file])
             : null,
-          before = previous[file] ?? null;
+          before = sourceDisplay(previous[file] ?? null);
         if (before !== after) changes.push({ path: file, before, after });
       }
       return { success: true, data: changes };

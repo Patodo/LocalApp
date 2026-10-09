@@ -172,3 +172,46 @@ it("keeps uploaded binary references out of source and rejects other users and f
   });
   expect(foreign.status).toBe(404);
 });
+
+it("migrates original source with the distributed skill helper, preserving binary assets and the installed app", async () => {
+  await createTestPage(server.app, "developer", "migration-app");
+  const root = path.resolve(__dirname, "../../../../tmp/platform-development/migration-skill");
+  fs.rmSync(root, {recursive:true,force:true});
+  fs.mkdirSync(path.join(root,"source","public"), { recursive: true });
+  fs.mkdirSync(path.join(root,"profiles"), { recursive: true });
+  const project = path.join(root,"source");
+  fs.writeFileSync(path.join(project,"manifest.json"), JSON.stringify({name:"migration-app"}));
+  fs.writeFileSync(path.join(project,"package.json"), JSON.stringify({scripts:{test:"test",build:"build"}}));
+  const binary = Buffer.from([137,80,78,71,0,255]);
+  fs.writeFileSync(path.join(project,"public","logo.png"), binary);
+  fs.writeFileSync(path.join(project,".env"),"TEST_SECRET=excluded");
+  const { createApiKey } = await import("../../src/lib/meta-sqlite.js");
+  const key = createApiKey("developer").key;
+  fs.writeFileSync(path.join(root,"profiles","profiles.json"), JSON.stringify({version:1,profiles:{test:{serverUrl:server.baseUrl,apiKey:key}}}));
+  const oldConfig = process.env.LOCALAPP_CONFIG_DIR;
+  process.env.LOCALAPP_CONFIG_DIR = path.join(root,"profiles");
+  const deployed = path.join(server.dataDir,"developer","migration-app","meta.json");
+  const installedBefore = JSON.parse(fs.readFileSync(deployed,"utf8"));
+  const asset = path.join(server.dataDir,"developer","migration-app","versions","v1","index.html");
+  fs.mkdirSync(path.dirname(asset),{recursive:true});
+  fs.writeFileSync(asset,"Installed application marker");
+  try {
+    const { migrate } = await import("../../../../init-repo/.claude/skills/localapp-migrate/scripts/migrate-source.mjs");
+    const inspected = await migrate({project});
+    expect(inspected.status).toBe("checked");
+    expect(inspected.omitted).toContain(".env");
+    const result = await migrate({project,profile:"test",owner:"developer",upload:true,cliVersion:"99.0.0"});
+    expect(result.status).toBe("hosted");
+    expect(result.fileCount).toBe(3);
+    expect(fs.readFileSync(path.join(server.dataDir,"development","projects",result.projectId,"workspace","public","logo.png"))).toEqual(binary);
+    const installedAfter = JSON.parse(fs.readFileSync(deployed,"utf8"));
+    expect(installedAfter.currentVersion).toBe(installedBefore.currentVersion);
+    expect(installedAfter.versions).toHaveLength(installedBefore.versions.length);
+    expect(fs.readFileSync(asset,"utf8")).toBe("Installed application marker");
+    expect(fs.readFileSync(path.join(project,".localapp","source-migration.json"),"utf8")).not.toContain(key);
+    expect((await migrate({project,profile:"test",owner:"developer",upload:true,cliVersion:"99.0.0"})).status).toBe("already-hosted");
+    await expect(migrate({project,profile:"test",owner:"reader",upload:true,cliVersion:"99.0.0"})).rejects.toThrow("拥有者");
+    fs.symlinkSync(path.join(project,"manifest.json"), path.join(project,"linked.json"));
+    await expect(migrate({project})).rejects.toThrow("符号链接");
+  } finally { if (oldConfig === undefined) delete process.env.LOCALAPP_CONFIG_DIR; else process.env.LOCALAPP_CONFIG_DIR = oldConfig; fs.rmSync(root,{recursive:true,force:true}); }
+});

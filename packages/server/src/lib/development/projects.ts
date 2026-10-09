@@ -13,6 +13,15 @@ export class DevelopmentError extends Error {
     super(message);
   }
 }
+export type SourceFile = string | { encoding: "base64"; content: string };
+export function sourceBytes(content: SourceFile): Buffer {
+  if (typeof content === "string") return Buffer.from(content, "utf8");
+  if (!content || content.encoding !== "base64" || typeof content.content !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content.content)) throw new DevelopmentError("二进制源码编码无效");
+  return Buffer.from(content.content, "base64");
+}
+export function sourceDisplay(content: SourceFile | null): string | null {
+  return content === null ? null : typeof content === "string" ? content : `[二进制文件 sha256:${contentHash(sourceBytes(content))}]`;
+}
 export interface DevelopmentProject {
   id: string;
   ownerId: string;
@@ -104,7 +113,7 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
     this.get(id, ownerId);
     return path.join(this.directory, id, "workspace");
   }
-  create(ownerId: string, name: string, files: Record<string, string>) {
+  create(ownerId: string, name: string, files: Record<string, SourceFile>) {
     const error = validateName(name);
     if (error) throw new DevelopmentError(error);
     if (this.list(ownerId).some((p) => p.name === name))
@@ -148,8 +157,9 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_FILE)
       throw new DevelopmentError("文件过大或不是普通文件");
-    const content = fs.readFileSync(file, "utf8");
-    if (content.includes("\0"))
+    const fileBytes = fs.readFileSync(file);
+    const content = fileBytes.toString("utf8");
+    if (content.includes("\0") || !Buffer.from(content, "utf8").equals(fileBytes))
       throw new DevelopmentError("二进制文件不支持文本编辑");
     return { path: relative, content, hash: contentHash(content) };
   }
@@ -169,18 +179,15 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
       throw new DevelopmentError("文件已改变，请重新读取后保存，避免冲突", 409);
     this.save(this.workspace(id, user), relative, content);
   }
-  private save(root: string, relative: string, content: string) {
-    if (
-      typeof content !== "string" ||
-      content.includes("\0") ||
-      Buffer.byteLength(content) > MAX_FILE
-    )
-      throw new DevelopmentError("文件不是文本或超过大小限制");
+  private save(root: string, relative: string, content: SourceFile) {
+    if (typeof content === "string" && content.includes("\0")) throw new DevelopmentError("文本文件包含二进制内容");
+    const bytes = sourceBytes(content);
+    if (bytes.length > MAX_FILE) throw new DevelopmentError("文件超过大小限制");
     const file = resolveWorkspacePath(root, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const temp = path.join(path.dirname(file), `.save-${randomUUID()}`);
     try {
-      fs.writeFileSync(temp, content, { flag: "wx", mode: 0o600 });
+      fs.writeFileSync(temp, bytes, { flag: "wx", mode: 0o600 });
       fs.renameSync(temp, file);
     } finally {
       fs.rmSync(temp, { force: true });
@@ -189,8 +196,9 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
   files(id: string, user: string) {
     return Object.keys(this.capture(this.workspace(id, user)));
   }
+  sourceFiles(id: string, user: string) { return this.capture(this.workspace(id, user)); }
   private capture(root: string) {
-    const files: Record<string, string> = {};
+    const files: Record<string, SourceFile> = {};
     let bytes = 0,
       count = 0;
     const walk = (dir: string) => {
@@ -208,10 +216,9 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
           bytes += stat.size;
           if (++count > MAX_FILES || bytes > MAX_SOURCE || stat.size > MAX_FILE)
             throw new DevelopmentError("项目源码超过大小限制");
-          const content = fs.readFileSync(abs, "utf8");
-          if (content.includes("\0"))
-            throw new DevelopmentError("当前模板源码版本仅支持文本文件");
-          files[rel] = content;
+          const fileBytes = fs.readFileSync(abs);
+          const text = fileBytes.toString("utf8");
+          files[rel] = !text.includes("\0") && Buffer.from(text, "utf8").equals(fileBytes) ? text : { encoding: "base64", content: fileBytes.toString("base64") };
         }
       }
     };
@@ -253,7 +260,7 @@ CREATE TABLE IF NOT EXISTS development_versions(id TEXT PRIMARY KEY, projectId T
     id: string,
     user: string,
     version: string,
-  ): Record<string, string> {
+  ): Record<string, SourceFile> {
     this.get(id, user);
     const v = rows<{ files: string }>(
       "SELECT files FROM development_versions WHERE projectId=? AND id=?",

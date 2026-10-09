@@ -8,8 +8,9 @@ const dir=path.resolve(__dirname,"../../../../../../tmp/platform-development/bui
 beforeEach(async()=>{closeMetaDb();fs.rmSync(dir,{recursive:true,force:true});await initMetaDb(dir);projects=new ProjectStore(dir);});
 afterEach(()=>{closeMetaDb();fs.rmSync(dir,{recursive:true,force:true});});
 it("builds a fixed version and reconciles interrupted records",async()=>{
- const p=projects.create("alice","example-app",{"src/main.ts":"first"});let finish!:()=>void;const gate=new Promise<void>(r=>finish=r);
- const builds=new DevelopmentBuilds(dir,projects,async input=>{await gate;expect(fs.readFileSync(path.join(input.workspace,"src/main.ts"),"utf8")).toBe("first");return {path:path.join(input.workspace,"app.localapp"),sha256:"test"};});
+ const binary=Buffer.from([0,255,137,80,78,71]);
+ const p=projects.create("alice","example-app",{"src/main.ts":"first","public/logo.png":{encoding:"base64",content:binary.toString("base64")}});let finish!:()=>void;const gate=new Promise<void>(r=>finish=r);
+ const builds=new DevelopmentBuilds(dir,projects,async input=>{await gate;expect(fs.readFileSync(path.join(input.workspace,"public/logo.png"))).toEqual(binary);expect(fs.readFileSync(path.join(input.workspace,"src/main.ts"),"utf8")).toBe("first");return {path:path.join(input.workspace,"app.localapp"),sha256:"test"};});
  const b=builds.start(p.id,"alice");const f=projects.read(p.id,"alice","src/main.ts");projects.write(p.id,"alice",f.path,"second",f.hash);finish();await builds.wait(b.id);
  expect(builds.get(p.id,"alice",b.id).status).toBe("succeeded");expect(()=>builds.get(p.id,"bob",b.id)).toThrow();
  const file=path.join(projects.directory,p.id,"builds",b.id,"record.json");const record=JSON.parse(fs.readFileSync(file,"utf8"));record.status="running";fs.writeFileSync(file,JSON.stringify(record));
