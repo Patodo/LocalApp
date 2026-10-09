@@ -155,7 +155,7 @@ async function createFixture(name, mutate = () => {}) {
   };
   for (const target of expectedTargets) {
     const addonTarget = target.startsWith("linux-") ? `${target}-gnu` : target.startsWith("win32-") ? `${target}-msvc` : target;
-    files[`runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/system.node`] = "native addon";
+    files[`runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/prebuilt/${addonTarget}-napi-v9.node`] = "native addon";
     files[`runtime/server/node_modules/@vscode/ripgrep-${target}/bin/${target.startsWith("win32-") ? "rg.exe" : "rg"}`] = "search binary";
   }
   for (const relative of [

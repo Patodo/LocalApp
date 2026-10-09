@@ -18,7 +18,7 @@ const requiredFiles = [
   ...["darwin-arm64", "darwin-x64", "linux-x64", "win32-x64"].flatMap((target) => {
     const addonTarget = target.startsWith("linux-") ? `${target}-gnu` : target.startsWith("win32-") ? `${target}-msvc` : target;
     return [
-      `runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/system.node`,
+      `runtime/server/node_modules/node-addon-require-builtin-${addonTarget}/prebuilt/${addonTarget}-napi-v9.node`,
       `runtime/server/node_modules/@vscode/ripgrep-${target}/bin/${target.startsWith("win32-") ? "rg.exe" : "rg"}`,
     ];
   }),
