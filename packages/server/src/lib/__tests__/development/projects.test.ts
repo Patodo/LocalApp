@@ -16,11 +16,11 @@ it("rejects stale saves, unsafe paths and writes during an Agent turn", () => {
  const p=store.create("alice","example-app",{"src/main.ts":"first"});
  const f=store.read(p.id,"alice","src/main.ts");
  store.write(p.id,"alice","src/main.ts","second",f.hash);
- expect(()=>store.write(p.id,"alice","src/main.ts","stale",f.hash)).toThrow(/changed|冲突/);
+ expect(()=>store.write(p.id,"alice","src/main.ts","stale",f.hash)).toThrow(/改变|冲突/);
  expect(()=>store.read(p.id,"alice","../secret")).toThrow();
  fs.symlinkSync(base,path.join(store.workspace(p.id,"alice"),"outside"));
  expect(()=>store.write(p.id,"alice","outside/x","x",null)).toThrow();
- const release=store.lock(p.id,"alice"); expect(()=>store.write(p.id,"alice","src/main.ts","x",null)).toThrow(/busy|占用/); release();
+ const release=store.lock(p.id,"alice"); expect(()=>store.write(p.id,"alice","src/main.ts","x",null)).toThrow(/占用/); release();
 });
 it("retains fixed snapshots and restores as a new version", () => {
  const p=store.create("alice","example-app",{"src/main.ts":"first"});
