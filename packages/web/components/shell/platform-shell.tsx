@@ -53,7 +53,7 @@ function isPlatformRequestMessage(v: unknown) {
 }
 
 interface UserData { id: string; name: string; displayName?: string | null; avatarUrl?: string | null; }
-interface PageMeta { name: string; userId: string; description?: string; shell?: { navbar?: boolean }; notify?: { enabled?: boolean }; lifecycleStatus?: "online" | "offline"; }
+interface PageMeta { developmentPreview?: boolean; name: string; userId: string; description?: string; shell?: { navbar?: boolean }; notify?: { enabled?: boolean }; lifecycleStatus?: "online" | "offline"; }
 type PresenceSnapshotEvent = {
   type?: "presence:snapshot";
   data?: Partial<PresenceSnapshot> & {
@@ -397,7 +397,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
   }, [pagePath, user]);
 
   useEffect(() => {
-    if (!ready || !appOnline) return;
+    if (!ready || !appOnline || meta?.developmentPreview) return;
     if (typeof EventSource === "undefined") return;
     const clientId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const presenceBody = JSON.stringify({ clientId });
@@ -478,11 +478,11 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
       disconnect();
       leave();
     };
-  }, [appOnline, pagePath, ready]);
+  }, [appOnline, pagePath, ready, meta?.developmentPreview]);
 
   useEffect(() => {
     setEditingSources({});
-    if (!ready || !appOnline) return;
+    if (!ready || !appOnline || meta?.developmentPreview) return;
     const onAwareness = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       if (!isObject(detail) || typeof detail.sourceId !== "string" || detail.sourceId.length > 400 || !Array.isArray(detail.peers)) return;
@@ -501,7 +501,7 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
     };
     window.addEventListener(CRDT_EDITING_AWARENESS_EVENT, onAwareness);
     return () => window.removeEventListener(CRDT_EDITING_AWARENESS_EVENT, onAwareness);
-  }, [appOnline, pagePath, ready]);
+  }, [appOnline, pagePath, ready, meta?.developmentPreview]);
 
   useEffect(() => {
     if (!ready || !appOnline || nativeAppLoadedRef.current === nativeAppLoadKey) return;

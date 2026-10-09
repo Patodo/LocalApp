@@ -43,6 +43,21 @@ beforeEach(() => {
 });
 
 describe("PlatformShell offline lifecycle", () => {
+  it("loads development preview resources without platform presence", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/me") return json({success:true,data:{id:"preview",name:"开发预览"}});
+      if (url.includes("/meta")) return json({success:true,data:{name:"preview-app",userId:"preview",lifecycleStatus:"online",developmentPreview:true}});
+      if (url.includes("/api/favorites")) return json({success:true,data:{count:0,favorited:false}});
+      return new Response('<html><body><div id="root"></div><script type="module" src="./preview.js"></script></body></html>',{headers:{"Content-Type":"text/html"}});
+    });
+    vi.stubGlobal("fetch",fetchMock);
+    render(<PlatformShell userId="preview" name="preview-app"/>);
+    await waitFor(()=>expect(document.querySelector('script[data-localapp-app-asset$="/preview.js"]')).not.toBeNull());
+    expect(fetchMock.mock.calls.some(([url])=>String(url).includes("/presence/"))).toBe(false);
+    expect(MockEventSource.urls).toEqual([]);
+  });
+
   it("opens login in place and preserves the blocked application URL", async () => {
     window.history.replaceState({}, "", "/owner/private-app/?tab=billing#usage");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
