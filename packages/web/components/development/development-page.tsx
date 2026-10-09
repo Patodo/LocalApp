@@ -68,7 +68,7 @@ export function DevelopmentPage({
       setProjects(await request("/api/development/projects"));
       const settings = await request("/api/agent/settings");
       setProviders(settings.providers);
-      setProvider(settings.defaultProviderId);
+      setProvider(settings.defaultProviderId || settings.providers?.[0]?.id || "");
       setSettingsReady(true);
     });
     return () => abort.current?.abort();

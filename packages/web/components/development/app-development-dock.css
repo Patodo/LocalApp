@@ -210,9 +210,6 @@
   width: 100%;
 }
 .dock-history-menu {
-  position: absolute;
-  left: 0;
-  top: calc(100% + 8px);
   width: max-content;
   min-width: 240px;
   max-width: min(480px, calc(100vw - 90px));
@@ -224,9 +221,9 @@
   background: var(--background, #fff);
   color: var(--foreground, #171717);
   box-shadow: 0 8px 30px #00000015;
-  z-index: 40;
+  z-index: 100;
 }
-.app-development-dock .dock-history-menu button {
+.dock-history-menu button {
   width: 100%;
   justify-content: flex-start;
   padding: 9px 12px;
@@ -249,10 +246,7 @@
   font-size: 12px;
   color: var(--muted-foreground, #737373);
 }
-.app-development-dock:not(.is-expanded) .dock-history-menu {
-  top: auto;
-  bottom: calc(100% + 8px);
-}
+
 
 .dock-attachments {
   display: flex;
@@ -373,3 +367,13 @@
 .development-dock-composer .dock-model-trigger { box-shadow: none; padding: 0 8px; border-radius: 8px; }
 .development-dock-composer .dock-model-trigger:hover { background: var(--accent, #f5f5f5); }
 .development-dock-composer .dock-model-trigger:focus-visible { outline: 2px solid var(--ring, #a3a3a3); outline-offset: 2px; }
+
+.dock-history-menu button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.dock-history-menu button[data-highlighted] { background: var(--accent, #f5f5f5); outline: none; }
+.development-dock-composer textarea { min-height: 34px; border-radius: 0; box-shadow: none; }
+.dock-history-menu { overflow-x: hidden; max-height: min(300px, var(--radix-dropdown-menu-content-available-height)); }
+.dock-history-menu button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dock-history-menu button svg { flex-shrink: 0; }
+.dock-history-menu > .dock-identity { border-radius: 8px; }
+.dock-history-menu button:focus { outline: none; }
+.dock-history-menu button:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #a3a3a3); }

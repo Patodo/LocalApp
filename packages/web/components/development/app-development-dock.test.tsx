@@ -160,7 +160,7 @@ it("uses the title to switch history without changing the expanded state", () =>
   p.selectedSession = "current-session";
   p.actions.selectSession = vi.fn();
   render(<AppDevelopmentDock {...p} />);
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   expect(screen.getByRole("menu")).toBeInTheDocument();
   expect(screen.queryByRole("log")).toBeNull();
   expect(
@@ -171,7 +171,7 @@ it("uses the title to switch history without changing the expanded state", () =>
   expect(screen.queryByRole("menu")).toBeNull();
   expect(screen.queryByRole("log")).toBeNull();
   fireEvent.click(screen.getByLabelText("展开开发对话"));
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
   expect(screen.getByRole("log")).toBeInTheDocument();
@@ -265,7 +265,7 @@ it("shows the selected conversation title in the header, history and minimized p
   p.messages = [{ role: "assistant", content: "完成" }];
   render(<AppDevelopmentDock {...p} />);
   expect(screen.getByLabelText("切换历史对话").textContent).toContain("添加工作项筛选");
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   expect(screen.getByRole("menuitemradio", { name: /添加工作项筛选/ })).toBeTruthy();
   fireEvent.click(screen.getByLabelText("最小化开发对话"));
   fireEvent.mouseEnter(screen.getByLabelText("已最小化的开发对话"));
@@ -281,7 +281,7 @@ it("switches identity above history and hides developer actions in user mode", (
   user.prompt = "帮我创建工作项";
   const switchIdentity = vi.fn();
   const view = render(<AppDevelopmentDock {...developer} identity="developer" userConversation={user} onIdentityChange={switchIdentity} />);
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   fireEvent.click(screen.getByLabelText("切换对话身份"));
   expect(switchIdentity).toHaveBeenCalledWith("user");
   expect(screen.getByRole("menuitemradio", { name: /修改应用样式/ })).toBeInTheDocument();
@@ -299,7 +299,7 @@ it("switches identity above history and hides developer actions in user mode", (
   fireEvent.click(screen.getByLabelText("发送对话消息"));
   expect(user.actions.run).toHaveBeenCalledOnce();
   expect(developer.actions.run).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   fireEvent.click(screen.getByLabelText("切换对话身份"));
   expect(switchIdentity).toHaveBeenLastCalledWith("developer");
   view.rerender(<AppDevelopmentDock {...developer} identity="user" userConversation={{ ...user, running: true }} onIdentityChange={switchIdentity} />);
@@ -309,6 +309,6 @@ it("switches identity above history and hides developer actions in user mode", (
 it("allows an owner without imported source to switch to user conversations", () => {
   render(<AppDevelopmentDock {...props()} project={null} identity="developer" onIdentityChange={vi.fn()} />);
   expect(screen.getByLabelText("切换历史对话")).toBeEnabled();
-  fireEvent.click(screen.getByLabelText("切换历史对话"));
+  fireEvent.keyDown(screen.getByLabelText("切换历史对话"), {key: "Enter"});
   expect(screen.getByLabelText("切换对话身份")).toBeEnabled();
 });

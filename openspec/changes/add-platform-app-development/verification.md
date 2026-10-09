@@ -112,3 +112,11 @@
 真实 HTTP 集成验证迁移后拉取二进制资源、本地新增/删除推回、排除本地 tmp 数据、拒绝已存在的拉取目录、拒绝未保存的服务端改动、拒绝不同 API Key 身份，并确认正式安装文件未改变。`tmp/platform-development/source-sync-tests.log`：2 文件 10 测试通过。CLI 参数与文档检查记录于 source-cli-tests.log、source-skill-tests.log。Server 与 CLI TypeScript 检查通过。
 
 本轮没有向线上 Server 上传应用，没有发布 npm，也没有执行线上上线。冲突合并由开发者完成；不提供自动合并或强制覆盖。拉取后的应用运行使用现有 localapp dev 流程，本轮没有新增应用的浏览器验收。
+
+### 本次前端组件复查
+
+按当前分支相对 main 的新增界面检查，发现完整开发页三个原生下拉（项目、源码版本、供应商）、对话框手写历史菜单与系统设置手写页签。已使用共享 shadcn/ui Select、DropdownMenu、Tabs；开发适配层的普通按钮和输入复用共享组件，保留 dsh 布局、源码编辑区及隐藏文件上传 input。修复历史长标题横向溢出、输入区默认高度变大，以及未配置默认供应商时没有选择首个模型的问题。
+
+7 个测试文件 24 项通过，前端生产构建通过。浏览器从正式应用入口检查身份切换后菜单保持打开、各自历史与长标题省略；完整开发页检查项目、源码版本和模型供应商弹层及选中反馈；系统设置验证方向键切换页签。截图 history-after.png、project-select-after.png、source-version-after.png、system-tabs-after.png 保存在 tmp/platform-development 下。
+
+旧 app-settings-page 的原生控件不在本次分支变更内，本轮没有批量替换。此次检查不表示所有历史页面都已统一，亦没有重新运行真实模型或发布流程。

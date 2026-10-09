@@ -1,4 +1,6 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUp,
@@ -27,6 +29,7 @@ import {
 import type { DevelopmentShellProps } from "./dsh-development-shell";
 import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import "./app-development-dock.css";
 
 export interface DockIdentityProps {
@@ -50,20 +53,7 @@ export function AppDevelopmentDock(
   const [minimized, setMinimized] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const history = useRef<HTMLDivElement>(null);
   const historyTrigger = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!historyOpen) return;
-    history.current
-      ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
-      ?.focus();
-    const outside = (event: PointerEvent) => {
-      if (!history.current?.contains(event.target as Node))
-        setHistoryOpen(false);
-    };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, [historyOpen]);
   const [panel, setPanel] = useState<"chat" | "changes" | "build">("chat");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
@@ -88,13 +78,13 @@ export function AppDevelopmentDock(
   useEffect(() => { if (input.minimize) setMinimized(true); }, [input.minimize]);
   useEffect(() => { setPanel("chat"); }, [input.identity]);
   const switchIdentity = input.onIdentityChange ? (
-    <button type="button" className="dock-identity"
+    <Button variant="unstyled" size="none" type="button" className="dock-identity"
       disabled={p.running || p.pending || !!input.userConversation?.running || !!input.running || ["queued", "running"].includes(input.build?.status)}
       aria-label="切换对话身份" title={userMode ? "切换为开发者" : "切换为用户"}
       onClick={() => input.onIdentityChange?.(userMode ? "developer" : "user")}>
       {userMode ? <UserRound size={15} /> : <Code2 size={15} />}
       {userMode ? "用户" : "开发者"}<ArrowLeftRight size={13} />
-    </button>
+    </Button>
   ) : null;
   const building = ["queued", "running"].includes(p.build?.status);
   const ready = p.build?.status === "succeeded";
@@ -200,13 +190,13 @@ export function AppDevelopmentDock(
             role="tooltip"
             id="development-mini-reply"
           >
-            <button
+            <Button variant="unstyled" size="none"
               className="development-mini-dismiss"
               aria-label="关闭消息预览"
               onClick={() => setPreviewVisible(false)}
             >
               <X size={14} />
-            </button>
+            </Button>
             <strong>
               {p.error ? <CircleAlert size={17} /> : <Check size={17} />}
               {conversationTitle}
@@ -216,7 +206,7 @@ export function AppDevelopmentDock(
             </div>
           </div>
         )}
-        <button
+        <Button variant="unstyled" size="none"
           className="development-mini-restore"
           aria-label={working ? "任务进行中，恢复对话" : userMode ? "恢复应用对话" : "恢复开发对话"}
           aria-describedby={
@@ -238,7 +228,7 @@ export function AppDevelopmentDock(
           {!working && completion && (
             <span className="development-mini-dot" aria-hidden="true" />
           )}
-        </button>
+        </Button>
         {working && (
           <span className="sr-only" role="status">
             {p.interaction ? "Agent 等待回复" : "开发任务进行中"}
@@ -252,7 +242,7 @@ export function AppDevelopmentDock(
       aria-label={userMode ? "应用 AI 对话" : "应用开发对话"}
     >
       <header className="development-dock-header">
-        <button
+        <Button variant="unstyled" size="none"
           aria-label={userMode ? "最小化应用对话" : "最小化开发对话"}
           title="最小化"
           onClick={() => {
@@ -262,68 +252,32 @@ export function AppDevelopmentDock(
           }}
         >
           <Minus size={16} />
-        </button>
+        </Button>
         {p.running && <LoaderCircle className="dock-spinner" size={15} />}
-        <div
-          className="dock-history"
-          ref={history}
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node))
-              setHistoryOpen(false);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setHistoryOpen(false);
-              historyTrigger.current?.focus();
-            }
-            if (
-              historyOpen &&
-              ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
-            ) {
-              event.preventDefault();
-              const items = Array.from(
-                history.current?.querySelectorAll<HTMLButtonElement>(
-                  '[role="menuitemradio"]',
-                ) ?? [],
-              );
-              const index = items.indexOf(
-                document.activeElement as HTMLButtonElement,
-              );
-              const next =
-                event.key === "Home"
-                  ? 0
-                  : event.key === "End"
-                    ? items.length - 1
-                    : (index +
-                        (event.key === "ArrowUp" ? -1 : 1) +
-                        items.length) %
-                      items.length;
-              items[next]?.focus();
-            }
-          }}
-        >
-          <button
+        <DropdownMenu open={historyOpen} onOpenChange={setHistoryOpen}>
+          <DropdownMenuTrigger asChild>
+          <Button variant="unstyled" size="none"
             ref={historyTrigger}
             className="dock-title"
             aria-label="切换历史对话"
             aria-haspopup="menu"
             aria-expanded={historyOpen}
             disabled={p.running || p.pending || (!p.project && !input.onIdentityChange)}
-            onClick={() => setHistoryOpen(!historyOpen)}
           >
             {conversationTitle}
             <ChevronDown size={14} />
-          </button>
-          {historyOpen && (
-            <div
+          </Button>
+          </DropdownMenuTrigger>
+            <DropdownMenuContent
               className="dock-history-menu"
-              role="menu"
+              aria-labelledby=""
+              side={expanded ? "bottom" : "top"}
+              align="start"
               aria-label={userMode ? "应用历史对话" : "开发历史对话"}
             >
-              {switchIdentity}
-              <button
-                role="menuitemradio"
-                aria-checked={!p.selectedSession}
+              {switchIdentity && <DropdownMenuItem asChild onSelect={event => event.preventDefault()}>{switchIdentity}</DropdownMenuItem>}
+              <DropdownMenuRadioGroup value={p.selectedSession || "new"}>
+              <DropdownMenuRadioItem asChild value="new"><Button variant="unstyled" size="none"
                 onClick={() => {
                   p.actions.newSession();
                   setPanel("chat");
@@ -334,7 +288,7 @@ export function AppDevelopmentDock(
                 <Plus size={16} />
                 <span>新对话</span>
                 {!p.selectedSession && <Check size={15} />}
-              </button>
+              </Button></DropdownMenuRadioItem>
               {[...p.sessions]
                 .sort(
                   (a, b) =>
@@ -342,10 +296,7 @@ export function AppDevelopmentDock(
                     new Date(a.createdAt).getTime(),
                 )
                 .map((session) => (
-                  <button
-                    key={session.id}
-                    role="menuitemradio"
-                    aria-checked={p.selectedSession === session.id}
+                  <DropdownMenuRadioItem key={session.id} asChild value={session.id}><Button variant="unstyled" size="none"
                     onClick={() => {
                       p.actions.selectSession(session.id);
                       setPanel("chat");
@@ -358,12 +309,12 @@ export function AppDevelopmentDock(
                       {session.title || "未命名对话"}
                     </span>
                     {p.selectedSession === session.id && <Check size={15} />}
-                  </button>
+                  </Button></DropdownMenuRadioItem>
                 ))}
+              </DropdownMenuRadioGroup>
               {!p.sessions.length && <p>暂无历史对话</p>}
-            </div>
-          )}
-        </div>
+            </DropdownMenuContent>
+        </DropdownMenu>
         {!userMode && <a
           href={
             p.project
@@ -377,24 +328,24 @@ export function AppDevelopmentDock(
         </a>}
         {userMode && <a href={`/my/agent?${new URLSearchParams({ appId: `${p.application?.owner}/${p.application?.name}` })}`}
           title="应用 Agent 设置" aria-label="应用 Agent 设置"><Settings size={17} /></a>}
-        <button
+        <Button variant="unstyled" size="none"
           aria-label={userMode ? expanded ? "收起应用对话" : "展开应用对话" : expanded ? "收起开发对话" : "展开开发对话"}
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-        </button>
+        </Button>
       </header>
       {expanded && (
         <>
           {!userMode && p.project ? (
             <nav className="development-dock-tools" aria-label="开发操作">
-              <button
+              <Button variant="unstyled" size="none"
                 aria-pressed={panel === "chat"}
                 onClick={() => setPanel("chat")}
               >
                 对话
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled" size="none"
                 onClick={() => {
                   setPanel("changes");
                   p.actions.diff();
@@ -402,8 +353,8 @@ export function AppDevelopmentDock(
               >
                 <GitCompareArrows size={15} />
                 改动
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled" size="none"
                 disabled={p.pending || p.running || building}
                 onClick={() => {
                   setPanel("build");
@@ -412,21 +363,21 @@ export function AppDevelopmentDock(
               >
                 <Hammer size={15} />
                 检查与构建
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled" size="none"
                 disabled={!ready || p.pending || p.running}
                 onClick={p.actions.preview}
               >
                 <Eye size={15} />
                 预览
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled" size="none"
                 disabled={!ready || p.pending || p.running}
                 onClick={p.actions.publish}
               >
                 <Rocket size={15} />
                 上线
-              </button>
+              </Button>
             </nav>
           ) : null}
           <div
@@ -442,12 +393,12 @@ export function AppDevelopmentDock(
                 <p>
                   安装包只有构建产物。选择原项目目录后，即可在这里对话修改、检查、预览并上线。
                 </p>
-                <button
+                <Button variant="unstyled" size="none"
                   disabled={importing}
                   onClick={() => sourceInput.current?.click()}
                 >
                   {importing ? "正在导入…" : "选择源码目录"}
-                </button>
+                </Button>
                 <p>
                   包含 manifest.json、package.json；应用名称需与当前应用相同。
                 </p>
@@ -490,7 +441,7 @@ export function AppDevelopmentDock(
                         ? "构建失败，请查看日志"
                         : "尚未构建"}
                   {building && (
-                    <button onClick={p.actions.cancelBuild}>取消构建</button>
+                    <Button variant="unstyled" size="none" onClick={p.actions.cancelBuild}>取消构建</Button>
                   )}
                 </p>
                 <DshTerminal
@@ -513,12 +464,12 @@ export function AppDevelopmentDock(
                     <p>
                       {p.interaction.toolName}：{p.interaction.reason}
                     </p>
-                    <button onClick={() => p.actions.respond("allowed-once")}>
+                    <Button variant="unstyled" size="none" onClick={() => p.actions.respond("allowed-once")}>
                       允许本次
-                    </button>
-                    <button onClick={() => p.actions.respond("rejected")}>
+                    </Button>
+                    <Button variant="unstyled" size="none" onClick={() => p.actions.respond("rejected")}>
                       拒绝
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   <>
@@ -527,12 +478,12 @@ export function AppDevelopmentDock(
                         ?.map((q: any) => q.question)
                         .join("\n")}
                     </p>
-                    <textarea
+                    <Textarea
                       aria-label="回答 Agent"
                       value={p.answer}
                       onChange={(e) => p.actions.setAnswer(e.target.value)}
                     />
-                    <button
+                    <Button variant="unstyled" size="none"
                       onClick={() =>
                         p.actions.respond(
                           Object.fromEntries(
@@ -545,7 +496,7 @@ export function AppDevelopmentDock(
                       }
                     >
                       提交回答
-                    </button>
+                    </Button>
                   </>
                 )}
               </div>
@@ -559,13 +510,13 @@ export function AppDevelopmentDock(
             <span key={file.id}>
               <Paperclip size={14} />
               <span>{file.name}</span>
-              <button
+              <Button variant="unstyled" size="none"
                 aria-label={`移除附件 ${file.name}`}
                 disabled={p.running || p.pending}
                 onClick={() => p.actions.removeAttachment?.(file.id)}
               >
                 <X size={13} />
-              </button>
+              </Button>
             </span>
           ))}
         </div>
@@ -587,14 +538,14 @@ export function AppDevelopmentDock(
         }}
       />
       <div className="development-dock-composer">
-        <button
+        <Button variant="unstyled" size="none"
           aria-label="上传文件"
           disabled={p.running || p.pending || !p.project || !p.actions.upload}
           onClick={() => attachmentInput.current?.click()}
         >
           <Plus size={20} />
-        </button>
-        <textarea
+        </Button>
+        <Textarea
           ref={draft}
           rows={1}
           aria-label={userMode ? "应用对话消息" : "应用修改需求"}
@@ -630,15 +581,15 @@ export function AppDevelopmentDock(
         </Select>
         {!p.providers.length && <a href="/my/models">配置模型</a>}
         {p.running ? (
-          <button
+          <Button variant="unstyled" size="none"
             className="dock-send"
             aria-label={userMode ? "停止对话" : "停止开发"}
             onClick={p.actions.stop}
           >
             <Square size={14} fill="currentColor" />
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button variant="unstyled" size="none"
             className="dock-send"
             aria-label={userMode ? "发送对话消息" : "发送修改需求"}
             disabled={
@@ -650,7 +601,7 @@ export function AppDevelopmentDock(
             }}
           >
             <ArrowUp size={18} />
-          </button>
+          </Button>
         )}
       </div>
       <input

@@ -38,3 +38,6 @@
 @media(max-width:650px){.dsh-transcript{padding:20px 16px}.dsh-header-actions{gap:0}.dsh-conversation-heading>span{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-full-workbench select{max-width:160px}}
 
 .dsh-session-row.is-active{background:var(--dsw-specific-sidebar-nav-item-active)}
+
+.dsh-full-workbench .dsh-choice { min-width: 0; max-width: 240px; height: 34px; border: 0; box-shadow: none; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.dsh-panel-heading > .dsh-choice { flex: 1; max-width: none; }

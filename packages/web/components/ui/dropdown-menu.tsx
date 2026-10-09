@@ -1,0 +1,11 @@
+"use client";
+import * as React from "react";
+import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
+import {cn} from "@/lib/utils";
+export const DropdownMenu = DropdownPrimitive.Root;
+export const DropdownMenuTrigger = DropdownPrimitive.Trigger;
+export const DropdownMenuRadioGroup = DropdownPrimitive.RadioGroup;
+export const DropdownMenuRadioItem = DropdownPrimitive.RadioItem;
+export const DropdownMenuItem = DropdownPrimitive.Item;
+export const DropdownMenuContent = React.forwardRef<React.ElementRef<typeof DropdownPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownPrimitive.Content>>(({className, sideOffset = 8, ...props}, ref) => <DropdownPrimitive.Portal><DropdownPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn("z-[100] min-w-56 max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg", className)} {...props}/></DropdownPrimitive.Portal>);
+DropdownMenuContent.displayName = "DropdownMenuContent";

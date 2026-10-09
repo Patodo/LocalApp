@@ -1,4 +1,8 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { ChoiceSelect } from "@/components/ui/choice-select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
@@ -170,7 +174,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
     onClick: () => void,
     disabled = false,
   ) => (
-    <button
+    <Button variant="unstyled" size="none"
       className="dsh-icon-button"
       title={label}
       aria-label={label}
@@ -178,7 +182,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
       disabled={disabled}
     >
       <Icon size={17} />
-    </button>
+    </Button>
   );
   const renderSlot: RenderSlot = (slot, owner, options) => {
     if (slot === "sidebar")
@@ -212,7 +216,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
           </div>
           {p.projects.map((project) => (
             <div key={project.id} className="dsh-project-group">
-              <button
+              <Button variant="unstyled" size="none"
                 className={
                   "dsh-project-row " +
                   (p.project?.id === project.id ? "is-selected" : "")
@@ -222,22 +226,22 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
               >
                 <ChevronDown size={13} />
                 <span>{project.name}</span>
-              </button>
+              </Button>
               {p.project?.id === project.id && (
                 <>
-                  <button
+                  <Button variant="unstyled" size="none"
                     className="dsh-session-row"
                     onClick={p.actions.newSession}
                     disabled={p.running}
                   >
                     <Plus size={13} />
                     <span>新对话</span>
-                  </button>
+                  </Button>
                   {p.sessions
                     .slice()
                     .reverse()
                     .map((item) => (
-                      <button
+                      <Button variant="unstyled" size="none"
                         className={
                           "dsh-session-row " +
                           (p.selectedSession === item.id ? "is-active" : "")
@@ -249,19 +253,19 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                         <span>
                           {item.title || "未命名对话"}
                         </span>
-                      </button>
+                      </Button>
                     ))}{" "}
                 </>
               )}
             </div>
           ))}
           {!p.projects.length && (
-            <button
+            <Button variant="unstyled" size="none"
               className="dsh-create-empty"
               onClick={() => setCreating(true)}
             >
               创建第一个项目
-            </button>
+            </Button>
           )}
         </div>
       ) : (
@@ -293,14 +297,14 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
         >
           <div className="dsh-panel-tabs">
             {(["files", "changes", "build"] as const).map((tab) => (
-              <button
+              <Button variant="unstyled" size="none"
                 aria-pressed={panel === tab}
                 className={panel === tab ? "active" : ""}
                 key={tab}
                 onClick={() => show(tab)}
               >
                 {tab === "files" ? "源码" : tab === "changes" ? "改动" : "构建"}
-              </button>
+              </Button>
             ))}
             {iconButton("关闭面板", X, () => setRight(false))}
           </div>
@@ -327,29 +331,29 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                       setNewPath("");
                     }}
                   >
-                    <input
+                    <Input
                       aria-label="新文件路径"
                       value={newPath}
                       placeholder="新文件路径"
                       onChange={(e) => setNewPath(e.target.value)}
                       disabled={p.running}
                     />
-                    <button
+                    <Button variant="unstyled" size="none"
                       aria-label="新建文件"
                       disabled={!newPath || p.running}
                     >
                       <Plus size={14} />
-                    </button>
+                    </Button>
                   </form>
                   {p.files.map((file) => (
-                    <button
+                    <Button variant="unstyled" size="none"
                       key={file}
                       className={p.file?.path === file ? "selected" : ""}
                       onClick={() => p.actions.open(file)}
                     >
                       <FileCode2 size={13} />
                       <span>{file}</span>
-                    </button>
+                    </Button>
                   ))}
                 </div>
                 <textarea
@@ -364,19 +368,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
           ) : panel === "changes" ? (
             <>
               <div className="dsh-panel-heading">
-                <select
-                  aria-label="源码版本"
-                  value={p.version}
-                  onChange={(e) => {
-                    p.actions.setVersion(e.target.value);
-                  }}
-                >
-                  {p.versions.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.message} · {v.id.slice(0, 8)}
-                    </option>
-                  ))}
-                </select>
+                <ChoiceSelect label="源码版本" value={p.version} onValueChange={p.actions.setVersion} options={p.versions.map(v => ({value: v.id, label: `${v.message} · ${v.id.slice(0, 8)}`}))} className="dsh-choice" />
                 {iconButton("查看改动", GitCompareArrows, p.actions.diff)}
                 {iconButton(
                   "恢复源码",
@@ -489,31 +481,14 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                     <>
                       <HeroShell t={t} renderSlot={renderSlot} />
                       <div className={conversationCss.heroWorkspaceRow}>
-                        <select
-                          aria-label="开发项目"
-                          value={p.project?.id ?? ""}
-                          disabled={p.running || p.pending}
-                          onChange={(e) => {
-                            const project = p.projects.find(
-                              (item) => item.id === e.target.value,
-                            );
-                            if (project) p.actions.select(project);
-                          }}
-                        >
-                          <option value="">选择项目</option>
-                          {p.projects.map((project) => (
-                            <option value={project.id} key={project.id}>
-                              {project.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
+                        <ChoiceSelect label="开发项目" value={p.project?.id ?? ""} disabled={p.running || p.pending} placeholder="选择项目" onValueChange={value => {const project = p.projects.find(item => item.id === value); if (project) p.actions.select(project);}} options={p.projects.map(project => ({value: project.id, label: project.name}))} className="dsh-choice" />
+                        <Button variant="unstyled" size="none"
                           className="dsh-quiet-button"
                           onClick={() => setCreating(true)}
                         >
                           <FolderPlus size={14} />
                           创建项目
-                        </button>
+                        </Button>
                       </div>
                     </>
                   )}
@@ -529,14 +504,14 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                           <p>
                             {p.interaction.toolName}：{p.interaction.reason}
                           </p>
-                          <button
+                          <Button variant="unstyled" size="none"
                             onClick={() => p.actions.respond("allowed-once")}
                           >
                             允许本次
-                          </button>
-                          <button onClick={() => p.actions.respond("rejected")}>
+                          </Button>
+                          <Button variant="unstyled" size="none" onClick={() => p.actions.respond("rejected")}>
                             拒绝
-                          </button>
+                          </Button>
                         </>
                       ) : (
                         <>
@@ -545,14 +520,14 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                               ?.map((q: any) => q.question)
                               .join("\n")}
                           </p>
-                          <input
+                          <Input
                             aria-label="回答 Agent"
                             value={p.answer}
                             onChange={(e) =>
                               p.actions.setAnswer(e.target.value)
                             }
                           />
-                          <button
+                          <Button variant="unstyled" size="none"
                             onClick={() =>
                               p.actions.respond(
                                 Object.fromEntries(
@@ -565,7 +540,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                             }
                           >
                             回答
-                          </button>
+                          </Button>
                         </>
                       )}
                     </div>
@@ -581,7 +556,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                   >
                     <div className={composerCss.card} data-composer-card>
                       <div className={composerCss.scroll}>
-                        <textarea
+                        <Textarea
                           className={composerCss.input + " dsh-draft"}
                           aria-label="开发需求"
                           placeholder={
@@ -617,32 +592,19 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                         </div>
                         <div className={composerCss.trailing}>
                           <div className={composerCss.standardControls}>
-                            <select
-                              aria-label="模型供应商"
-                              value={p.provider}
-                              disabled={p.running}
-                              onChange={(e) =>
-                                p.actions.setProvider(e.target.value)
-                              }
-                            >
-                              {p.providers.map((provider) => (
-                                <option key={provider.id} value={provider.id}>
-                                  {provider.name} · {provider.model}
-                                </option>
-                              ))}
-                            </select>
+                            <ChoiceSelect label="模型供应商" value={p.provider} disabled={p.running} onValueChange={p.actions.setProvider} options={p.providers.map(provider => ({value: provider.id, label: `${provider.name} · ${provider.model}`}))} className="dsh-choice" />
                           </div>
                           {p.running ? (
-                            <button
+                            <Button variant="unstyled" size="none"
                               className={composerCss.primary}
                               type="button"
                               aria-label="停止"
                               onClick={p.actions.stop}
                             >
                               <Square size={15} />
-                            </button>
+                            </Button>
                           ) : (
-                            <button
+                            <Button variant="unstyled" size="none"
                               className={composerCss.primary}
                               aria-label="开始开发"
                               disabled={
@@ -650,7 +612,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
                               }
                             >
                               <ArrowUp size={18} />
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </div>
@@ -697,7 +659,7 @@ export function DshDevelopmentShell(p: DevelopmentShellProps) {
           >
             <label className="dsh-create-project-label">
               项目名称
-              <input
+              <Input
                 data-modal-autofocus
                 aria-label="新项目名称"
                 placeholder="my-app"
