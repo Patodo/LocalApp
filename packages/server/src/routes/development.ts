@@ -5,6 +5,8 @@ import { ProjectStore, DevelopmentError } from "../lib/development/projects.js";
 import { DevelopmentBuilds } from "../lib/development/builds.js";
 import { DevelopmentPreviews } from "../lib/development/previews.js";
 import { DevelopmentReleases } from "../lib/development/releases.js";
+import { readPageMeta } from "../plugins/storage.js";
+import { validateName } from "../lib/validate-name.js";
 import { templateSource } from "../lib/development/template.js";
 import { AgentSettingsStore } from "../lib/agent-settings.js";
 import { readPythonEnvironment } from "../lib/python-environment.js";
@@ -38,6 +40,66 @@ export async function developmentRoutes(
     projects,
     options.builds,
   );
+  // An app's source is never inferred from its compiled assets.
+  const appSource = "/api/development/apps/:owner/:name/source";
+  function ownedApp(owner: string, name: string, user: string) {
+    if (owner !== user)
+      throw new DevelopmentError("只有应用拥有者可以编辑应用", 403);
+    if (validateName(name)) throw new DevelopmentError("应用名称无效");
+    if (!readPageMeta(app.config.dataDir, user, name))
+      throw new DevelopmentError("应用不存在", 404);
+  }
+  app.get<{ Params: { owner: string; name: string } }>(
+    appSource,
+    async (req) => {
+      ownedApp(req.params.owner, req.params.name, req.userId);
+      return {
+        success: true,
+        data:
+          projects.list(req.userId).find((p) => p.name === req.params.name) ??
+          null,
+      };
+    },
+  );
+  app.post<{
+    Params: { owner: string; name: string };
+    Body: { files: Record<string, string> };
+  }>(appSource, { bodyLimit: 40 * 1024 * 1024 }, async (req) => {
+    ownedApp(req.params.owner, req.params.name, req.userId);
+    const files = req.body?.files;
+    if (
+      !files ||
+      typeof files !== "object" ||
+      Array.isArray(files) ||
+      Object.keys(files).length > 5000 ||
+      Object.values(files).some(
+        (v) => typeof v !== "string" || Buffer.byteLength(v) > 2 * 1024 * 1024,
+      ) ||
+      Buffer.byteLength(JSON.stringify(files)) > 32 * 1024 * 1024
+    )
+      throw new DevelopmentError("源码文件无效或超过大小限制");
+    let manifest, pkg;
+    try {
+      manifest = JSON.parse(files["manifest.json"]);
+      pkg = JSON.parse(files["package.json"]);
+    } catch {
+      throw new DevelopmentError(
+        "请选择包含 manifest.json 和 package.json 的应用源码目录",
+      );
+    }
+    if (
+      manifest.name !== req.params.name ||
+      !pkg.scripts?.test ||
+      !pkg.scripts?.build
+    )
+      throw new DevelopmentError(
+        "源码应用名称必须匹配，且保留 test 和 build 脚本",
+      );
+    return {
+      success: true,
+      data: projects.create(req.userId, req.params.name, files),
+    };
+  });
   app.get<{ Params: { id: string } }>(base + "/:id/builds", async (req) => ({
     success: true,
     data: options.builds.list(req.params.id, req.userId),

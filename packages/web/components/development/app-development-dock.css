@@ -1,0 +1,202 @@
+.app-development-dock {
+  position: absolute;
+  z-index: 35;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(780px, calc(100% - 32px));
+  border: 1px solid #e7e7e7;
+  border-radius: 26px;
+  background: var(--background, #fff);
+  color: var(--foreground, #171717);
+  box-shadow: 0 12px 36px #00000012;
+  font-family: inherit;
+  overflow: hidden;
+  transition:
+    box-shadow 0.2s,
+    border-color 0.2s;
+}
+.app-development-dock.is-running {
+  border-color: #4587ff;
+  box-shadow:
+    0 0 0 1px #4587ff,
+    0 12px 36px #00000012;
+}
+.app-development-dock button,
+.app-development-dock a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  border-radius: 8px;
+  padding: 7px;
+}
+.app-development-dock button:hover,
+.app-development-dock a:hover {
+  background: #88888810;
+}
+.app-development-dock button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.development-dock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 15px;
+  color: var(--muted-foreground, #737373);
+  border-bottom: 1px solid #88888815;
+}
+.development-dock-header .dock-title {
+  justify-content: flex-start;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+.development-dock-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 19px;
+  font-size: 12px;
+  color: var(--muted-foreground, #737373);
+}
+.development-dock-transcript {
+  height: min(54vh, 540px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 28px 24px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.development-dock-transcript [data-localapp-user-bubble] {
+  --dsw-alias-label-primary: #fff;
+  --dsw-alias-label-secondary: #e5e5e5;
+  --dsw-alias-label-tertiary: #ccc;
+  --dsw-alias-link: #9fc7ff;
+  background: #080808;
+  color: white;
+}
+.development-dock-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #88888815;
+}
+.development-dock-composer textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  outline: none;
+  background: transparent;
+  border: 0;
+  line-height: 24px;
+  font-size: 14px;
+  padding: 5px 0;
+  max-height: 160px;
+}
+.development-dock-composer select {
+  max-width: 170px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted-foreground, #737373);
+  background: transparent;
+  border: 0;
+  height: 34px;
+  outline: none;
+}
+.app-development-dock .dock-send {
+  background: var(--foreground, #080808);
+  color: var(--background, #fff);
+  border-radius: 50%;
+  width: 35px;
+  height: 35px;
+  flex-shrink: 0;
+}
+.dock-hint,
+.dock-run-status {
+  color: var(--muted-foreground, #737373);
+  font-size: 13px;
+  margin: 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dock-error {
+  color: #dc2626;
+  margin: 10px 0;
+  white-space: pre-wrap;
+}
+.development-source-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 15px 0;
+  max-width: 520px;
+}
+.development-source-empty p {
+  font-size: 13px;
+  color: var(--muted-foreground, #737373);
+}
+.development-source-empty button {
+  border: 1px solid #88888830;
+  padding: 8px 14px;
+}
+.dock-interaction textarea {
+  width: 100%;
+  border: 1px solid #88888830;
+  border-radius: 8px;
+  padding: 8px;
+}
+.dock-spinner {
+  animation: dock-spin 1s linear infinite;
+}
+@keyframes dock-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 600px) {
+  .app-development-dock {
+    bottom: 8px;
+    width: calc(100% - 16px);
+    border-radius: 20px;
+  }
+  .development-dock-transcript {
+    padding: 12px 16px;
+    height: 48vh;
+  }
+  .development-dock-composer {
+    flex-wrap: wrap;
+  }
+  .development-dock-composer textarea {
+    flex-basis: calc(100% - 90px);
+  }
+  .development-dock-composer select {
+    margin-left: 34px;
+    margin-right: auto;
+    max-width: 240px;
+  }
+  .development-dock-tools {
+    padding: 5px 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-spinner {
+    animation: none;
+  }
+  .app-development-dock {
+    transition: none;
+  }
+}

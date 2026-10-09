@@ -41,3 +41,13 @@
 - 原版右侧面板拖动调整宽度正常；390px 窄屏自动折叠侧栏，页面宽度和 scrollWidth 均为 390px。
 - 浏览器 console 无 error/warn；截图位于 tmp/platform-development/dsh-workspace-ui.png。
 - 独立 tsc 检查仍有原有 agent-settings.test.tsx 的 3 项 ByRoleOptions 类型错误；此次代码没有新增该类错误。
+
+## 应用内底部开发对话（2026-10-09）
+
+- 保留 dsh 完整开发页，新增 Platform Shell 拥有者专用浮动对话。收起输入条、执行展开、工具记录、停止、模型选择、改动、构建日志、预览和上线复用已有开发接口。
+- Web 生产构建通过；5 个相关测试文件、19 项通过，包括旧构建失效、IME 输入、模型未配置时接入源码、源码导入过滤及原 Shell 回归。Server 新增应用源码接口测试与原开发接口测试，共 2 项通过；Server 类型检查通过。
+- Server 对应用源码接口检查拥有者身份，匿名请求为 401，其他用户为 403；导入要求应用名称匹配，拒绝重复项目，保留原部署版本。
+- 浏览器通过目录选择上传 document-skills-demo 原始源码，安装包与依赖被排除；正式工作项数据保留，底部对话变为可用。
+- 独立 preview-browser-fixture 正式入口真实调用用户模型修改页面文字；底部按钮执行检查与构建、独立 origin 预览、确认上线；正式页面从 Development preview marker 改为 Application dock verified，发布版本从 1 到 2。此测试应用使用专门的离线 fixture 脚本，不能等同于完整 builtin 模板在 macOS 通过。
+- 原有 macOS builtin 的 2 项代理网络测试与独立 tsc 的 3 项既有测试类型错误仍按前文记录，未关闭或放宽检查。
+- 执行中截图：tmp/platform-development/document-app-dock-running.png；完成后截图：tmp/platform-development/document-app-dock.png。

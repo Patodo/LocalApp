@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar, type PlatformEditSession, type PresenceSnapshot } from "./navbar";
 import { IssuesModal } from "./issues-modal";
+import { DevelopmentPage } from "../development/development-page";
 import { AiSidebar } from "./ai-sidebar";
 import { NotificationBell } from "./notification-bell";
 import { usePlatformAgent, registerAgentToolCatalog } from "./platform-agent";
@@ -792,6 +793,9 @@ export function PlatformShell({ userId, name }: { userId: string; name: string }
             />
           )}
         </div>
+        {isOwner && metaMatchesCurrentApp && !meta?.developmentPreview && !showIssues && (
+          <DevelopmentPage key={pagePath} application={{ owner: userId, name }} />
+        )}
         {appOnline && <EditingAwarenessOverlay peers={editingPeers} />}
         {showIssues && (
           <IssuesModal

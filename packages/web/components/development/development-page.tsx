@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { AppDevelopmentDock } from "./app-development-dock";
 import { DshDevelopmentShell } from "./dsh-development-shell";
 type Project = { id: string; name: string };
 type Version = { id: string; message: string };
@@ -15,7 +16,9 @@ async function request(url: string, method = "GET", body?: unknown) {
   if (!res.ok || !json.success) throw new Error(json.error ?? "请求失败");
   return json.data;
 }
-export function DevelopmentPage() {
+export function DevelopmentPage({
+  application,
+}: { application?: { owner: string; name: string } } = {}) {
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null),
     [files, setFiles] = useState<string[]>([]),
@@ -38,7 +41,9 @@ export function DevelopmentPage() {
     [provider, setProvider] = useState(""),
     [build, setBuild] = useState<any>(null),
     [log, setLog] = useState(""),
-    [pending, setPending] = useState(false);
+    [pending, setPending] = useState(false),
+    [settingsReady, setSettingsReady] = useState(false);
+  const diffBaseline = useRef("");
   const session = useRef(""),
     abort = useRef<AbortController | null>(null),
     selection = useRef(0);
@@ -60,20 +65,41 @@ export function DevelopmentPage() {
       const settings = await request("/api/agent/settings");
       setProviders(settings.providers);
       setProvider(settings.defaultProviderId);
+      setSettingsReady(true);
     });
     return () => abort.current?.abort();
   }, []);
+  useEffect(() => {
+    if (!settingsReady) return;
+    if (!application) {
+      const requestedId = new URLSearchParams(window.location.search).get(
+        "projectId",
+      );
+      const requested = projects.find((p) => p.id === requestedId);
+      if (requested) select(requested);
+      return;
+    }
+    void act(async () => {
+      const p = await request(
+        `/api/development/apps/${encodeURIComponent(application.owner)}/${encodeURIComponent(application.name)}/source`,
+      );
+      if (p) select(p);
+    });
+  }, [application?.owner, application?.name, settingsReady]);
+  const View = application ? AppDevelopmentDock : DshDevelopmentShell;
   async function refresh(id: string) {
     const b = `/api/development/projects/${id}`;
     setFiles(await request(b + "/files"));
     const v = await request(b + "/versions");
     setVersions(v);
     setVersion(v[0]?.id ?? "");
+    if (!diffBaseline.current) diffBaseline.current = v[0]?.id ?? "";
   }
   function select(p: Project) {
     selection.current++;
     abort.current?.abort();
     setProject(p);
+    diffBaseline.current = "";
     setFile(null);
     setText("");
     setMessages([]);
@@ -87,6 +113,8 @@ export function DevelopmentPage() {
       await refresh(p.id);
       const builds = await request(`/api/development/projects/${p.id}/builds`);
       setBuild(builds[0] ?? null);
+      if (builds[0]?.sourceVersion)
+        diffBaseline.current = builds[0].sourceVersion;
       setLog(builds[0]?.log ?? "");
       if (provider) {
         const sessions = await request(
@@ -119,11 +147,13 @@ export function DevelopmentPage() {
       content: text,
     });
     setFile(updated);
+    setBuild(null);
     await refresh(project!.id);
   }
   async function run() {
     if (!project || !prompt.trim() || running) return;
     if (file && file.content !== text) await save();
+    setBuild(null);
     setRunning(true);
     setError("");
     setLive("");
@@ -202,6 +232,7 @@ export function DevelopmentPage() {
     if (file && text !== file.content) await save();
     const b = await request(base + "/builds", "POST", {});
     setBuild(b);
+    setLog(b.log ?? "");
   }
   useEffect(() => {
     if (!build || !["queued", "running"].includes(build.status)) return;
@@ -216,7 +247,21 @@ export function DevelopmentPage() {
     return () => clearInterval(timer);
   }, [base, build]);
   return (
-    <DshDevelopmentShell
+    <View
+      {...(application
+        ? {
+            application,
+            importSource: async (files: Record<string, string>) => {
+              const p = await request(
+                `/api/development/apps/${encodeURIComponent(application.owner)}/${encodeURIComponent(application.name)}/source`,
+                "POST",
+                { files },
+              );
+              setProjects((x) => [p, ...x]);
+              select(p);
+            },
+          }
+        : {})}
       sessions={sessions}
       selectedSession={session.current}
       projects={projects}
@@ -277,7 +322,12 @@ export function DevelopmentPage() {
         setVersion,
         diff: () =>
           void act(async () => {
-            setChanges(await request(base + `/diff?version=${version}`));
+            setChanges(
+              await request(
+                base +
+                  `/diff?version=${application ? diffBaseline.current : version}`,
+              ),
+            );
           }),
         restore: () =>
           void act(async () => {
@@ -315,6 +365,7 @@ export function DevelopmentPage() {
               idempotencyKey: build.id,
             });
             setLog((x) => x + "\n已发布：" + result.url);
+            if (application) window.location.reload();
           }),
         cancelBuild: () =>
           void act(async () => {

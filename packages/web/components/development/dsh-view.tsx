@@ -131,7 +131,10 @@ export function DshMessages({ messages }: { messages: any[] }) {
                 m.role === "user" ? userCss.userStack : assistantCss.body
               }
             >
-              <div className={m.role === "user" ? userCss.bubble : undefined}>
+              <div
+                data-localapp-user-bubble={m.role === "user" ? "" : undefined}
+                className={m.role === "user" ? userCss.bubble : undefined}
+              >
                 {typeof m.content === "string" ? (
                   <DshMarkdown text={m.content} />
                 ) : (
