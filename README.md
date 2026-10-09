@@ -303,6 +303,7 @@ Windows 的用户发行物仍是标准 npm tgz。完整的 native adapter 构建
 
 ## 设计与规格
 
+- [LocalApp 拆分为 dsh 插件的方案](docs/dsh-plugin-suite.md)
 - [OpenSpec 平台规格](openspec/specs)
 - [公开源码发布指南](docs/open-source-release.md)
 - [npm 发布手册](docs/npm-release.md)
