@@ -30,7 +30,7 @@ test("packed Node Server initializes and serves Web without repository dependenc
 
   const child = spawn(process.execPath, [artifact.bin, "start", "--data-dir", dataDirectory, "--port", "0"], {
     cwd: outputDirectory,
-    env: { ...process.env, NODE_PATH: "", BOOTSTRAP_API_KEY: "package-agent-regression-key" },
+    env: { ...process.env, NODE_PATH: "", BOOTSTRAP_API_KEY: "test-package-agent-key" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
@@ -49,7 +49,7 @@ test("packed Node Server initializes and serves Web without repository dependenc
       body: JSON.stringify({ token: new URL(ready.setupUrl).searchParams.get("token"), username: "package-agent", password: "package-test-password" }),
     });
     assert.equal(initialize.status, 201, await initialize.text());
-    const headers = { "Content-Type": "application/json", "X-API-Key": "package-agent-regression-key" };
+    const headers = { "Content-Type": "application/json", "X-API-Key": "test-package-agent-key" };
     const settings = await fetch(`${ready.url}/api/agent/settings`, { method: "PUT", headers,
       body: JSON.stringify({ providers: [{ id: "test", name: "Test", protocol: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", model: "test-model", apiKey: "test-key" }], defaultProviderId: "test", grants: {}, mcpServers: [] }),
     });
