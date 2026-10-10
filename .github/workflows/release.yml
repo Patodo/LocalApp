@@ -43,6 +43,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: npm install --global @fission-ai/openspec@1.6.0
+      - name: Prepare isolated development executor
+        run: bash scripts/setup-ci-sandbox.sh
       - run: pnpm export:public-source --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/localapp-public" --verify
       - run: pnpm exec openspec validate --all --strict
 

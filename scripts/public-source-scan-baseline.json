@@ -136,7 +136,7 @@
     {
       "path": "scripts/release-workflow.node-test.mjs",
       "rule": "PRIVATE_TEST_IDENTITY",
-      "sha256": "e1f74009acb91907a2442db90d8ac343f3e9eddb02e365600c310d1c68604f63"
+      "sha256": "fd92a49a95b24e215df5bd4712f1eac0cce46dd3b22a34aedb04b2748932c9d7"
     },
     {
       "path": "packages/server/src/lib/deepseek-harness.mts",

@@ -16,6 +16,20 @@ const localRuntimeGuide = fs.readFileSync(new URL("../docs/local-runtime.md", im
 const windowsReleaseGuide = fs.readFileSync(new URL("../docs/windows-local-release.md", import.meta.url), "utf8");
 const projectTmp = new URL("../tmp/", import.meta.url).pathname;
 
+test("Linux verification prepares network isolation before development tests", () => {
+  for (const workflow of [release, ci]) {
+    const setup = workflow.indexOf("bash scripts/setup-ci-sandbox.sh");
+    const verification = workflow === release
+      ? workflow.indexOf("pnpm export:public-source")
+      : workflow.indexOf("pnpm -C packages/server test");
+    assert.ok(setup >= 0 && setup < verification);
+  }
+  const setup = fs.readFileSync(new URL("./setup-ci-sandbox.sh", import.meta.url), "utf8");
+  assert.match(setup, /apt-get install -y bubblewrap apparmor/);
+  assert.match(setup, /bwrap --ro-bind \/ \/ --unshare-net -- true/);
+  assert.doesNotMatch(setup, /sysctl|apparmor_restrict_unprivileged_userns|chmod.*\+s/);
+});
+
 test("release gates one npm tarball behind source and native-adapter verification", () => {
   assert.match(release, /NODE_VERSION: "24"/);
   assert.match(release, /^  native-adapters:\n    needs: source-gate\n/m);

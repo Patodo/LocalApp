@@ -126,7 +126,10 @@ async function buildWindowsAdapter({ target, targetDirectory, outputDirectory, b
 async function bundleIpcClient(outfile) {
   await build({
     absWorkingDir: repositoryRoot,
-    alias: { "@localapp/server/device-action-ticket": path.join(repositoryRoot, "packages/server/src/device-action-ticket.ts") },
+    alias: {
+      "@localapp/server/device-action-ticket": path.join(repositoryRoot, "packages/server/src/device-action-ticket.ts"),
+      "@localapp/server/project-api": path.join(repositoryRoot, "packages/server/src/project-api.ts"),
+    },
     bundle: true,
     entryPoints: [path.join(packageDirectory, "src/native/native-ipc-client.ts")],
     format: "esm",

@@ -47,6 +47,9 @@ jobs:
       - name: Validate generated platform contract
         run: pnpm check:capabilities
 
+      - name: Prepare isolated development executor
+        run: bash scripts/setup-ci-sandbox.sh
+
       - name: Build TypeScript applications
         run: |
           pnpm -C packages/server-core build
