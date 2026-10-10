@@ -7,6 +7,7 @@ vi.mock("./dsh-view", () => ({
   DshMarkdown: () => null,
   DshDiff: () => null,
   DshTerminal: () => null,
+  DshRunningStatus: () => <div role="status">正在处理…</div>,
 }));
 vi.mock("./dsh-development-shell", () => ({ DshDevelopmentShell: () => null }));
 it("connects app source without a configured model", async () => {
