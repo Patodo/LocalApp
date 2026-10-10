@@ -1,3 +1,4 @@
+import { resolveDeepSeekPlugin } from "./deepseek-plugin.mjs";
 import fs from "node:fs";
 import { preparePublicSkills } from "./public-agent-skills.js";
 import path from "node:path";
@@ -173,12 +174,12 @@ export async function mountHarnessCapabilities(ctx: Context, root: string, capab
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
   const mount = async (name: string, config: unknown = {}) => {
     const namespace = plugins[name] as { default?: Plugin };
-    await ctx.plugin((namespace.default ?? namespace) as Plugin, config);
+    await ctx.plugin(resolveDeepSeekPlugin(namespace), config);
   };
   await mount("user-approval", { policy: "ask" });
   await mount("user-questions");
   await mount("tool-ask-user");
-  await ctx.plugin(PlanMode.default, { section: "处于计划模式。先阅读和说明实现步骤，不修改文件或应用数据。准备执行时使用退出计划模式工具，让用户确认方案。" });
+  await ctx.plugin(resolveDeepSeekPlugin(PlanMode.default), { section: "处于计划模式。先阅读和说明实现步骤，不修改文件或应用数据。准备执行时使用退出计划模式工具，让用户确认方案。" });
   await mount("commands");
   await mount("token-meter");
   await mount("compaction-basic");
@@ -256,7 +257,7 @@ export async function mountHarnessCapabilities(ctx: Context, root: string, capab
     await mount("tool-subagent", { provider: "fork", toolName: "subagent_fork", enableRunInBackground: capabilities.includes("jobs"), backgroundMode: "one-shot" });
     await mount("tool-subagent-control");
     await ctx.plugin(AgentList);
-    await ctx.plugin(Ralph, { subagentProvider: "spawn", maxRounds: 64 });
+    await ctx.plugin(resolveDeepSeekPlugin(Ralph), { subagentProvider: "spawn", maxRounds: 64 });
   }
   if (capabilities.includes("workflow")) {
     await mount("ptc-runtime-node");
@@ -269,7 +270,7 @@ export async function mountHarnessCapabilities(ctx: Context, root: string, capab
     await mount("tool-web", { fetch: true });
   }
   if (capabilities.includes("mcp")) {
-    await ctx.plugin(McpResources.default);
+    await ctx.plugin(resolveDeepSeekPlugin(McpResources.default));
     for (const server of mcpServers) {
       if (server.transport === "stdio") {
         const confined = await ctx.sandbox.confine([server.command!, ...(server.args ?? [])], { mode: "workspace-write", workspaceRoot: workspace });

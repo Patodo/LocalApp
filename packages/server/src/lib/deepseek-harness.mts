@@ -1,3 +1,4 @@
+import { resolveDeepSeekPlugin } from "./deepseek-plugin.mjs";
 import path from "node:path";
 import type { PythonEnvironment } from "./python-environment.js";
 import { environmentProbe, summarizeEnvironment, type AgentEnvironment, type EnvironmentCheck } from "./agent-environment.js";
@@ -101,24 +102,24 @@ export class DeepSeekHarness {
 
   constructor(private readonly config: Pick<ServerConfig, "llmApiKey" | "llmBaseUrl" | "llmModel"> & { root?: string; capabilities?: AgentCapability[]; mcpServers?: AgentSettings["mcpServers"]; protocol?: AgentProvider["protocol"]; ownerId?: string; skills?: string[]; disabledTools?: string[]; pythonEnvironment?: PythonEnvironment; workspaceRoot?: string; autoSessionTitles?: boolean; dataRoot?: string; networkBlocked?: boolean; readDirectories?: string[] }) {
     this.ready = (async () => {
-      await this.ctx.plugin(LlmRuntime);
-      await this.ctx.plugin(SessionRegistry);
-      await this.ctx.plugin(SessionProjections);
-      if (config.root) await this.ctx.plugin(SessionPersistence, { root: path.join(config.root, "sessions"), compression: "none" });
-      await this.ctx.plugin(SystemPrompt, { includeHarnessIdentity: false, includeRuntimeContext: !!config.root });
-      await this.ctx.plugin(ToolRuntime, { mode: "native" });
-      await this.ctx.plugin(AgentRegistry);
-      await this.ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 });
+      await this.ctx.plugin(resolveDeepSeekPlugin(LlmRuntime));
+      await this.ctx.plugin(resolveDeepSeekPlugin(SessionRegistry));
+      await this.ctx.plugin(resolveDeepSeekPlugin(SessionProjections));
+      if (config.root) await this.ctx.plugin(resolveDeepSeekPlugin(SessionPersistence), { root: path.join(config.root, "sessions"), compression: "none" });
+      await this.ctx.plugin(resolveDeepSeekPlugin(SystemPrompt), { includeHarnessIdentity: false, includeRuntimeContext: !!config.root });
+      await this.ctx.plugin(resolveDeepSeekPlugin(ToolRuntime), { mode: "native" });
+      await this.ctx.plugin(resolveDeepSeekPlugin(AgentRegistry));
+      await this.ctx.plugin(resolveDeepSeekPlugin(AgentLoop), { agents: [], maxParallelToolCalls: 1 });
       if (config.protocol && config.protocol !== "openai-completions") {
         this.ctx.provide("credentials", { resolve: async () => ({ value: config.llmApiKey }), listRecords: async () => [] });
         this.ctx.provide("launchEnvironment", { get: () => undefined });
-        await this.ctx.plugin(PiAi, { providers: { localapp: { api: config.protocol, baseURL: config.llmBaseUrl, apiKeyEnv: "LOCALAPP_USER_MODEL_KEY", models: [{ id: config.llmModel }], retryPolicy: { mode: "normal", maxRetries: 0 } } } });
+        await this.ctx.plugin(resolveDeepSeekPlugin(PiAi), { providers: { localapp: { api: config.protocol, baseURL: config.llmBaseUrl, apiKeyEnv: "LOCALAPP_USER_MODEL_KEY", models: [{ id: config.llmModel }], retryPolicy: { mode: "normal", maxRetries: 0 } } } });
       } else {
         this.ctx.llm.registerAdapter(["localapp"], new LocalAppLlmAdapter(config, (id, event) => id && this.publish(id, event)));
       }
       if (config.autoSessionTitles) {
-        await this.ctx.plugin(SessionTitle, { fallbackMaxWords: 8, fallbackMaxBytes: 120, maxTitleBytes: 160 });
-        await this.ctx.plugin(FirstPromptTitle, { targetWords: 6, targetCjkCharacters: 16, maxInputBytes: 16384, maxOutputTokens: 128, timeoutMs: 20000, provider: "localapp", model: config.llmModel });
+        await this.ctx.plugin(resolveDeepSeekPlugin(SessionTitle), { fallbackMaxWords: 8, fallbackMaxBytes: 120, maxTitleBytes: 160 });
+        await this.ctx.plugin(resolveDeepSeekPlugin(FirstPromptTitle), { targetWords: 6, targetCjkCharacters: 16, maxInputBytes: 16384, maxOutputTokens: 128, timeoutMs: 20000, provider: "localapp", model: config.llmModel });
         this.ctx.on("session/event", (session, event) => {
           if (event.type === "session/title") {
             this.publish(session.id, { type: "session_title", sessionId: session.id, title: this.ctx.sessionTitle.get(session)?.title });

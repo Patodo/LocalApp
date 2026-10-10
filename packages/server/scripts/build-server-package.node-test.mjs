@@ -30,7 +30,7 @@ test("packed Node Server initializes and serves Web without repository dependenc
 
   const child = spawn(process.execPath, [artifact.bin, "start", "--data-dir", dataDirectory, "--port", "0"], {
     cwd: outputDirectory,
-    env: { ...process.env, NODE_PATH: "" },
+    env: { ...process.env, NODE_PATH: "", BOOTSTRAP_API_KEY: "package-agent-regression-key" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";
@@ -44,6 +44,21 @@ test("packed Node Server initializes and serves Web without repository dependenc
     assert.equal(setupResponse.status, 200, stderr);
     assert.match(await setupResponse.text(), /Create|admin|管理员/i);
     assert.equal(await fileExists(path.join(dataDirectory, "jwt.key")), true);
+    const initialize = await fetch(`${ready.url}/api/setup/initialize`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: new URL(ready.setupUrl).searchParams.get("token"), username: "package-agent", password: "package-test-password" }),
+    });
+    assert.equal(initialize.status, 201, await initialize.text());
+    const headers = { "Content-Type": "application/json", "X-API-Key": "package-agent-regression-key" };
+    const settings = await fetch(`${ready.url}/api/agent/settings`, { method: "PUT", headers,
+      body: JSON.stringify({ providers: [{ id: "test", name: "Test", protocol: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", model: "test-model", apiKey: "test-key" }], defaultProviderId: "test", grants: {}, mcpServers: [] }),
+    });
+    assert.equal(settings.status, 200, await settings.text());
+    // This initializes the real packaged harness, including titles and default capabilities,
+    // without making a model request. Source-only tests miss CJS export wrapping failures.
+    const sessions = await fetch(`${ready.url}/api/agent/sessions`, { headers });
+    assert.equal(sessions.status, 200, await sessions.clone().text());
+    assert.deepEqual((await sessions.json()).data, []);
   } finally {
     if (!child.killed) child.kill("SIGTERM");
     await onceExit(child);
