@@ -52,6 +52,12 @@ export async function buildLocalAppPackage(options = {}) {
     alias: {
       "@localapp/server/app-package-api": path.join(projectDirectory, "packages/server/src/app-package-api.ts"),
       "@localapp/server/device-action-ticket": path.join(projectDirectory, "packages/server/src/device-action-ticket.ts"),
+      "@localapp/server/project-api": path.join(projectDirectory, "packages/server/src/project-api.ts"),
+      "@localapp/server/project-api/backend": path.join(projectDirectory, "packages/server/src/project/backend.ts"),
+      "@localapp/server/project-api/check": path.join(projectDirectory, "packages/server/src/project/check.ts"),
+      "@localapp/server/project-api/files": path.join(projectDirectory, "packages/server/src/project/files.ts"),
+      "@localapp/server/project-api/manifest": path.join(projectDirectory, "packages/server/src/project/manifest.ts"),
+      "@localapp/server/project-api/package": path.join(projectDirectory, "packages/server/src/project/package.ts"),
       "@localapp/server-core": path.join(projectDirectory, "packages/server-core/src/index.ts"),
     },
     bundle: true,

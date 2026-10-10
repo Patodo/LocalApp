@@ -121,17 +121,17 @@
     {
       "path": "scripts/export-public-source.mjs",
       "rule": "PRIVATE_TEST_IDENTITY",
-      "sha256": "668e769fcffd6a1a8e2127c6dad600bb2dcfe53b4fd7a9ed48ae6fc1e5746918"
+      "sha256": "270f247647f67dc07bddc9d2c9968fe3cda21b01603222cb01d8ebb617fe5529"
     },
     {
       "path": "scripts/export-public-source.node-test.mjs",
       "rule": "PRIVATE_TEST_IDENTITY",
-      "sha256": "fe915223346cc448802b60ca80e0533e3b116e5661b8a73b2d1b0b2c5187dade"
+      "sha256": "d9ac260a31d28bd8d4cc4625e9000d5fb494db47d79dc2c6c4d3d1c08e9c43c8"
     },
     {
       "path": "scripts/export-public-source.node-test.mjs",
       "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "fe915223346cc448802b60ca80e0533e3b116e5661b8a73b2d1b0b2c5187dade"
+      "sha256": "d9ac260a31d28bd8d4cc4625e9000d5fb494db47d79dc2c6c4d3d1c08e9c43c8"
     },
     {
       "path": "scripts/release-workflow.node-test.mjs",

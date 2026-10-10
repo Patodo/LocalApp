@@ -35,6 +35,7 @@ test("snapshot verification uses the unified package and no replaced Rust or Des
     "pnpm -C packages/server-core test",
     "pnpm -C packages/web build",
     "pnpm -C packages/web test",
+    "pnpm package:localapp",
     "pnpm -C packages/server build",
     "pnpm -C packages/server test",
     "pnpm -C packages/crdt build",
