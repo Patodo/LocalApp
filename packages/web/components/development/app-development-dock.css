@@ -22,7 +22,7 @@
     0 0 0 1px #4587ff,
     0 12px 36px #00000012;
 }
-.app-development-dock button,
+.app-development-dock button:not(.agent-interaction-card *, .dsh-process-row *),
 .app-development-dock a {
   display: inline-flex;
   align-items: center;
@@ -36,11 +36,11 @@
   border-radius: 8px;
   padding: 7px;
 }
-.app-development-dock button:hover,
+.app-development-dock button:not(.agent-interaction-card *, .dsh-process-row *):hover,
 .app-development-dock a:hover {
   background: #88888810;
 }
-.app-development-dock button:disabled {
+.app-development-dock button:not(.agent-interaction-card *, .dsh-process-row *):disabled {
   opacity: 0.35;
   cursor: default;
 }
@@ -52,8 +52,9 @@
   color: var(--muted-foreground, #737373);
   border-bottom: 1px solid #88888815;
 }
-.development-dock-header .dock-title {
+.app-development-dock .development-dock-header .dock-title {
   justify-content: flex-start;
+  text-align: left;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -61,6 +62,15 @@
   white-space: nowrap;
   font-size: 14px;
   font-weight: 500;
+}
+.development-dock-header .dock-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.development-dock-header .dock-title svg {
+  flex-shrink: 0;
 }
 .development-dock-tools {
   display: flex;
@@ -281,31 +291,39 @@
   transform: translateX(-50%);
   z-index: 35;
 }
-.development-mini-restore {
+.development-mini.dsh-development {
+  background: transparent;
+}
+.development-mini .development-mini-restore {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid #88888825;
-  border-radius: 50%;
-  background: var(--background, #fff);
-  color: var(--muted-foreground, #737373);
-  box-shadow: 0 4px 14px #0000000d;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  corner-shape: round;
+  background: #fff;
+  color: #475569;
+  box-shadow: 0 4px 12px #00000018;
+  transition: transform 150ms ease, box-shadow 150ms ease;
   cursor: pointer;
 }
-.development-mini-restore:hover {
-  background: var(--muted, #f6f6f6);
+.development-mini .development-mini-restore:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px #00000024;
 }
+.development-mini .development-mini-restore > svg { width: 20px; height: 20px; }
 .development-mini-restore:focus-visible {
   outline: 2px solid #4587ff;
   outline-offset: 3px;
 }
 .development-mini-dot {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 1px;
+  right: 1px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -377,3 +395,11 @@
 .dock-history-menu > .dock-identity { border-radius: 8px; }
 .dock-history-menu button:focus { outline: none; }
 .dock-history-menu button:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #a3a3a3); }
+
+.dsh-tool-section { min-width: 0; padding: 4px 0 8px 22px; }
+.dsh-tool-section-title { margin: 4px 0; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+
+.app-development-dock.dsh-development,
+.dark .app-development-dock.dsh-development {
+  --dsw-alias-bg-base: var(--background, #fff);
+}

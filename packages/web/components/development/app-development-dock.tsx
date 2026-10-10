@@ -27,7 +27,7 @@ import {
   Check,
 } from "lucide-react";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
-import { DshDiff, DshMarkdown, DshMessages, DshTerminal } from "./dsh-view";
+import { DshDiff, DshMarkdown, DshMessages, DshTerminal, DshRunningStatus } from "./dsh-view";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import "./app-development-dock.css";
@@ -53,6 +53,9 @@ export function AppDevelopmentDock(
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {if (input.application && new URLSearchParams(window.location.search).get("creation")) setExpanded(true);}, []);
   const [minimized, setMinimized] = useState(false);
+  useEffect(() => {
+    input.onVisibilityChange?.(!minimized);
+  }, [minimized, input.onVisibilityChange]);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyTrigger = useRef<HTMLButtonElement>(null);
@@ -218,7 +221,6 @@ export function AppDevelopmentDock(
           }
           onClick={() => {
             setMinimized(false);
-            input.onVisibilityChange?.(true);
             setPreviewVisible(false);
           }}
         >
@@ -250,7 +252,6 @@ export function AppDevelopmentDock(
           onClick={() => {
             setHistoryOpen(false);
             setMinimized(true);
-            input.onVisibilityChange?.(false);
           }}
         >
           <Minus size={16} />
@@ -266,7 +267,7 @@ export function AppDevelopmentDock(
             aria-expanded={historyOpen}
             disabled={p.running || p.pending || (!p.project && !input.onIdentityChange)}
           >
-            {conversationTitle}
+            <span className="dock-title-text">{conversationTitle}</span>
             <ChevronDown size={14} />
           </Button>
           </DropdownMenuTrigger>
@@ -408,13 +409,10 @@ export function AppDevelopmentDock(
             )}
             {panel === "chat" && (
               <>
-                <DshMessages messages={p.messages} />
+                <DshMessages messages={p.messages} running={p.running} />
                 {p.live && <DshMarkdown text={p.live} />}
                 {p.running && (
-                  <p className="dock-run-status">
-                    <LoaderCircle className="dock-spinner" size={14} />
-                    正在处理…
-                  </p>
+                  <DshRunningStatus />
                 )}
                 {p.project && !p.messages.length && !p.running && (
                   <p className="dock-hint">

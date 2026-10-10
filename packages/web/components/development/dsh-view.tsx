@@ -1,9 +1,14 @@
 "use client";
+import { ConversationProcess } from "./conversation-process";
+import { ToolCallRow } from "./tool-call-row";
+import { ReasoningBlock } from "./reasoning-block";
 import {
   MarkdownText,
   TerminalBlock,
   DiffBlock,
   ReadBlock,
+  TextShimmer,
+  StateDot,
 } from "@deepseek-ai/dsh-client-ui-primitives";
 import "./dsh-theme.css";
 import userCss from "./upstream/MessageItem.module.css";
@@ -25,13 +30,16 @@ const folding = {
 export const DshMarkdown = ({
   text,
   streaming = false,
+  compact = false,
 }: {
   text: string;
   streaming?: boolean;
+  compact?: boolean;
 }) => (
   <MarkdownText
     text={text}
     streaming={streaming}
+    variant={compact ? "compact" : "body"}
     labels={{
       code: {
         copyLabel: "复制",
@@ -42,6 +50,9 @@ export const DshMarkdown = ({
     }}
   />
 );
+export function DshRunningStatus() {
+  return <div className="dock-run-status" role="status"><StateDot state="ongoing" size={14} /><TextShimmer active>正在处理…</TextShimmer></div>;
+}
 export const DshDiff = ({
   changes,
 }: {
@@ -90,70 +101,44 @@ export const DshRead = ({ text, path }: { text: string; path?: string }) => (
     labels={{ ...folding, window: (n, total) => `${n} / ${total} 行` }}
   />
 );
-export function DshMessages({ messages }: { messages: any[] }) {
+export function DshMessages({ messages, running = false }: { messages: any[]; running?: boolean }) {
   const tools = new Map<string, any>();
-  for (const m of messages)
-    for (const b of Array.isArray(m.content) ? m.content : [])
-      if (b.type === "toolCall") tools.set(b.id, b);
-  return (
-    <div className="space-y-4">
-      {messages.map((m, i) => {
-        if (m.role === "toolResult") {
-          const tool = tools.get(m.toolCallId),
-            text = (m.content ?? []).map((b: any) => b.text ?? "").join("\n");
-          return (
-            <details key={i} className="dsh-tool-result">
-              <summary>
-                {tool?.name ?? "工具结果"}
-                {m.isError ? " · 失败" : ""}
-              </summary>
-              {tool?.name === "bash" ? (
-                <DshTerminal
-                  command={String(tool.arguments?.command ?? "")}
-                  output={text}
-                />
-              ) : (
-                <DshRead
-                  text={text}
-                  path={tool?.arguments?.file_path ?? tool?.arguments?.path}
-                />
-              )}
-            </details>
-          );
-        }
-        return (
-          <article
-            key={i}
-            className={m.role === "user" ? userCss.userRow : assistantCss.root}
-          >
-            <div
-              className={
-                m.role === "user" ? userCss.userStack : assistantCss.body
-              }
-            >
-              <div
-                data-localapp-user-bubble={m.role === "user" ? "" : undefined}
-                className={m.role === "user" ? userCss.bubble : undefined}
-              >
-                {typeof m.content === "string" ? (
-                  <DshMarkdown text={m.content} />
-                ) : (
-                  m.content?.map((b: any, j: number) =>
-                    b.type === "text" ? (
-                      <DshMarkdown key={j} text={b.text} />
-                    ) : b.type === "reasoning" ? (
-                      <details key={j}>
-                        <summary>思考</summary>
-                        <DshMarkdown text={b.text} />
-                      </details>
-                    ) : b.type === "toolCall" ? null : null,
-                  )
-                )}
-              </div>
-            </div>
-          </article>
-        );
-      })}
-    </div>
-  );
+  const results = new Map(messages.filter(m => m.role === "toolResult").map(m => [m.toolCallId, m]));
+  for (const message of messages)
+    for (const block of Array.isArray(message.content) ? message.content : [])
+      if (block.type === "toolCall") tools.set(block.id, block);
+  const turns: Array<{ user?: any; messages: any[]; key: number }> = [];
+  for (const message of messages) {
+    if (message.role === "user") turns.push({ user: message, messages: [], key: turns.length });
+    else {
+      if (!turns.length) turns.push({ messages: [], key: 0 });
+      turns[turns.length - 1].messages.push(message);
+    }
+  }
+  return <div className="space-y-4">{turns.map((turn, turnIndex) => {
+    const active = running && turnIndex === turns.length - 1;
+    const lastAssistant = turn.messages.findLastIndex(message => message.role === "assistant");
+    const process: React.ReactNode[] = [];
+    const answer: React.ReactNode[] = [];
+    turn.messages.forEach((message, index) => {
+      if (message.role === "toolResult") {
+        if (!tools.has(message.toolCallId)) process.push(<ToolCallRow key={`orphan-${index}`} call={{ name: "工具结果" }} result={message} />);
+        return;
+      }
+      const blocks = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content ?? [];
+      const final = index === lastAssistant && !blocks.some((block: any) => block.type === "toolCall");
+      blocks.forEach((block: any, blockIndex: number) => {
+        const key = `${index}-${blockIndex}`;
+        if (block.type === "text") (final ? answer : process).push(<DshMarkdown key={key} text={block.text} />);
+        else if (block.type === "reasoning") process.push(<ReasoningBlock key={key} text={block.text} running={active && index === lastAssistant} />);
+        else if (block.type === "toolCall") process.push(<ToolCallRow key={key} call={block} result={results.get(block.id)} running={active} />);
+      });
+    });
+    const userText = typeof turn.user?.content === "string" ? turn.user.content : turn.user?.content?.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
+    return <div key={turn.key} className="space-y-3">
+      {turn.user && <article className={userCss.userRow}><div className={userCss.userStack}><div data-localapp-user-bubble="" className={userCss.bubble}><DshMarkdown text={userText ?? ""} /></div></div></article>}
+      {process.length > 0 && <ConversationProcess running={active}>{process}</ConversationProcess>}
+      {answer.length > 0 && <article className={assistantCss.root}><div className={assistantCss.body}>{answer}</div></article>}
+    </div>;
+  })}</div>;
 }

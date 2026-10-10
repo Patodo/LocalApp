@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { HarnessAgent } from "@localapp/sdk-agent/harness-client";
-import { InteractionCard } from "@localapp/sdk-agent/agent-controls";
+import { AgentInteractionCard } from "./agent-interaction-card";
 import { DevelopmentPage } from "./development-page";
 import { AppDevelopmentDock } from "./app-development-dock";
 import type { DevelopmentShellProps } from "./dsh-development-shell";
@@ -22,6 +22,7 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
   const [providers, setProviders] = useState<DevelopmentShellProps["providers"]>([]);
   const [sessions, setSessions] = useState<DevelopmentShellProps["sessions"]>([]);
   const [pending, setPending] = useState(false);
+  const [answering, setAnswering] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [, update] = useState(0);
   useEffect(() => {
@@ -76,8 +77,11 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
   };
   const dock = { identity: isOwner ? identity : "user" as const, userConversation: conversation,
     onIdentityChange: isOwner ? setIdentity : undefined, reveal, minimize, onVisibilityChange, onPreview,
-    userInteractions: agent?.state.interactions.map(interaction => <InteractionCard key={interaction.token} interaction={interaction}
-      answer={result => void act(() => agent.answerInteraction(interaction.token, result))} />) };
+    userInteractions: agent?.state.interactions.map(interaction => <AgentInteractionCard key={interaction.token} interaction={interaction} pending={answering === interaction.token}
+      answer={result => {
+        setAnswering(interaction.token);
+        void act(() => agent.answerInteraction(interaction.token, result)).finally(() => setAnswering(null));
+      }} />) };
   return isOwner
     ? <DevelopmentPage application={application} dock={dock} />
     : <AppDevelopmentDock {...conversation} {...dock} application={application} />;
