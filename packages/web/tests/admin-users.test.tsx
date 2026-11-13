@@ -125,3 +125,23 @@ describe("AdminUsers one-time credentials", () => {
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 });
+
+ it("searches all users from page one and clears the filter", async () => {
+  const fetchMock = vi.fn(async (url: string | URL | Request) => jsonResponse(
+    String(url).includes("search=")
+      ? { ...usersResponse, data: [], pagination: { page: 1, limit: 20, total: 0 } }
+      : { ...usersResponse, pagination: { page: 1, limit: 20, total: 21 } },
+  ));
+  vi.stubGlobal("fetch", fetchMock);
+  render(<AdminUsers />);
+  fireEvent.click(await screen.findByRole("button", { name: "下一页" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/admin/users?page=2&limit=20", expect.anything()));
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索用户" }), { target: { value: "  Alice & Bob  " } });
+  fireEvent.click(screen.getByRole("button", { name: "搜索", exact: true }));
+  await screen.findByText("未找到匹配的用户");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/admin/users?page=1&limit=20&search=Alice+%26+Bob", expect.anything());
+  fireEvent.click(screen.getByRole("button", { name: "清除" }));
+  await screen.findByRole("button", { name: "重置密码" });
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/admin/users?page=1&limit=20", expect.anything());
+  expect(screen.getByRole("textbox", { name: "搜索用户" })).toHaveValue("");
+});

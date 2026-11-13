@@ -18,6 +18,29 @@ describe("Admin Create User", () => {
     await stop();
   });
 
+  it("searches user IDs and names before pagination and treats wildcards literally", async () => {
+    provisionUserWithApiKey("search-one", "Alpha User", "hash", "search-key-one");
+    provisionUserWithApiKey("search-two", "Alpha Other", "hash", "search-key-two");
+    provisionUserWithApiKey("literal_user", "Percent%Name", "hash", "search-key-three");
+    const query = async (search: string, page = 1) => {
+      const res = await fetch(`${baseUrl}/api/admin/users?limit=1&page=${page}&search=${encodeURIComponent(search)}`, {
+        headers: { "X-API-Key": apiKey },
+      });
+      expect(res.status).toBe(200);
+      return res.json();
+    };
+    const first = await query(" ALPHA ");
+    const second = await query("alpha", 2);
+    expect(first.pagination.total).toBe(2);
+    expect(second.pagination.total).toBe(2);
+    expect(first.data).toHaveLength(1);
+    expect(second.data[0].id).not.toBe(first.data[0].id);
+    expect((await query("SEARCH-ONE")).data[0].id).toBe("search-one");
+    expect((await query("%")).data[0].id).toBe("literal_user");
+    expect((await query("_")).pagination.total).toBe(1);
+    expect((await query("no-such-user")).pagination.total).toBe(0);
+  });
+
   describe("POST /api/admin/users", () => {
     it("atomically provisions a user with one-time random credentials", async () => {
       const res = await fetch(`${baseUrl}/api/admin/users`, {

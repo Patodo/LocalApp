@@ -29,7 +29,7 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
     return () => controller.abort();
   }, []);
   const canDevelop = isOwner && ui?.developer === true;
-  const [identity, setIdentity] = useState<"developer" | "user">(isOwner ? "developer" : "user");
+  const [identity, setIdentity] = useState<"developer" | "user">("user");
   const [prompt, setPrompt] = useState("");
   const [providers, setProviders] = useState<DevelopmentShellProps["providers"]>([]);
   const [sessions, setSessions] = useState<DevelopmentShellProps["sessions"]>([]);
@@ -63,7 +63,6 @@ export function AppConversationDock({ application, isOwner, agent, onSend, revea
   useEffect(() => {if (identity === "user") onPreview?.(null);}, [identity]);
   useEffect(() => { if (reveal && userConversationEnabled) setIdentity("user"); }, [reveal, userConversationEnabled]);
   useEffect(() => { if (developerReveal) setIdentity("developer"); }, [developerReveal]);
-  useEffect(() => { if (!userConversationEnabled) setIdentity("developer"); }, [userConversationEnabled]);
   const act = async (operation: () => Promise<void>) => {
     setPending(true); setError("");
     try { await operation(); } catch (error) { setError((error as Error).message); }

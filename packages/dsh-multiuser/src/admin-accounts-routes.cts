@@ -29,7 +29,9 @@ export async function registerAdministratorAccounts(app: FastifyInstance, host: 
     const page = Math.max(1, parseInt((req.query as any).page || "1", 10));
     const limit = Math.min(100, Math.max(1, parseInt((req.query as any).limit || "20", 10)));
 
-    const { data, total } = host.accounts.listUsers(page, limit);
+    const query = req.query as { search?: unknown };
+    const search = typeof query.search === "string" ? query.search.trim() : "";
+    const { data, total } = host.accounts.listUsers(page, limit, search);
     const users = data.map((u) => {
       const { pages, storageUsed } = host.applicationSummary(u.id);
       return {

@@ -26,6 +26,9 @@ export default function AdminUsers() {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -39,13 +42,22 @@ export default function AdminUsers() {
   const limit = 20;
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
-    fetch(`/api/admin/users?page=${page}&limit=${limit}`, { credentials: "include" })
-      .then((r) => r.json())
-      .then((res) => { setUsers(res.data); setTotal(res.pagination.total); })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [page]);
+    setError("");
+    const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (search) params.set("search", search);
+    fetch(`/api/admin/users?${params}`, { credentials: "include" })
+      .then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+        return body;
+      })
+      .then((res) => { if (active) { setUsers(res.data); setTotal(res.pagination.total); } })
+      .catch((e) => { if (active) setError(e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [page, search, refresh]);
 
   const handleDelete = async (id: string) => {
     try {
@@ -100,12 +112,7 @@ export default function AdminUsers() {
         apiKey: body.data.credentials.apiKey,
       });
       toast.success(`用户 ${created} 已创建`);
-      setLoading(true);
-      fetch(`/api/admin/users?page=${page}&limit=${limit}`, { credentials: "include" })
-        .then((r) => r.json())
-        .then((res) => { setUsers(res.data); setTotal(res.pagination.total); })
-        .catch((e) => setError(e.message))
-        .finally(() => setLoading(false));
+      setRefresh(value => value + 1);
     } catch (e) {
       setCreateError((e as Error).message);
     } finally {
@@ -132,12 +139,7 @@ export default function AdminUsers() {
       const target = users.find((u) => u.id === id);
       const name = target?.name ?? id;
       toast.success(`已将 ${name} 切换为${targetRole === "admin" ? "管理员" : "普通用户"}`);
-      setLoading(true);
-      fetch(`/api/admin/users?page=${page}&limit=${limit}`, { credentials: "include" })
-        .then((r) => r.json())
-        .then((res) => { setUsers(res.data); setTotal(res.pagination.total); })
-        .catch((e) => setError(e.message))
-        .finally(() => setLoading(false));
+      setRefresh(value => value + 1);
     } catch (e) {
       toast.error((e as Error).message);
       setRoleToggleId(null);
@@ -152,9 +154,19 @@ export default function AdminUsers() {
         <h1 className="text-2xl font-bold">用户管理</h1>
         <Button size="sm" onClick={() => { setCreateOpen(true); setCreateError(""); }}>创建用户</Button>
       </div>
+      <form className="flex items-center gap-2 mb-4" onSubmit={event => {
+        event.preventDefault(); setPage(1); setSearch(searchInput.trim());
+      }}>
+        <Input className="max-w-sm" aria-label="搜索用户" placeholder="搜索用户 ID 或名称"
+          value={searchInput} onChange={event => setSearchInput(event.target.value)} />
+        <Button type="submit" variant="outline">搜索</Button>
+        {(searchInput || search) && <Button type="button" variant="ghost" onClick={() => {
+          setSearchInput(""); setSearch(""); setPage(1);
+        }}>清除</Button>}
+      </form>
       {error && <p className="text-destructive mb-4">{error}</p>}
       {loading && <p className="text-muted-foreground">加载中...</p>}
-      {!loading && (
+      {!loading && !error && (
         <>
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full text-sm">
@@ -167,6 +179,9 @@ export default function AdminUsers() {
                 </tr>
               </thead>
               <tbody>
+                {users.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                  {search ? "未找到匹配的用户" : "暂无用户"}
+                </td></tr>}
                 {users.map((u) => {
                   const isProtected = PROTECTED_USER_IDS.includes(u.id);
                   return (

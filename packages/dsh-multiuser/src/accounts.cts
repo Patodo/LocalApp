@@ -242,16 +242,20 @@ export class AccountStore {
     return user ? user.role : null;
   }
 
-  listUsers(page: number, limit: number): { data: UserRecord[]; total: number } {
+  listUsers(page: number, limit: number, search = ""): { data: UserRecord[]; total: number } {
     const d = this.persistence.database();
-    const countStmt = d.prepare("SELECT COUNT(*) as total FROM users");
+    const term = search.trim();
+    const where = term ? " WHERE instr(lower(id), lower(?)) > 0 OR instr(lower(name), lower(?)) > 0" : "";
+    const params = term ? [term, term] : [];
+    const countStmt = d.prepare("SELECT COUNT(*) as total FROM users" + where);
+    countStmt.bind(params);
     countStmt.step();
     const total = (countStmt.getAsObject() as { total: number }).total;
     countStmt.free();
 
     const offset = (page - 1) * limit;
-    const stmt = d.prepare("SELECT id, name, password, provider, role, created_at, display_name, avatar_url, bio, must_change_password FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?");
-    stmt.bind([limit, offset]);
+    const stmt = d.prepare("SELECT id, name, password, provider, role, created_at, display_name, avatar_url, bio, must_change_password FROM users" + where + " ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?");
+    stmt.bind([...params, limit, offset]);
     const data: UserRecord[] = [];
     while (stmt.step()) {
       data.push(toUserRecord(stmt.getAsObject() as unknown as UserRow));
