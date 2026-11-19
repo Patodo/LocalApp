@@ -40,6 +40,7 @@ import { listUsers, getDb, flushMetaDb, findUserById, validateApiKey } from "./l
 import { SetupTokenStore } from "./lib/setup-token-store.js";
 import { createServerConfigStore, type ServerConfigStore } from "./lib/server-config-store.js";
 import { systemRoutes, type RestartController } from "./routes/system.js";
+import { scheduledScriptRoutes } from "./routes/scheduled-scripts.js";
 import { createBuildOperations } from "./lib/development/builds.js";
 import { previewHost } from "./lib/development/previews.js";
 import { createDevelopmentRoutesHost } from "./routes/development.js";
@@ -105,6 +106,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     restartController: options.restartController ?? { requestRestart: (exitCode) => process.exit(exitCode) },
     enableDevTools: options.enableDevTools ?? env.LOCALAPP_DEV_TOOLS === "1",
   });
+  if (config.scheduledScriptsFile) await scheduledScriptRoutes(app, config.scheduledScriptsFile, env);
   return app;
   } catch (error) {
     await app.close();
