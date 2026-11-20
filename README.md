@@ -277,6 +277,10 @@ docker save localapp:local -o localapp-image.tar
 docker load -i localapp-image.tar
 ```
 
+### 配置服务器定时脚本
+
+统一 Server 可按时区和每日时间窗口运行运维登记的脚本。管理员可以通过用户组授予特定账号查看和手动运行权限。参见 [服务器定时脚本配置](docs/scheduled-server-scripts.md)。
+
 ### 配置应用开发预览
 
 这里配置的是平台内“开发者模式”的构建预览；本地源码项目的 `localapp dev` 用法见前文。

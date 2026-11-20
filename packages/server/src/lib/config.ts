@@ -35,6 +35,7 @@ export interface ServerConfig {
   appDataArchiveMaxFiles: number;
   deviceControlToken?: string;
   notificationControlToken?: string;
+  scheduledScriptsFile?: string;
 }
 
 const DEFAULTS: ServerConfig = {
@@ -119,6 +120,7 @@ async function readTomlConfig(dataDir: string): Promise<TomlConfigResult> {
   if (server?.app_data_expanded_max_bytes != null) result.appDataExpandedMaxBytes = Number(server.app_data_expanded_max_bytes);
   if (server?.app_data_archive_max_files != null) result.appDataArchiveMaxFiles = Number(server.app_data_archive_max_files);
   if (server?.data_dir != null) result.dataDir = String(server.data_dir);
+  if (server?.scheduled_scripts_file != null) result.scheduledScriptsFile = String(server.scheduled_scripts_file);
   if (auth?.jwt_secret != null) result.jwtSecret = String(auth.jwt_secret);
   if (auth?.bootstrap_api_key != null) result.bootstrapApiKey = String(auth.bootstrap_api_key);
   if (auth?.admin_default_password != null) result.adminDefaultPassword = String(auth.admin_default_password);
@@ -385,6 +387,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     port: listenPort,
     // dataDir is determined before reading config.toml — toml's data_dir must not override
     dataDir: dataDir,
+    scheduledScriptsFile: pickEnv(env, "LOCALAPP_SCHEDULED_SCRIPTS_FILE", toml.scheduledScriptsFile, ""),
     listenHost: pickEnv(env, "LISTEN_HOST", persisted.listenHost, DEFAULTS.listenHost),
     listenPort,
     publicUrl: pickEnv(env, "PUBLIC_URL", persisted.publicUrl, DEFAULTS.publicUrl),
