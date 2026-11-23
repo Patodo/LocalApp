@@ -477,12 +477,10 @@ it("keeps the mode switch in the composer without opening history", () => {
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
-it("previews the user interface without mounting disabled user AI and can return to development", () => {
-  const onIdentityChange = vi.fn();
-  render(<AppDevelopmentDock {...props()} identity="user" userConversationEnabled={false} onIdentityChange={onIdentityChange} />);
-  expect(screen.getByLabelText("应用用户模式")).toBeInTheDocument();
-  expect(screen.queryByLabelText("应用对话消息")).toBeNull();
-  expect(screen.queryByTitle("原生应用用户对话")).toBeNull();
-  fireEvent.click(screen.getByLabelText("切换对话身份"));
-  expect(onIdentityChange).toHaveBeenCalledWith("developer");
+it("hides the user dock when app AI is disabled and keeps the developer dock available", () => {
+  const dockProps = { ...props(), userConversationEnabled: false, onIdentityChange: vi.fn() };
+  const view = render(<AppDevelopmentDock {...dockProps} identity="user" />);
+  expect(view.container).toBeEmptyDOMElement();
+  view.rerender(<AppDevelopmentDock {...dockProps} identity="developer" />);
+  expect(screen.getByLabelText("应用开发对话")).toBeInTheDocument();
 });

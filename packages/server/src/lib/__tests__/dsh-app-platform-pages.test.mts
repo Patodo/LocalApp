@@ -1,3 +1,5 @@
+import { writeAppPackage } from "@localapp/app-foundation/app-package";
+import { installAppPackage } from "@localapp/dsh-app-platform/app-installer";
 import Fastify from "fastify";
 import fs from "node:fs";
 import path from "node:path";
@@ -106,4 +108,49 @@ it("serves the formal application shell with access checks outside LocalApp Serv
     expect((await app.inject("/owner/demo")).statusCode).toBe(403);
     expect(views).toHaveLength(1);
   } finally { await app.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+it("lists only the live frontend files for an authorized shadow client", async () => {
+  const dataDir = fs.mkdtempSync(path.resolve("../../tmp/platform-shadow-"));
+  const app = Fastify();
+  let visitor: string | undefined = "owner";
+  await registerApplicationResources(app, {
+    dataDir: () => dataDir, visitorId: () => visitor,
+    validateApiKey: () => null, verification: () => null,
+    handleApi: () => ({ success: true, origin: "source" }),
+  });
+  try {
+    const packagePath = path.join(dataDir, "demo.localapp");
+    const desktop = { shortcuts: [{ id: "create", label: "Create", accelerator: "Alt+N", route: "?action=create" }] };
+    await writeAppPackage({
+      outputPath: packagePath,
+      metadata: { schemaVersion: 1, appId: "demo", version: "1.0.0", platformVersion: "^1.2" },
+      files: [
+        { path: "manifest.json", content: Buffer.from(JSON.stringify({
+          name: "demo", platformVersion: "^1.2", distDir: "dist", pageAccess: { level: "owner" }, desktop,
+        })) },
+        { path: "dist/index.html", content: Buffer.from("published frontend") },
+      ],
+    });
+    const installed = await installAppPackage({ dataDir, ownerId: "owner", packagePath });
+    const url = "/api/shadow/owner/demo/frontend";
+    const response = await app.inject(url);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      version: "1.0.0", digest: installed.digest, desktop,
+      files: [{ path: "index.html", size: 18, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }],
+    });
+    const headers = { "if-none-match": String(response.headers.etag) };
+    expect((await app.inject({ url, headers })).statusCode).toBe(304);
+    expect((await app.inject("/serve/owner/demo/index.html")).body).toBe("published frontend");
+    expect((await app.inject("/serve/owner/demo/api/test")).json().origin).toBe("source");
+    visitor = undefined;
+    expect((await app.inject(url)).statusCode).toBe(401);
+    visitor = "other";
+    expect((await app.inject({ url, headers })).statusCode).toBe(403);
+    expect((await app.inject("/api/shadow/%2e%2e/demo/frontend")).statusCode).toBe(404);
+  } finally {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });

@@ -1,19 +1,26 @@
 export interface PeerProtocolHost {
+  dataDir?: string;
   keyOwner(key: string): string | null;
   user(id: string): { id: string; name: string; displayName: string | null } | null;
 }
 import type { FastifyInstance } from "fastify";
-import { MAX_APP_PACKAGE_BYTES } from "@localapp/app-foundation/app-package";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { getPageDir, readPageMeta } from "@localapp/app-foundation/page-storage";
+import { validateName } from "@localapp/app-foundation/validate-name";
+import { inspectAppPackage, MAX_APP_PACKAGE_BYTES } from "@localapp/app-foundation/app-package";
 
 export const PEER_PROTOCOL_VERSION = 2;
 
 export async function registerPeerProtocol(app: FastifyInstance, host: PeerProtocolHost): Promise<void> {
-  app.get("/api/peer/capabilities", async (req, reply) => {
-    const authorization = req.headers.authorization;
+  function identify(authorization: unknown) {
     const match = typeof authorization === "string" ? /^Bearer ([^\s]+)$/.exec(authorization) : null;
     const userId = match ? host.keyOwner(match[1]) : null;
-    if (!userId) return reply.status(401).send({ success: false, error: "Authentication required" });
-    const user = host.user(userId);
+    return userId ? host.user(userId) : null;
+  }
+  app.get("/api/peer/capabilities", async (req, reply) => {
+    const user = identify(req.headers.authorization);
     if (!user) return reply.status(401).send({ success: false, error: "Authentication required" });
     return {
       success: true,
@@ -23,5 +30,39 @@ export async function registerPeerProtocol(app: FastifyInstance, host: PeerProto
         transferLimits: { maxPackageBytes: MAX_APP_PACKAGE_BYTES },
       },
     };
+  });
+
+  const dataDir = host.dataDir;
+  if (!dataDir) return;
+  app.get("/api/peer/apps", async (req, reply) => {
+    const user = identify(req.headers.authorization);
+    if (!user) return reply.code(401).send({ success: false, error: "Authentication required" });
+    const dir = path.join(dataDir, user.id);
+    const entries = await readdir(dir, { withFileTypes: true }).catch(error => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    const apps = entries.filter(entry => entry.isDirectory() && !validateName(entry.name)).flatMap(entry => {
+      const meta = readPageMeta(dataDir, user.id, entry.name);
+      const version = meta?.versions.find(item => item.version === meta.currentVersion);
+      if (!meta || !version?.packagePath || !version.appVersion || !version.digest) return [];
+      return [{ name: entry.name, owner: user.name, description: meta.description, version: version.appVersion, digest: version.digest }];
+    });
+    return { success: true, data: apps };
+  });
+  app.get<{ Params: { name: string }; Querystring: { digest?: string } }>("/api/peer/apps/:name/package", async (req, reply) => {
+    const user = identify(req.headers.authorization);
+    if (!user) return reply.code(401).send({ success: false, error: "Authentication required" });
+    const { name } = req.params;
+    const meta = !validateName(name) && readPageMeta(dataDir, user.id, name);
+    const version = meta ? meta.versions.find(item => item.version === meta.currentVersion) : undefined;
+    const root = path.join(getPageDir(dataDir, user.id, name), ".packages");
+    const filename = version?.packagePath && path.resolve(path.dirname(root), version.packagePath);
+    if (!filename || path.dirname(filename) !== root) return reply.code(404).send({ success: false, error: "Application package unavailable" });
+    if (!version?.digest || req.query.digest !== version.digest) return reply.code(409).send({ success: false, error: "Application version changed" });
+    const inspected = await inspectAppPackage(filename).catch(() => null);
+    if (!inspected || inspected.digest !== version.digest) return reply.code(409).send({ success: false, error: "Application package changed" });
+    reply.header("Cache-Control", "no-store").header("Content-Length", (await stat(filename)).size);
+    return reply.type("application/octet-stream").send(createReadStream(filename));
   });
 }

@@ -2,10 +2,10 @@
 
 ## 当前架构边界
 
-- 用户只安装一个 `localapp` npm 包；它提供唯一 TypeScript CLI、统一 Server 的前台/daemon 模式、模板与按平台 native adapter。
+- `localapp` npm 包提供唯一 TypeScript CLI、统一 Server 的前台/daemon 模式、模板与按平台 native adapter。
 - `localapp server` 管理当前用户 daemon，`localapp server run` 以前台模式运行同一 Server；不要新增第二套本地后端或独立 Server launcher。
 - native adapter 只负责 `localapp://`、系统通知及必要的操作系统注册；安全判断、动作执行、应用托管和数据能力都属于 Server。
-- 不要恢复独立原生 CLI、Desktop/Tauri package、托盘界面或 Local Runtime 产品边界。
+- Electron 桌面端提供应用窗口，复用 npm 包中的统一 Server。不要新增独立原生 CLI 或第二套后端。
 
 ## 测试方法
 

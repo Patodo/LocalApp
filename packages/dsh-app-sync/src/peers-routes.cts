@@ -1,3 +1,13 @@
+import { createWriteStream } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import path from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { inspectAppPackage, MAX_APP_PACKAGE_BYTES } from "@localapp/app-foundation/app-package";
+import { installAppPackage } from "@localapp/app-foundation/app-installer";
+import { readPageMeta } from "@localapp/app-foundation/page-storage";
+import { validateName } from "@localapp/app-foundation/validate-name";
+import type { FastifyRequest } from "fastify";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { checkPeerCapabilities, normalizePeerUrl } from "@localapp/dsh-app-sync/peer-client";
 import { PeerStore } from "@localapp/dsh-app-sync/peer-store";
@@ -9,11 +19,95 @@ type PeerRequestBody = {
   acceptInsecureHttp?: unknown;
 };
 
-export async function registerPeers(app: FastifyInstance, peerStore: PeerStore, authenticate: (app: FastifyInstance) => Promise<void>): Promise<void> {
+export async function registerPeers(app: FastifyInstance, peerStore: PeerStore, authenticate: (app: FastifyInstance) => Promise<void>, catalog?: { dataDir: string; userId(request: FastifyRequest): string }): Promise<void> {
   await app.register(async (adminScope) => {
     await authenticate(adminScope);
 
     adminScope.get("/api/peers", async () => ({ success: true, data: peerStore.listPublic() }));
+
+    if (catalog) {
+      const targetFetch = (target: NonNullable<ReturnType<PeerStore["loadForCheck"]>>, route: string) => fetch(target.baseUrl + route, {
+        headers: { authorization: `Bearer ${target.apiKey}` }, redirect: "error", signal: AbortSignal.timeout(60_000),
+      });
+      adminScope.get<{ Params: { id: string } }>("/api/peers/:id/apps", async (req, reply) => {
+        try {
+          const target = peerStore.loadForCheck(req.params.id);
+          if (!target) return reply.code(404).send({ success: false, error: "对端不存在" });
+          const response = await targetFetch(target, "/api/peer/apps");
+          if (!response.ok) return reply.code(502).send({ success: false, error: response.status === 404 ? "对端版本不支持应用浏览" : "无法读取对端应用，请检查凭据" });
+          const payload = await response.json();
+          if (!payload.success || !Array.isArray(payload.data)) throw new Error("Invalid catalog");
+          const apps = payload.data.filter((item: { owner?: unknown; name?: unknown; digest?: unknown }) =>
+            typeof item?.owner === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(item.owner)
+            && typeof item.name === "string" && !validateName(item.name)
+            && typeof item.digest === "string" && /^[a-f0-9]{64}$/.test(item.digest));
+          return { success: true, data: apps.map(({ owner, name, description, version, digest }: Record<string, string>) => ({
+            owner, name, description, version, digest,
+          })) };
+        } catch {
+          return reply.code(502).send({ success: false, error: "无法连接对端应用目录" });
+        }
+      });
+      adminScope.get<{ Params: { id: string; name: string } }>("/api/peers/:id/apps/:name/shadow", async (req, reply) => {
+        const { id, name } = req.params;
+        if (validateName(name)) return reply.code(400).send({ success: false, error: "无效的应用名称" });
+        try {
+          const target = peerStore.loadForCheck(id);
+          if (!target) return reply.code(404).send({ success: false, error: "对端不存在" });
+          const base = new URL(target.baseUrl);
+          if (base.protocol !== "https:" || base.pathname !== "/") {
+            return reply.code(400).send({ success: false, error: "影子模式需要 HTTPS 根地址的对端" });
+          }
+          const response = await targetFetch(target, "/api/peer/apps");
+          const payload = response.ok ? await response.json() : null;
+          const app = Array.isArray(payload?.data) && payload.data.find((item: { name?: unknown }) => item?.name === name);
+          if (!app || typeof app.owner !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(app.owner)) {
+            return reply.code(404).send({ success: false, error: "对端应用不可用" });
+          }
+          return { success: true, data: { url: `${base.origin}/${app.owner}/${name}` } };
+        } catch {
+          return reply.code(502).send({ success: false, error: "无法连接对端应用" });
+        }
+      });
+      adminScope.post<{ Params: { id: string; name: string }; Body: { digest?: string } }>("/api/peers/:id/apps/:name/copy", async (req, reply) => {
+        const { name, id } = req.params;
+        const digest = req.body?.digest;
+        if (validateName(name) || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+          return reply.code(400).send({ success: false, error: "无效的应用版本" });
+        }
+        let staging: string | undefined;
+        try {
+          const target = peerStore.loadForCheck(id);
+          if (!target) return reply.code(404).send({ success: false, error: "对端不存在" });
+          const ownerId = catalog.userId(req);
+          if (readPageMeta(catalog.dataDir, ownerId, name)) {
+            return reply.code(409).send({ success: false, error: "本机已有同名应用" });
+          }
+          const response = await targetFetch(target, `/api/peer/apps/${name}/package?digest=${digest}`);
+          if (!response.ok || !response.body) return reply.code(502).send({ success: false, error: "无法下载对端应用包，请刷新应用列表" });
+          const directory = path.join(catalog.dataDir, ".staging");
+          await mkdir(directory, { recursive: true });
+          staging = await mkdtemp(path.join(directory, "peer-copy-"));
+          const packagePath = path.join(staging, "application.localapp");
+          let size = 0;
+          const limit = new Transform({
+            transform(chunk, _encoding, callback) {
+              size += chunk.length;
+              callback(size > MAX_APP_PACKAGE_BYTES ? new Error("Package too large") : null, chunk);
+            },
+          });
+          await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), limit, createWriteStream(packagePath, { mode: 0o600 }));
+          const downloaded = await inspectAppPackage(packagePath);
+          if (downloaded.name !== name || downloaded.digest !== digest) throw new Error("Package does not match published application");
+          const installed = await installAppPackage({ dataDir: catalog.dataDir, ownerId, packagePath, expectedLocalVersion: 0, preserveTargetAccess: true });
+          return reply.code(201).send({ success: true, data: installed });
+        } catch {
+          return reply.code(409).send({ success: false, error: "复制失败，请确认远端版本及本机同名应用" });
+        } finally {
+          if (staging) await rm(staging, { recursive: true, force: true });
+        }
+      });
+    }
 
     adminScope.post("/api/peers", async (req, reply) => {
       try {

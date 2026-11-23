@@ -43,6 +43,7 @@ describe("PeersPage", () => {
       if (String(input) === "/api/peers") {
         return new Response(JSON.stringify({ success: true, data: initialPeers }));
       }
+      if (String(input) === "/api/me/pages") return new Response(JSON.stringify({ success: true, data: [{ name: "notes", currentVersion: 1 }] }));
       if (String(input) === "/api/sync-jobs") return new Response(JSON.stringify({ success: true, data: [] }));
       return new Response(JSON.stringify({ success: true, data: [] }));
     }));
@@ -55,15 +56,38 @@ describe("PeersPage", () => {
     const apiKey = await screen.findByLabelText("目标 API Key");
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "office" } });
     fireEvent.change(screen.getByLabelText("目标地址"), { target: { value: "https://office.example" } });
-    fireEvent.change(apiKey, { target: { value: "peer-api-key-that-must-not-leak" } });
+    fireEvent.change(apiKey, { target: { value: "test-peer-api-key-that-must-not-leak" } });
     fireEvent.click(screen.getByRole("button", { name: "添加对端" }));
 
     await waitFor(() => expect(apiKey).toHaveValue(""));
     expect(await screen.findByText("office")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("peer-api-key-that-must-not-leak")).toBeNull();
+    expect(screen.queryByDisplayValue("test-peer-api-key-that-must-not-leak")).toBeNull();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/peers", expect.objectContaining({
       method: "POST", credentials: "include",
-      body: JSON.stringify({ name: "office", baseUrl: "https://office.example", apiKey: "peer-api-key-that-must-not-leak", acceptInsecureHttp: false }),
+      body: JSON.stringify({ name: "office", baseUrl: "https://office.example", apiKey: "test-peer-api-key-that-must-not-leak", acceptInsecureHttp: false }),
+    }));
+  });
+
+  it("browses and copies an application from the selected peer", async () => {
+    const digest = "a".repeat(64);
+    initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const responses: Record<string, unknown> = {
+        "/api/peers": initialPeers,
+        "/api/peers/peer-1/apps": [{ name: "todo-list", owner: "remote-owner", version: "1.2.9", digest }],
+      };
+      const data = responses[String(input)] ?? [];
+      return new Response(JSON.stringify({ success: true, data }));
+    });
+    render(<PeersPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "浏览对端应用" }));
+    expect(await screen.findByRole("dialog", { name: "office 的应用" })).toBeVisible();
+    await screen.findByText("remote-owner/todo-list");
+    expect(screen.getByRole("button", { name: "影子" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "复制", exact: true }));
+    expect(await screen.findByRole("status")).toHaveTextContent("已复制 todo-list 1.2.9");
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/peers/peer-1/apps/todo-list/copy", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ digest }),
     }));
   });
 
@@ -76,7 +100,7 @@ describe("PeersPage", () => {
     const apiKey = await screen.findByLabelText("目标 API Key");
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "office" } });
     fireEvent.change(screen.getByLabelText("目标地址"), { target: { value: "https://office.example" } });
-    fireEvent.change(apiKey, { target: { value: "peer-api-key-that-must-not-leak" } });
+    fireEvent.change(apiKey, { target: { value: "test-peer-api-key-that-must-not-leak" } });
     fireEvent.click(screen.getByRole("button", { name: "添加对端" }));
     await waitFor(() => expect(apiKey).toHaveValue(""));
     expect(screen.getByRole("alert")).toHaveTextContent("拒绝");
@@ -85,8 +109,8 @@ describe("PeersPage", () => {
   it("starts app-only synchronization without a credential, streams one stable job source, and cancels before activation", async () => {
     initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
     const view = render(<PeersPage />);
-    const appName = await screen.findByLabelText("同步应用 office");
-    fireEvent.change(appName, { target: { value: "notes" } });
+    fireEvent.click(await screen.findByRole("button", { name: "推送本机应用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "notes" }));
     fireEvent.click(screen.getByRole("button", { name: "同步应用到 office" }));
 
     await screen.findByText("job-1");
@@ -124,7 +148,8 @@ describe("PeersPage", () => {
   it("closes a job stream exactly once on terminal status and does not reconnect", async () => {
     initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
     const view = render(<PeersPage />);
-    fireEvent.change(await screen.findByLabelText("同步应用 office"), { target: { value: "notes" } });
+    fireEvent.click(await screen.findByRole("button", { name: "推送本机应用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "notes" }));
     fireEvent.click(screen.getByRole("button", { name: "同步应用到 office" }));
     await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { inspectAppPackage } from "@localapp/app-foundation/app-package";
 import fs, { createReadStream } from "node:fs";
 import path from "node:path";
 import { getPageDir, readPageMeta, type PageMeta } from "./page-storage.cjs";
@@ -52,6 +53,42 @@ function sendOfflineAppError(reply: FastifyReply) {
 }
 
 export async function registerApplicationResources(app: FastifyInstance, host: ApplicationResourcesHost) {
+  app.get<{ Params: { owner: string; name: string } }>(
+    "/api/shadow/:owner/:name/frontend",
+    async (req, reply) => {
+      const { owner, name } = req.params;
+      reply.header("Cache-Control", "no-store");
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(owner) || !/^[A-Za-z0-9_-]{1,80}$/.test(name)) {
+        return reply.code(404).send({ error: "Application unavailable" });
+      }
+      const data = host.dataDir(req);
+      const meta = readPageMeta(data, owner, name);
+      if (!meta || isAppOffline(meta)) return reply.code(404).send({ error: "Application unavailable" });
+      const visitor = host.visitorId(req);
+      if (!checkPageAccess(meta.pageAccess, visitor, meta.userId)) {
+        return reply.code(visitor ? 403 : 401).send({ error: "Application access required" });
+      }
+      const page = getPageDir(data, owner, name);
+      const active = meta.versions.find(version => version.version === meta.currentVersion);
+      const filename = active?.packagePath && path.resolve(page, active.packagePath);
+      if (!filename || path.dirname(filename) !== path.join(page, ".packages")) {
+        return reply.code(409).send({ error: "Published frontend package unavailable" });
+      }
+      if (!active?.digest || !/^[a-f0-9]{64}$/.test(active.digest)) {
+        return reply.code(409).send({ error: "Published frontend checksum unavailable" });
+      }
+      const etag = `"${active.digest}"`;
+      reply.header("ETag", etag);
+      if (req.headers["if-none-match"] === etag) return reply.code(304).send();
+      const published = await inspectAppPackage(filename).catch(() => null);
+      if (!published) return reply.code(409).send({ error: "Published frontend package unavailable" });
+      if (published.digest !== active.digest) return reply.code(409).send({ error: "Published frontend changed" });
+      const files = published.entries.filter(file => file.path.startsWith("dist/"))
+        .map(file => ({ ...file, path: file.path.slice(5) }));
+      return { version: published.version, digest: published.digest, files, desktop: published.manifest.desktop };
+    },
+  );
+
   // Raw app resource entry for /serve/:userId/:name (no trailing slash)
   // With ignoreTrailingSlash, this also handles the trailing-slash case via the wildcard route below.
   // This specific route is needed because /serve/:userId/:name without /* won't match the wildcard.

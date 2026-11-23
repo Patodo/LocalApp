@@ -99,11 +99,6 @@
       "sha256": "3f352c5d04c4690aa3fb576b06e75bd6c7a2e426b9fffbdd740bd54ae7678b65"
     },
     {
-      "path": "packages/web/components/peers/peers-page.test.tsx",
-      "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "caad2d1bda86095c481b43bb89ccc0be35582058787ea5768bf7641f37f4f488"
-    },
-    {
       "path": "packages/web/components/setup/setup-page.test.tsx",
       "rule": "POSSIBLE_CREDENTIAL",
       "sha256": "80bcd63a5cc0ad2e76d3e578cd61a47baf0bacd08547c239046b631b320ffa72"

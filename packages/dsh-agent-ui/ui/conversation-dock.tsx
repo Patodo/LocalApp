@@ -417,13 +417,7 @@ return function AppDevelopmentDock(
         )}
       </div>
   );
-  if (userMode && input.userConversationEnabled === false) return (
-    <section className="app-development-dock dsh-development is-user-preview" aria-label="应用用户模式">
-      <div className="development-dock-composer">
-        {switchIdentity}<span className="dock-user-preview-note">正在预览用户界面 · 此应用未启用 AI 对话</span>
-      </div>
-    </section>
-  );
+  if (userMode && input.userConversationEnabled === false) return null;
   return (<>
     {minimized && mini}
     <section style={minimized?{display:"none"}:undefined}
