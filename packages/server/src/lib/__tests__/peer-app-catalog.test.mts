@@ -28,12 +28,12 @@ it("browses and copies the selected published package using the configured peer"
     });
     const released = await installAppPackage({ dataDir: remoteDir, ownerId: owner.id, packagePath: archive });
     await registerPeerProtocol(remote, {
-      dataDir: remoteDir, keyOwner: key => key === "fixture-peer-key" ? owner.id : null,
+      dataDir: remoteDir, keyOwner: key => key === "test-peer-key" ? owner.id : null,
       user: id => id === owner.id ? owner : null,
     });
     expect((await remote.inject("/api/peer/apps")).statusCode).toBe(401);
     const baseUrl = await remote.listen({ host: "127.0.0.1", port: 0 });
-    const peers = { loadForCheck: (id: string) => id === "fixture" ? { baseUrl, apiKey: "fixture-peer-key" } : null };
+    const peers = { loadForCheck: (id: string) => id === "fixture" ? { baseUrl, apiKey: "test-peer-key" } : null };
     await registerPeers(local, peers as PeerStore, async scope => {
       scope.addHook("onRequest", async (req, reply) => {
         if (req.headers["x-fixture-admin"] !== "yes") return reply.code(401).send();
@@ -45,7 +45,7 @@ it("browses and copies the selected published package using the configured peer"
     const catalog = await local.inject({ url: "/api/peers/fixture/apps", headers });
     expect(catalog.statusCode).toBe(200);
     expect(catalog.json().data).toMatchObject([{ owner: owner.id, name: "todo-list", version: "1.2.9", digest: released.digest }]);
-    expect(catalog.body).not.toContain("fixture-peer-key");
+    expect(catalog.body).not.toContain("test-peer-key");
 
     const copy = { method: "POST" as const, url: "/api/peers/fixture/apps/todo-list/copy", headers };
     expect((await local.inject({ ...copy, payload: { digest: "0".repeat(64) } })).statusCode).toBe(502);

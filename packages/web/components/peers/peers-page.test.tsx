@@ -56,15 +56,15 @@ describe("PeersPage", () => {
     const apiKey = await screen.findByLabelText("目标 API Key");
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "office" } });
     fireEvent.change(screen.getByLabelText("目标地址"), { target: { value: "https://office.example" } });
-    fireEvent.change(apiKey, { target: { value: "peer-api-key-that-must-not-leak" } });
+    fireEvent.change(apiKey, { target: { value: "test-peer-api-key-that-must-not-leak" } });
     fireEvent.click(screen.getByRole("button", { name: "添加对端" }));
 
     await waitFor(() => expect(apiKey).toHaveValue(""));
     expect(await screen.findByText("office")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("peer-api-key-that-must-not-leak")).toBeNull();
+    expect(screen.queryByDisplayValue("test-peer-api-key-that-must-not-leak")).toBeNull();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/peers", expect.objectContaining({
       method: "POST", credentials: "include",
-      body: JSON.stringify({ name: "office", baseUrl: "https://office.example", apiKey: "peer-api-key-that-must-not-leak", acceptInsecureHttp: false }),
+      body: JSON.stringify({ name: "office", baseUrl: "https://office.example", apiKey: "test-peer-api-key-that-must-not-leak", acceptInsecureHttp: false }),
     }));
   });
 
@@ -74,7 +74,7 @@ describe("PeersPage", () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const responses: Record<string, unknown> = {
         "/api/peers": initialPeers,
-        "/api/peers/peer-1/apps": [{ name: "todo-list", owner: "patodo", version: "1.2.9", digest }],
+        "/api/peers/peer-1/apps": [{ name: "todo-list", owner: "remote-owner", version: "1.2.9", digest }],
       };
       const data = responses[String(input)] ?? [];
       return new Response(JSON.stringify({ success: true, data }));
@@ -82,7 +82,7 @@ describe("PeersPage", () => {
     render(<PeersPage />);
     fireEvent.click(await screen.findByRole("button", { name: "浏览对端应用" }));
     expect(await screen.findByRole("dialog", { name: "office 的应用" })).toBeVisible();
-    await screen.findByText("patodo/todo-list");
+    await screen.findByText("remote-owner/todo-list");
     expect(screen.getByRole("button", { name: "影子" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "复制", exact: true }));
     expect(await screen.findByRole("status")).toHaveTextContent("已复制 todo-list 1.2.9");
@@ -100,7 +100,7 @@ describe("PeersPage", () => {
     const apiKey = await screen.findByLabelText("目标 API Key");
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "office" } });
     fireEvent.change(screen.getByLabelText("目标地址"), { target: { value: "https://office.example" } });
-    fireEvent.change(apiKey, { target: { value: "peer-api-key-that-must-not-leak" } });
+    fireEvent.change(apiKey, { target: { value: "test-peer-api-key-that-must-not-leak" } });
     fireEvent.click(screen.getByRole("button", { name: "添加对端" }));
     await waitFor(() => expect(apiKey).toHaveValue(""));
     expect(screen.getByRole("alert")).toHaveTextContent("拒绝");
