@@ -24,6 +24,7 @@ export async function registerAgentSettingsRoutes(app:FastifyInstance,host:Agent
     if (application.id === "platform" && !application.capabilities.length) throw new Error("请选择应用");
     const saved = settings.read(userId);
     const preferences = saved.applications[application.id] ?? { skills: [], disabledTools: [], tools: [] };
+    const enabledCapabilities = application.capabilities.filter(capability => saved.grants[application.id]?.includes(capability));
     const skillCatalog = await documentAvailability();
     let builtins: Array<{ name: string; description: string }> = [];
     let toolsNotice = "";
@@ -31,7 +32,7 @@ export async function registerAgentSettingsRoutes(app:FastifyInstance,host:Agent
       try { builtins = (await runtime(userId, application.id)).toolCatalog(); }
       catch { toolsNotice = "DSH 工具列表暂时无法加载，请检查模型和 MCP 设置。仍可修改应用能力。"; }
     } else toolsNotice = "配置模型供应商后可查看 DSH 工具。";
-    return { appId: application.id, capabilities: application.capabilities, enabledCapabilities: saved.grants[application.id] ?? [], skills: skillCatalog.map(({ unavailableReason, ...s }) => ({ ...s, ...(s.available ? {} : { unavailableReason }) })), enabledSkills: preferences.skills.filter(id => skillCatalog.some(s => s.id === id && s.available)), disabledTools: preferences.disabledTools, toolsNotice, tools: [...builtins.map((tool) => ({ ...tool, source: "dsh" })), ...preferences.tools.map((tool) => ({ ...tool, source: "app" }))] };
+    return { appId: application.id, capabilities: application.capabilities, enabledCapabilities, skills: skillCatalog.map(({ unavailableReason, ...s }) => ({ ...s, ...(s.available ? {} : { unavailableReason }) })), enabledSkills: preferences.skills.filter(id => skillCatalog.some(s => s.id === id && s.available)), disabledTools: preferences.disabledTools, toolsNotice, tools: [...builtins.map((tool) => ({ ...tool, source: "dsh" })), ...preferences.tools.map((tool) => ({ ...tool, source: "app" }))] };
   };
   app.post<{ Body: { appId: string; tools: Array<{ name: string; description: string }> } }>("/api/agent/app-tools", async (req, reply) => {
     try {

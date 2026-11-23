@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,11 +6,12 @@ import { buildServer } from "../../src/server.js";
 import { closeMetaDb, provisionUserWithApiKey } from "../../src/lib/meta-sqlite.js";
 import { SetupTokenStore } from "../../src/lib/setup-token-store.js";
 
+const adminPassword = randomUUID();
 const endpoint = "/api/system/scheduled-scripts";
-const admin = { "x-api-key": "scheduled-scripts-admin-key" };
-const delegate = { "x-api-key": "scheduled-scripts-delegate-key" };
-const outsider = { "x-api-key": "scheduled-scripts-outsider-key" };
-const manual = { "x-localapp-script-token": "fixture-token-only-for-manual-execution-1" };
+const admin = { "x-api-key": randomUUID() };
+const delegate = { "x-api-key": randomUUID() };
+const outsider = { "x-api-key": randomUUID() };
+const manual = { "x-localapp-script-token": randomUUID() };
 const parent = path.resolve(__dirname, "../../../../tmp/scheduled-scripts");
 const schedule = { timeZone: "Asia/Taipei", from: "07:00", until: "23:00", intervalMinutes: 30 };
 let root: string;
@@ -38,7 +40,7 @@ async function start(timeoutSeconds = 10, descendant = false) {
   const tokens = new SetupTokenStore();
   const env = {
     DATA_DIR: root, BOOTSTRAP_API_KEY: admin["x-api-key"],
-    SCHEDULED_SCRIPTS_TEST_INPUT: "allowed", SCHEDULED_SCRIPTS_TEST_SECRET: "must-not-be-inherited",
+    SCHEDULED_SCRIPTS_TEST_INPUT: "allowed", SCHEDULED_SCRIPTS_TEST_SECRET: randomUUID(),
     SCHEDULED_SCRIPTS_TEST_MANUAL_TOKEN: manual["x-localapp-script-token"],
   };
   const options = { pluginCombination: "platform" as const, setupTokens: tokens };
@@ -47,7 +49,7 @@ async function start(timeoutSeconds = 10, descendant = false) {
   expect((await server.inject({ url: endpoint, headers: admin })).statusCode).toBe(404);
   const setup = await server.inject({
     method: "POST", url: "/api/setup/initialize",
-    payload: { token: tokens.issue().token, username: "scheduler-admin", password: "scheduler-admin-password" },
+    payload: { token: tokens.issue().token, username: "scheduler-admin", password: adminPassword },
   });
   expect(setup.statusCode, setup.body).toBe(201);
   provisionUserWithApiKey("operator", "Operator", "unused", delegate["x-api-key"]);
@@ -92,7 +94,7 @@ describe("scheduled server scripts", () => {
     expect((await run()).statusCode).toBe(401);
     expect((await run({ "x-api-key": "wrong" })).statusCode).toBe(401);
     const login = await server.inject({
-      method: "POST", url: "/api/auth/login", payload: { username: "scheduler-admin", password: "scheduler-admin-password" },
+      method: "POST", url: "/api/auth/login", payload: { username: "scheduler-admin", password: adminPassword },
     });
     expect(login.statusCode, login.body).toBe(200);
     const cookie = login.cookies.map(({ name, value }) => `${name}=${value}`).join("; ");

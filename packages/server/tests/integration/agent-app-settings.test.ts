@@ -35,6 +35,11 @@ afterAll(async () => { if (model) await new Promise<void>((resolve) => model.clo
 const api = (cookie: string, url: string, method = "GET", body?: unknown) => fetch(`${server.baseUrl}/api/agent/${url}`, { method, headers: { Cookie: cookie, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
 it("saves per-user choices and enforces them in a real Server/DSH model request", async () => {
   const defaultSettings = await (await api(alice, `app-settings?appId=${appId}`)).json();
+  const initial = await (await api(alice, "settings")).json();
+  // A previously granted capability may no longer be declared by the app.
+  expect((await api(alice, "settings", "PUT", { ...initial.data, grants: { [appId]: ["files", "web"] } })).status).toBe(200);
+  const current = await (await api(alice, `app-settings?appId=${appId}`)).json();
+  expect(current.data.enabledCapabilities).toEqual(["files"]);
   expect(defaultSettings.data.enabledSkills).toEqual([]);
   expect(defaultSettings.data.skills.map((skill: any) => skill.id)).toEqual(["markitdown", "pdf", "docx", "xlsx"]);
   expect((await api(alice, "app-tools", "POST", { appId, tools: [{ name: "deleteRecord", description: "Delete" }, { name: "listRecords", description: "List" }] })).status).toBe(200);
