@@ -149,7 +149,7 @@
     {
       "path": "packages/server/tests/e2e-unified/agent-harness.spec.ts",
       "rule": "POSSIBLE_CREDENTIAL",
-      "sha256": "4fdda38369656cf2b3c2f30ee2601a775d2168944207859f4d0ac3ef063e446e",
+      "sha256": "afd29bb8b658791fdceb9cb3cce657dd41b664ba36eda9ac19155c6063a89aef",
       "reason": "Reviewed synthetic test credentials and fixture values; no live account or model credentials."
     },
     {
