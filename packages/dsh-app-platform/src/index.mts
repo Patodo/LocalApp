@@ -154,7 +154,7 @@ export class ApplicationPlatform extends Service {
     this.assertActive();
     app.register(async scope => this.registerPeerProtocol(scope, host.protocol));
     app.register(async scope => this.registerSyncTarget(scope, host.target, host.authenticateTarget));
-    app.register(async scope => this.registerPeers(scope, host.peers, host.authenticateAdministrator));
+    app.register(async scope => this.registerPeers(scope, host.peers, host.authenticateAdministrator, host.protocol.dataDir ? { dataDir: host.protocol.dataDir, userId: host.userId } : undefined));
     app.register(async scope => {
       await host.authenticateUser(scope);
       await this.registerSyncSource(scope, host.source, host.userId);

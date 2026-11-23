@@ -197,7 +197,7 @@ async function registerServerPluginsAndRoutes(
   await pluginContext.localappMultiuser.registerSetup(app, createSetupHost(app, options.setupTokens));
   await systemRoutes(app, { documentsEnabled: options.documents !== false, documentsControlled: options.documentsControlled, pluginCombination: options.pluginCombination, pluginCombinationControlled: options.pluginCombinationControlled, configStore: options.configStore, restartController: options.restartController });
   if (platform?.peerStore && platform.syncTarget && platform.syncSource) pluginContext.localappAppSync.registerSynchronizationRoutes(app, {
-    protocol: { keyOwner: validateApiKey, user: findUserById },
+    protocol: { dataDir: app.config.dataDir, keyOwner: validateApiKey, user: findUserById },
     target: platform.syncTarget, authenticateTarget: createSyncTargetAuthentication,
     source: platform.syncSource, userId: request => request.userId,
     authenticateUser: authPlugin, peers: platform.peerStore, authenticateAdministrator: adminAuth,
