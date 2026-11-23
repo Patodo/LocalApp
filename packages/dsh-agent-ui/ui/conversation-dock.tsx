@@ -561,7 +561,7 @@ return function AppDevelopmentDock(
             </nav>
           ) : null}
           <div
-            className="development-dock-transcript"
+            className={nativeEnabled ? "development-dock-transcript has-native-transcript" : "development-dock-transcript"}
             ref={transcript}
             role="log"
             aria-label={userMode ? "应用对话记录" : "开发对话记录"}

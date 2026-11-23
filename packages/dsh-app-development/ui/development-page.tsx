@@ -71,6 +71,7 @@ return function DevelopmentPage({
     providerId: string;
   } | null>(null);
   const handoffStarted = useRef(false);
+  const restoredCreation = useRef<string | null>(null);
   const previewedBuild = useRef("");
   const autoPreviewBuild = useRef("");
   const handledFailure = useRef("");
@@ -166,6 +167,10 @@ return function DevelopmentPage({
             const creation = await request(
               `/api/development/creations/${p.id}`,
             );
+            if (restoredCreation.current !== p.id) {
+              restoredCreation.current = p.id;
+              dock?.onIdentityChange?.("developer");
+            }
             session.current = creation.sessionId;
             setProvider(creation.providerId);
             if (!creation.continued)

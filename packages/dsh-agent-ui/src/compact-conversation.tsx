@@ -29,8 +29,10 @@ export function installCompactConversation(ctx: Context): void {
   ctx.slots.register({
     name:"root", priority:-1,
     children:{"localapp.conversation":{kind:"single",scope:"session-maybe"}},
-  }, ({renderSlot}) => <main data-localapp-conversation style={{height:"100dvh", display:"flex", flexDirection:"column", background:"var(--dsw-alias-background-primary, white)"}}>
+  }, ({renderSlot}) => <main data-localapp-conversation style={{height:"100dvh", minHeight:0, overflow:"hidden", display:"flex", flexDirection:"column", background:"var(--dsw-alias-background-primary, white)"}}>
     <style>{`
+      [data-localapp-conversation] [data-conversation-content] { min-height:0; }
+      [data-localapp-conversation] [data-conversation-scroll] { min-height:0; overscroll-behavior:contain; }
       .localapp-conversation-views button { border:0; border-radius:6px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; color:inherit; background:transparent; }
       .localapp-conversation-views button:hover { background:var(--dsw-alias-background-secondary, #f5f5f5); }
       .localapp-conversation-views button[aria-pressed="true"] { background:var(--dsw-alias-background-secondary, #f0f0f0); font-weight:600; }
@@ -38,9 +40,9 @@ export function installCompactConversation(ctx: Context): void {
     `}</style>
     {renderSlot("localapp.conversation", {})}
   </main>);
-  ctx.slots.register({name:"localapp.conversation"}, ({sessionId, useSessions, renderFactorySlot}) => {
-    const blank = useSessions(snapshot => sessionId ? snapshot.byId[sessionId]?.blank : true);
-    return !sessionId || blank
+  ctx.slots.register({name:"localapp.conversation"}, ({sessionId, renderFactorySlot}) => {
+    // A new session is initially blank. Mount its view so the shell can send the first message.
+    return !sessionId
       ? <div role="status" style={{padding:24, color:"#737373", fontSize:14}}>描述你的需求，开始应用对话</div>
       : renderFactorySlot("conversation.content", {variant:"embedded", phase:"active", hero:false}, {slots:{views:CompactViews}});
   });

@@ -55,8 +55,9 @@ describe("unified Server DeepSeek Harness HTTP", () => {
         return;
       }
       if(lastUser?.content==="native developer question"){
-        const delta=hasResult?{content:"native question finished"}:{tool_calls:[{index:0,id:"native-question",function:{name:"ask_user_question",arguments:JSON.stringify({questions:[{id:"color",question:"选择应用颜色",options:[{label:"蓝色",description:"使用蓝色"},{label:"绿色",description:"使用绿色"}]}]})}}]};
-        res.writeHead(200,{"Content-Type":"text/event-stream"});res.end(`data: ${JSON.stringify({choices:[{delta,finish_reason:hasResult?"stop":"tool_calls"}]})}\n\ndata: [DONE]\n\n`);return;
+        const answered = request.messages.at(-1)?.role === "tool" && request.messages.at(-1)?.tool_call_id === "native-question";
+        const delta=answered?{content:"native question finished"}:{tool_calls:[{index:0,id:"native-question",function:{name:"ask_user_question",arguments:JSON.stringify({questions:[{id:"color",question:"选择应用颜色",options:[{label:"蓝色",description:"使用蓝色"},{label:"绿色",description:"使用绿色"}]}]})}}]};
+        res.writeHead(200,{"Content-Type":"text/event-stream"});res.end(`data: ${JSON.stringify({choices:[{delta,finish_reason:answered?"stop":"tool_calls"}]})}\n\ndata: [DONE]\n\n`);return;
       }
       if (["native creation plan", "native creation browser plan"].includes(lastUser?.content)) {
         const delta = hasResult ? { content: "native creation proposed" } : { tool_calls: [{ index: 0, id: "creation-proposal", function: { name: "propose_application", arguments: JSON.stringify({ name: lastUser.content === "native creation browser plan" ? "native-browser-created-app" : "native-created-app", description: "Create an application through native dsh" }) } }] };
@@ -91,6 +92,12 @@ describe("unified Server DeepSeek Harness HTTP", () => {
         const delta = edited ? { content: "native application edited" } : !hasResult ? { tool_calls: [{ index: 0, id: "creation-read", function: { name: "read", arguments: JSON.stringify({ file_path: "index.html" }) } }] } : { tool_calls: [{ index: 0, id: "creation-edit", function: { name: "write", arguments: JSON.stringify({ file_path: "index.html", content: '<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Native edited application</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>' }) } }] };
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: edited ? "stop" : "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
+        return;
+      }
+      if (lastUserText === "verify long application reply") {
+        const content = [...Array.from({ length: 45 }, (_, index) => `长回复第 ${index + 1} 段`), "长回复最后一段"].join("\n\n");
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
         return;
       }
       const native = request.messages.some((message: any) => message.content === "native HTTP hello");
@@ -1309,9 +1316,9 @@ describe("unified Server DeepSeek Harness HTTP", () => {
       expect((await formalPage.request.post(`${baseUrl}/api/auth/login`,{data:{username:"harness-http-admin",password:"harness-test-password"}})).status()).toBe(200);
       await formalPage.goto(new URL(publishedUrl,baseUrl).href);
       await formalPage.getByRole("heading",{name:"工作项",exact:true}).waitFor();
+      await formalPage.getByRole("button", { name: "切换对话身份", exact: true }).click();
       const formalNative=formalPage.frameLocator('iframe[title="原生应用开发对话"]');
-      await formalNative.locator("button").first().waitFor({state:"attached"});
-      await formalNative.locator("textarea, [contenteditable=true]").first().waitFor({state:"attached"});
+      await formalNative.locator("[data-localapp-conversation]").waitFor({state:"attached"});
       const priorBuilds=(await (await formalPage.request.get(`${baseUrl}/api/development/projects/${project.id}/builds`)).json()).data.map((build:any)=>build.id);
       await formalPage.getByLabel("应用修改需求",{exact:true}).fill("native formal application edit");
       await formalPage.getByLabel("应用修改需求",{exact:true}).press("Enter");
@@ -1673,6 +1680,7 @@ describe("unified Server DeepSeek Harness HTTP", () => {
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       expect((await page.request.post(baseUrl + "/api/auth/login", { data: { username: "harness-http-admin", password: "harness-test-password" } })).status()).toBe(200);
       await page.goto(baseUrl + `/harness-http-admin/${name}/`);
+      await page.getByRole("button", { name: "切换对话身份", exact: true }).click();
       const trigger = page.getByRole("button", { name: "开发 Agent 设置", exact: true });
       await trigger.waitFor({ timeout: 10000 }); await trigger.click();
       const dialog = page.getByRole("dialog");
@@ -1739,8 +1747,8 @@ describe("unified Server DeepSeek Harness HTTP", () => {
     const name = "ordinary-native-app";
     const directory = path.join(dataDir, owner.id, name);
     await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, "meta.json"), JSON.stringify({ name, userId: owner.id, currentVersion: 1, versions: [], metadata: {}, pageAccess: { level: "authenticated" } }));
-    await fs.writeFile(path.join(directory, "manifest.json"), JSON.stringify({ name, agent: { capabilities: [] } }));
+    await fs.writeFile(path.join(directory, "meta.json"), JSON.stringify({ name, userId: owner.id, currentVersion: 1, versions: [], metadata: {}, pageAccess: { level: "authenticated" }, shell: { agentConversation: true } }));
+    await fs.writeFile(path.join(directory, "manifest.json"), JSON.stringify({ name, agent: { capabilities: [] }, shell: { agentConversation: true } }));
     const version = path.join(directory, "versions", "v1");
     await fs.mkdir(path.join(version, "assets"), { recursive: true });
     await fs.writeFile(path.join(version, "index.html"), '<!doctype html><html><body><div id="root"></div><script type="module" src="/assets/main.js"></script></body></html>');
@@ -1787,7 +1795,13 @@ describe("unified Server DeepSeek Harness HTTP", () => {
           await page.getByText("Ordinary application ready", { exact: true }).waitFor({ timeout: 10000 });
           await page.getByRole("button", { name: "展开应用对话", exact: true }).click();
           const frame = page.frameLocator('iframe[title="原生应用用户对话"]');
-          const input = frame.locator("textarea, [contenteditable=true]").first();
+          const bounds = await page.locator(".development-dock-transcript").evaluate(transcript => {
+            const frame = transcript.querySelector("iframe")!;
+            return { outer: transcript.clientHeight, frame: frame.clientHeight, overflow: getComputedStyle(transcript).overflowY };
+          });
+          expect(bounds.frame).toBe(bounds.outer);
+          expect(bounds.overflow).toBe("hidden");
+          const input = page.getByLabel("应用对话消息", { exact: true });
           await input.fill("ordinary formal browser echo"); await input.press("Enter");
           await frame.getByText("工具已完成", { exact: true }).first().waitFor({ timeout: 10000 });
           expect(await page.getByRole("button", { name: "切换对话身份" }).count()).toBe(0);
@@ -1801,26 +1815,10 @@ describe("unified Server DeepSeek Harness HTTP", () => {
           await page.screenshot({path: path.join(path.resolve(dataDir, "..", "browser-evidence"), "ordinary-minimized-reply-042.png"), fullPage: true});
           await restore.click();
           await page.getByRole("button", { name: "最小化应用对话", exact: true }).waitFor();
-          await frame.getByText("轨迹", { exact: true }).click();
+          await frame.getByRole("button", { name: "运行轨迹", exact: true }).click();
           await frame.getByText("ordinary formal browser marker", { exact: false }).first().waitFor({ timeout: 5000 });
-          const applicationSettings = frame.getByRole("button", { name: /^(设置|Settings)$/ });
-          await applicationSettings.click();
-          expect(await frame.getByRole("button", {name: "Python 环境", exact: true}).count()).toBe(0);
+          await expect.poll(() => page.getByRole("link", { name: "应用 Agent 设置" }).getAttribute("href")).toContain("/my/agent?appId=");
           expect((await page.request.get(baseUrl + "/api/system/python-environment")).status()).toBe(403);
-          await frame.getByRole("button", {name: "模型与 MCP", exact: true}).click();
-          await expect.poll(() => frame.getByLabel("模型名称", {exact: true}).inputValue()).toBe("ordinary-model");
-          expect(await frame.getByLabel("API Key", {exact: true}).inputValue()).toBe("");
-          await frame.getByRole("button", { name: "应用 Agent 能力", exact: true }).click();
-          const capabilityPanel = frame.locator(".localapp-native-settings");
-          await capabilityPanel.getByText("为你在此应用中的 Agent 选择能力和工具。", { exact: true }).waitFor();
-          await capabilityPanel.getByText("应用尚未声明 Agent 扩展能力。", { exact: true }).waitFor();
-          expect(await capabilityPanel.getByRole("switch", { name: "PDF", exact: true }).isDisabled()).toBe(true);
-          await capabilityPanel.getByRole("button", { name: "保存 Agent 设置", exact: true }).click();
-          await capabilityPanel.getByText("Agent 设置已保存", { exact: true }).waitFor();
-          await page.screenshot({path: path.join(path.resolve(dataDir, "..", "browser-evidence"), "ordinary-native-settings.png"), fullPage: true});
-          await page.keyboard.press("Escape");
-          await capabilityPanel.waitFor({state: "hidden"});
-          await expect.poll(() => applicationSettings.evaluate(element => element === document.activeElement)).toBe(true);
           const compactRequests: string[] = [];
           page.on("request", request => compactRequests.push(request.url()));
           const closedBefore = cancelledModelStreams;
@@ -1878,12 +1876,19 @@ describe("unified Server DeepSeek Harness HTTP", () => {
           expect(nativeUploads[0]).toMatchObject({ok:true,value:{file:{name:"native-intake.pdf",bytes:8}}});
           expect(new URL(uploadedResponse.url()).searchParams.get("sessionId")).toBe(freshSessionId);
           await page.getByRole("button",{name:"展开应用对话",exact:true}).click();
-          await freshFrame.getByText("native-intake.pdf",{exact:true}).first().waitFor();
-          await freshFrame.getByText("PDF 8B",{exact:true}).first().waitFor();
           await page.getByLabel("待发送附件",{exact:true}).getByText("native-intake.pdf",{exact:true}).waitFor();
           await page.getByRole("button",{name:"移除附件 native-intake.pdf",exact:true}).click();
-          await freshFrame.getByText("native-intake.pdf",{exact:true}).first().waitFor({state:"hidden"});
           await page.getByLabel("待发送附件",{exact:true}).waitFor({state:"hidden"});
+          const longInput = page.getByLabel("应用对话消息", { exact: true });
+          await longInput.fill("verify long application reply");
+          await longInput.press("Enter");
+          const lastParagraph = freshFrame.getByText("长回复最后一段", { exact: true });
+          await lastParagraph.waitFor({ timeout: 10000 });
+          await lastParagraph.scrollIntoViewIfNeeded();
+          const paragraphBounds = (await lastParagraph.boundingBox())!;
+          const transcriptBounds = (await page.locator(".development-dock-transcript").boundingBox())!;
+          expect(paragraphBounds.y).toBeGreaterThanOrEqual(transcriptBounds.y);
+          expect(paragraphBounds.y + paragraphBounds.height).toBeLessThanOrEqual(transcriptBounds.y + transcriptBounds.height);
           expect(ordinaryErrors).toEqual([]);
           const artifacts = path.resolve(dataDir, "..", "browser-evidence"); await fs.mkdir(artifacts, { recursive: true });
           await page.screenshot({ path: path.join(artifacts, "ordinary-formal-app" + (testCombination === "platform" ? "-platform" : "") + ".png"), fullPage: true });

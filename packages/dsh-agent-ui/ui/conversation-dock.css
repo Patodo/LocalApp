@@ -425,3 +425,13 @@
 @media (max-width:600px) {
   .development-dock-composer .dock-model-trigger { max-width:45%; }
 }
+
+/* The embedded transcript owns vertical scrolling and its own message padding. */
+.development-dock-transcript.has-native-transcript {
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 0;
+}
+.has-native-transcript .native-conversation-frame {
+  display: block;
+}
