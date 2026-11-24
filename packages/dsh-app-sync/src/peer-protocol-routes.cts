@@ -1,5 +1,7 @@
 export interface PeerProtocolHost {
   dataDir?: string;
+  desktopControlToken?: string;
+  shadowSession?(apiKey: string, id: string, owner: string, name: string): { ticket: string; expiresIn: number };
   keyOwner(key: string): string | null;
   user(id: string): { id: string; name: string; displayName: string | null } | null;
 }
@@ -49,6 +51,19 @@ export async function registerPeerProtocol(app: FastifyInstance, host: PeerProto
       return [{ name: entry.name, owner: user.name, description: meta.description, version: version.appVersion, digest: version.digest }];
     });
     return { success: true, data: apps };
+  });
+  app.post<{ Params: { name: string } }>("/api/peer/apps/:name/shadow-session", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    if (!host.shadowSession) return reply.code(404).send({ success: false });
+    const user = identify(req.headers.authorization);
+    if (!user) return reply.code(401).send({ success: false, error: "Authentication required" });
+    const { name } = req.params;
+    const meta = !validateName(name) && readPageMeta(dataDir, user.id, name);
+    if (!meta || !meta.currentVersion || !/^[A-Za-z0-9_-]{1,80}$/.test(user.name)) {
+      return reply.code(404).send({ success: false, error: "Published application unavailable" });
+    }
+    const apiKey = req.headers.authorization!.slice("Bearer ".length);
+    return { success: true, data: host.shadowSession(apiKey, user.id, user.name, name) };
   });
   app.get<{ Params: { name: string }; Querystring: { digest?: string } }>("/api/peer/apps/:name/package", async (req, reply) => {
     const user = identify(req.headers.authorization);

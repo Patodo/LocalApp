@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Ban, Cable, PackageOpen, RefreshCw, Send } from "lucide-react";
+import { Ban, Cable, PackageOpen, RefreshCw, Search, Send } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,8 @@ type PeerApplication = { name: string; owner: string; description: string; versi
 
 function PeerApplications({ peer }: { peer: Peer }) {
   const [apps, setApps] = useState<PeerApplication[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [synced, setSynced] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [copying, setCopying] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -47,6 +50,8 @@ function PeerApplications({ peer }: { peer: Peer }) {
   async function browse() {
     setLoading(true);
     setMessage("");
+    const library = (window as Window & { localAppShadows?: { list(): Promise<Array<{ id: string }>> } }).localAppShadows;
+    if (library) void library.list().then(items => setSynced(new Set(items.map(item => item.id)))).catch(() => {});
     try {
       setApps(await requestJson<PeerApplication[]>(endpoint));
     } catch (error) {
@@ -77,34 +82,56 @@ function PeerApplications({ peer }: { peer: Peer }) {
     }
   }
 
-  return <Dialog onOpenChange={open => { if (open && !loading && !copying) void browse(); }}>
+  const search = query.trim().toLowerCase();
+  const visibleApps = apps?.filter(app => `${app.owner}/${app.name} ${app.description ?? ""}`.toLowerCase().includes(search));
+
+  return <Dialog onOpenChange={open => {
+    if (!open) return;
+    setQuery("");
+    if (!loading && !copying) void browse();
+  }}>
     <DialogTrigger asChild>
       <Button size="sm"><PackageOpen className="mr-1 size-4" />浏览对端应用</Button>
     </DialogTrigger>
-    <DialogContent closeLabel="关闭" className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-      <div className="space-y-1 pr-8">
-        <DialogTitle>{peer.name} 的应用</DialogTitle>
-        <DialogDescription>选择影子模式打开远端应用，或复制应用包到本机。</DialogDescription>
+    <DialogContent closeLabel="关闭" className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:max-w-3xl">
+      <div className="shrink-0 space-y-3 border-b px-5 pb-4 pt-5 sm:px-6">
+        <div className="space-y-1 pr-8">
+          <DialogTitle className="text-lg font-semibold">{peer.name} 的应用</DialogTitle>
+          <DialogDescription className="sr-only">以影子模式打开远端应用，或复制应用包到本机。</DialogDescription>
+        </div>
+        {!!apps?.length && <div className="relative">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input aria-label="搜索对端应用" placeholder="搜索应用" value={query} onChange={event => setQuery(event.target.value)} className="pl-9" />
+        </div>}
       </div>
-      {loading && <p role="status" className="text-sm text-muted-foreground">正在加载应用…</p>}
-      {!loading && failed && !apps && <Button variant="outline" size="sm" onClick={() => void browse()}>重试</Button>}
-      {message && <p role={failed ? "alert" : "status"} className={failed ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>{message}</p>}
-      {apps?.length === 0 && <p className="text-sm text-muted-foreground">对端账号暂无可复制的应用。</p>}
-      {apps && apps.length > 0 && <ul className="divide-y rounded-md border">
-        {apps.map(app => <li key={app.name} className="flex flex-wrap items-center justify-between gap-3 p-3">
-          <div className="min-w-0">
-            <p className="break-words font-medium">{app.owner}/{app.name} <span className="text-sm text-muted-foreground">{app.version}</span></p>
-            {app.description && <p className="break-words text-sm text-muted-foreground">{app.description}</p>}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={!onDesktop || !peer.baseUrl.startsWith("https://")}
-              title={onDesktop ? "使用远端业务数据" : "请在 LocalApp 桌面版打开影子应用"}
-              onClick={() => window.location.assign(`${endpoint}/${encodeURIComponent(app.name)}/shadow`)}>影子</Button>
-            <Button size="sm" disabled={copying !== null} title="复制应用包到本机"
-              onClick={() => void copy(app)}>{copying === app.name ? "复制中…" : "复制"}</Button>
-          </div>
-        </li>)}
-      </ul>}
+      {message && <p role={failed ? "alert" : "status"} className={`shrink-0 border-b px-5 py-3 text-sm sm:px-6 ${failed ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>}
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
+        {loading && <p role="status" className="px-5 py-8 text-center text-sm text-muted-foreground">正在加载应用…</p>}
+        {!loading && failed && !apps && <div className="p-5 sm:px-6">
+          <Button variant="outline" size="sm" onClick={() => void browse()}>重试</Button>
+        </div>}
+        {visibleApps?.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+          {search ? "未找到匹配的应用" : "对端暂无可用应用"}
+        </p>}
+        {!!visibleApps?.length && <ul className="divide-y">
+          {visibleApps.map(app => {
+            const added = synced.has(`${peer.baseUrl.replace(/\/$/, "")}/${app.owner}/${app.name}`);
+            return <li key={app.name} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-5 py-3 sm:gap-x-6 sm:px-6">
+            <div className="min-w-0 space-y-0.5">
+              <p title={`${app.owner}/${app.name}`} className="truncate text-sm font-semibold">{app.owner}/{app.name}</p>
+              {app.description && <p title={app.description} className="truncate text-sm text-muted-foreground">{app.description}</p>}
+              <p title={app.version} className="truncate text-xs tabular-nums text-muted-foreground">{app.version}</p>
+            </div>
+            <div className="flex shrink-0 gap-1.5">
+              {added ? <Badge variant="secondary">已影子</Badge> : <Button variant="outline" size="sm" disabled={!onDesktop || !peer.baseUrl.startsWith("https://")}
+                title={onDesktop ? "使用远端业务数据" : "请在 LocalApp 桌面版打开影子应用"}
+                onClick={() => window.location.assign(`${endpoint}/${encodeURIComponent(app.name)}/shadow`)}>影子</Button>}
+              <Button variant="secondary" size="sm" disabled={copying !== null} title="复制应用包到本机"
+                onClick={() => void copy(app)}>{copying === app.name ? "复制中…" : "复制"}</Button>
+            </div>
+          </li>; })}
+        </ul>}
+      </div>
     </DialogContent>
   </Dialog>;
 }

@@ -15,7 +15,7 @@ const manifest = JSON.parse(await readFile(path.join(here, "package.json"), "utf
 await mkdir(temp, { recursive: true });
 const staging = await mkdtemp(path.join(temp, "localapp-desktop-stage-"));
 try {
-  for (const file of ["main.mjs", "device-activation.mjs", "shadow.mjs", "shortcuts.mjs"]) {
+  for (const file of ["main.mjs", "device-activation.mjs", "shadow.mjs", "shadow-preload.cjs", "shortcuts.mjs"]) {
     await cp(path.join(here, file), path.join(staging, file));
   }
   await writeFile(path.join(staging, "package.json"), JSON.stringify({

@@ -84,11 +84,30 @@ describe("PeersPage", () => {
     expect(await screen.findByRole("dialog", { name: "office 的应用" })).toBeVisible();
     await screen.findByText("remote-owner/todo-list");
     expect(screen.getByRole("button", { name: "影子" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "复制", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(await screen.findByRole("status")).toHaveTextContent("已复制 todo-list 1.2.9");
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/peers/peer-1/apps/todo-list/copy", expect.objectContaining({
       method: "POST", body: JSON.stringify({ digest }),
     }));
+  });
+
+  it("shows a synced shadow in the catalog without offering to add it again", async () => {
+    initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
+    vi.stubGlobal("localAppShadows", {
+      list: vi.fn().mockResolvedValue([{ id: "https://office.example/remote-owner/todo-list" }]),
+    });
+    vi.mocked(fetch).mockImplementation(async input => {
+      const responses: Record<string, unknown> = {
+        "/api/peers": initialPeers,
+        "/api/peers/peer-1/apps": [{ name: "todo-list", owner: "remote-owner", version: "1.2.9", digest: "a".repeat(64) }],
+      };
+      return new Response(JSON.stringify({ success: true, data: responses[String(input)] ?? [] }));
+    });
+    render(<PeersPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "浏览对端应用" }));
+    expect(await screen.findByText("已影子")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "影子" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制" })).toBeEnabled();
   });
 
   it("clears the API Key even when peer creation fails", async () => {

@@ -7,6 +7,7 @@ import { writeAppPackage } from "@localapp/app-foundation/app-package";
 import { readPageMeta } from "@localapp/app-foundation/page-storage";
 import { registerPeerProtocol } from "@localapp/dsh-app-sync/peer-protocol-routes";
 import { registerPeers } from "@localapp/dsh-app-sync/peers-routes";
+import { registerShadowSessions } from "../shadow-session.js";
 import type { PeerStore } from "@localapp/dsh-app-sync/peer-store";
 
 it("browses and copies the selected published package using the configured peer", async () => {
@@ -27,11 +28,28 @@ it("browses and copies the selected published package using the configured peer"
       ],
     });
     const released = await installAppPackage({ dataDir: remoteDir, ownerId: owner.id, packagePath: archive });
-    await registerPeerProtocol(remote, {
-      dataDir: remoteDir, keyOwner: key => key === "test-peer-key" ? owner.id : null,
-      user: id => id === owner.id ? owner : null,
-    });
+    let revoked = false;
+    const keyOwner = (key: string) => !revoked && key === "test-peer-key" ? owner.id : null;
+    const shadowSession = registerShadowSessions(remote, keyOwner);
+    await registerPeerProtocol(remote, { dataDir: remoteDir, keyOwner, shadowSession, user: id => id === owner.id ? owner : null });
+    remote.get("/api/me", async req => ({ id: req.visitorId }));
+    remote.post("/serve/remote-owner/todo-list/api/task", async req => ({ actor: req.visitorId }));
+    remote.get("/api/keys", async () => ({ success: true }));
     expect((await remote.inject("/api/peer/apps")).statusCode).toBe(401);
+    const issue = { method: "POST" as const, url: "/api/peer/apps/todo-list/shadow-session" };
+    expect((await remote.inject(issue)).statusCode).toBe(401);
+    const session = await remote.inject({ ...issue, headers: { authorization: "Bearer test-peer-key" } });
+    expect(session.statusCode).toBe(200);
+    const ticket = session.json().data.ticket;
+    expect(ticket).not.toContain("test-peer-key");
+    const shadowHeaders = { "x-localapp-shadow-session": ticket };
+    expect((await remote.inject({ url: "/api/me", headers: shadowHeaders })).json().id).toBe(owner.id);
+    expect((await remote.inject({ method: "POST", url: "/serve/remote-owner/todo-list/api/task", headers: shadowHeaders })).json().actor).toBe(owner.id);
+    expect((await remote.inject({ url: "/api/keys", headers: shadowHeaders })).statusCode).toBe(401);
+    expect((await remote.inject({ url: "/serve/remote-owner/another-app/api/tasks", headers: shadowHeaders })).statusCode).toBe(401);
+    revoked = true;
+    expect((await remote.inject({ url: "/api/me", headers: shadowHeaders })).statusCode).toBe(401);
+    revoked = false;
     const baseUrl = await remote.listen({ host: "127.0.0.1", port: 0 });
     const peers = { loadForCheck: (id: string) => id === "fixture" ? { baseUrl, apiKey: "test-peer-key" } : null };
     await registerPeers(local, peers as PeerStore, async scope => {
