@@ -15,6 +15,32 @@ export function parseShadowSource(input) {
 }
 
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+const platformAssetPath = /^\/_next\/static\/(?:chunks|css)\/(?:[^?#]*[./-])?[a-f0-9]{8,}\.(?:js|css)$/;
+
+function fetchPlatformAsset(url, signal) {
+  return session.fromPartition("persist:shadow-platform-assets").fetch(url, {
+    signal, redirect: "error", credentials: "omit", cache: "force-cache",
+  });
+}
+
+async function warmPlatformAssets(source, fetchEntry) {
+  const signal = AbortSignal.timeout(15_000);
+  const entry = await fetchEntry(source.href + "/", { signal });
+  if (!entry.ok) return;
+  const html = await entry.text();
+  const assets = new Set();
+  for (const [, relative] of html.matchAll(/\b(?:src|href)="(\/_next\/static\/[^"]+)"/g)) {
+    const url = new URL(relative, source.origin);
+    if (!platformAssetPath.test(url.pathname) || url.search) continue;
+    assets.add(url.href);
+    if (assets.size >= 32) break;
+  }
+  await Promise.allSettled([...assets].map(async url => {
+    const response = await fetchPlatformAsset(url, signal);
+    await response.arrayBuffer();
+  }));
+}
+
 const assetPath = /^(?!api(?:\/|$))(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
 export async function listSyncedShadows(root) {
@@ -30,12 +56,66 @@ export async function listSyncedShadows(root) {
   return sources.filter(Boolean).sort((a, b) => a.href.localeCompare(b.href));
 }
 
+async function loadFrontend(directory, release, baseUrl, fetchRemote, signal) {
+  if (!/^[a-f0-9]{64}$/.test(release.digest) || !Array.isArray(release.files) || release.files.length > 2000) {
+    throw new Error("无效的前端文件清单");
+  }
+  const next = new Map();
+  let total = 0;
+  for (const asset of release.files) {
+    signal.throwIfAborted();
+    if (!assetPath.test(asset.path) || !/^[a-f0-9]{64}$/.test(asset.sha256)
+      || !Number.isSafeInteger(asset.size) || asset.size < 0 || (total += asset.size) > 100_000_000) {
+      throw new Error("Invalid frontend asset");
+    }
+    const filename = path.join(directory, asset.sha256);
+    let entry;
+    try {
+      const stored = await readFile(filename);
+      const saved = JSON.parse(stored.subarray(0, stored.indexOf(10)).toString());
+      const bytes = stored.subarray(stored.indexOf(10) + 1);
+      if (hash(bytes) === asset.sha256 && bytes.length === asset.size) entry = { bytes, type: saved.type };
+    } catch {}
+    if (!entry) {
+      const download = await fetchRemote(baseUrl + asset.path, {
+        redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]), credentials: "include",
+      });
+      if (!download.ok) throw new Error("Frontend download failed");
+      const bytes = Buffer.from(await download.arrayBuffer());
+      if (bytes.length !== asset.size || hash(bytes) !== asset.sha256) throw new Error("Frontend checksum mismatch");
+      entry = { bytes, type: download.headers.get("content-type") || "application/octet-stream" };
+      await writeFile(filename + ".partial", Buffer.concat([Buffer.from(JSON.stringify({ type: entry.type }) + "\n"), bytes]), { mode: 0o600 });
+      await rename(filename + ".partial", filename);
+    }
+    next.set(asset.path, entry);
+  }
+  if (!next.has("index.html")) throw new Error("Frontend index missing");
+  return next;
+}
+
+export async function addSyncedShadow(source, root, getSession) {
+  const directory = path.join(root, hash(source.href));
+  const signal = AbortSignal.timeout(60_000);
+  const ticket = (await getSession())?.ticket;
+  if (typeof ticket !== "string" || !ticket) throw new Error("无效的影子会话");
+  const fetchRemote = (url, options) => session.defaultSession.fetch(url, {
+    ...options, credentials: "omit", redirect: "error", cache: "no-store",
+    headers: { "x-localapp-shadow-session": ticket },
+  });
+  const response = await fetchRemote(source.origin + `/api/shadow${source.pathname}/frontend`, { signal });
+  if (!response.ok) throw new Error("无法读取远端应用版本，请检查对端 API Key 和应用权限。");
+  await mkdir(directory, { recursive: true });
+  await loadFrontend(directory, await response.json(), source.origin + `/serve${source.pathname}/`, fetchRemote, signal);
+  await writeFile(path.join(directory, "source"), source.href, { mode: 0o600 });
+  void warmPlatformAssets(source, fetchRemote).catch(() => {});
+}
+
 export async function openShadowView(shell, source, root, shortcuts, { openAfterSync = false, getSession, onBack }) {
   const key = hash(source.href);
   const directory = path.join(root, key);
   await mkdir(directory, { recursive: true });
   if (shell.isDestroyed()) throw new Error("LocalApp 窗口已关闭");
-  const partition = session.fromPartition(`shadow-${key}`, { cache: false });
+  const partition = session.fromPartition(`shadow-${key}`);
   const statusView = new WebContentsView({
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
@@ -91,6 +171,9 @@ export async function openShadowView(shell, source, root, shortcuts, { openAfter
   partition.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
   partition.protocol.handle("https", request => {
     const url = new URL(request.url);
+    if (url.origin === source.origin && request.method === "GET" && !url.search && platformAssetPath.test(url.pathname)) {
+      return fetchPlatformAsset(url.href, request.signal).catch(() => new Response(null, { status: 503 }));
+    }
     const relative = url.pathname.slice(prefix.length) || "index.html";
     const cached = url.origin === source.origin && request.method === "GET"
       && url.pathname.startsWith(prefix) && files.get(relative);
@@ -158,7 +241,7 @@ export async function openShadowView(shell, source, root, shortcuts, { openAfter
         view.webContents.loadURL(url),
         new Promise((_resolve, reject) => {
           timer = setTimeout(() => {
-            if (!closed) view.webContents.stop();
+            if (!closed && !showingApp) view.webContents.stop();
             reject(new Error("Remote page load timed out"));
           }, 20_000);
         }),
@@ -173,14 +256,26 @@ export async function openShadowView(shell, source, root, shortcuts, { openAfter
     opening = true;
     try {
       await showStatus("正在打开应用", "正在加载远端页面。");
-      await loadRemote(source.href);
-      if (closed) return;
-      await showToolbar();
-      if (closed) return;
-      view.setVisible(true);
-      view.webContents.focus();
-      showingApp = true;
+      const showPage = async () => {
+        if (closed) return;
+        await showToolbar();
+        if (closed) return;
+        view.setVisible(true);
+        view.webContents.focus();
+        showingApp = true;
+      };
+      let visible;
+      const onReady = () => { visible = showPage(); };
+      view.webContents.once("dom-ready", onReady);
+      try {
+        await loadRemote(source.href + "/");
+        await (visible ?? showPage());
+      } finally {
+        view.webContents.removeListener("dom-ready", onReady);
+        await visible;
+      }
     } catch {
+      if (showingApp) return;
       opened = false;
       await showStatus("应用打开失败", "前端已同步，可以再次尝试打开。", "open");
     } finally {
@@ -254,37 +349,8 @@ export async function openShadowView(shell, source, root, shortcuts, { openAfter
         ready = false;
         await showStatus("正在同步应用", "正在下载并校验前端文件。");
         const nextDeclarations = readShortcutDeclarations(release);
-        const next = new Map();
-        let total = 0;
-        for (const asset of release.files) {
-          if (closed) return;
-          timeout.throwIfAborted();
-          if (!assetPath.test(asset.path) || !/^[a-f0-9]{64}$/.test(asset.sha256)
-            || !Number.isSafeInteger(asset.size) || asset.size < 0 || (total += asset.size) > 100_000_000) {
-            throw new Error("Invalid frontend asset");
-          }
-          const filename = path.join(directory, asset.sha256);
-          let entry;
-          try {
-            const stored = await readFile(filename);
-            const saved = JSON.parse(stored.subarray(0, stored.indexOf(10)).toString());
-            const bytes = stored.subarray(stored.indexOf(10) + 1);
-            if (hash(bytes) === asset.sha256 && bytes.length === asset.size) entry = { bytes, type: saved.type };
-          } catch {}
-          if (!entry) {
-            const download = await fetchRemote(source.origin + prefix + asset.path, {
-              redirect: "error", signal: AbortSignal.any([timeout, AbortSignal.timeout(20000)]), credentials: "include",
-            });
-            if (!download.ok) throw new Error("Frontend download failed");
-            const bytes = Buffer.from(await download.arrayBuffer());
-            if (bytes.length !== asset.size || hash(bytes) !== asset.sha256) throw new Error("Frontend checksum mismatch");
-            entry = { bytes, type: download.headers.get("content-type") || "application/octet-stream" };
-            await writeFile(filename + ".partial", Buffer.concat([Buffer.from(JSON.stringify({ type: entry.type }) + "\n"), bytes]), { mode: 0o600 });
-            await rename(filename + ".partial", filename);
-          }
-          next.set(asset.path, entry);
-        }
-        if (!next.has("index.html")) throw new Error("Frontend index missing");
+        const next = await loadFrontend(directory, release, source.origin + prefix, fetchRemote, timeout);
+        if (closed) return;
         for (const previous of declarations) {
           const next = nextDeclarations.find(item => item.id === previous.id);
           if (next?.accelerator === previous.accelerator && next?.route === previous.route) continue;
