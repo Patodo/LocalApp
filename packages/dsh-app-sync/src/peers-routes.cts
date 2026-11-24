@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
@@ -19,7 +20,7 @@ type PeerRequestBody = {
   acceptInsecureHttp?: unknown;
 };
 
-export async function registerPeers(app: FastifyInstance, peerStore: PeerStore, authenticate: (app: FastifyInstance) => Promise<void>, catalog?: { dataDir: string; userId(request: FastifyRequest): string }): Promise<void> {
+export async function registerPeers(app: FastifyInstance, peerStore: PeerStore, authenticate: (app: FastifyInstance) => Promise<void>, catalog?: { dataDir: string; desktopControlToken?: string; userId(request: FastifyRequest): string }): Promise<void> {
   await app.register(async (adminScope) => {
     await authenticate(adminScope);
 
@@ -67,6 +68,31 @@ export async function registerPeers(app: FastifyInstance, peerStore: PeerStore, 
           return { success: true, data: { url: `${base.origin}/${app.owner}/${name}` } };
         } catch {
           return reply.code(502).send({ success: false, error: "无法连接对端应用" });
+        }
+      });
+      adminScope.post<{ Params: { id: string; name: string } }>("/api/peers/:id/apps/:name/shadow-session", async (req, reply) => {
+        reply.header("Cache-Control", "no-store");
+        const control = req.headers["x-localapp-desktop-control"];
+        const expected = catalog.desktopControlToken;
+        if (typeof control !== "string" || !expected || Buffer.byteLength(control) !== Buffer.byteLength(expected)
+          || !timingSafeEqual(Buffer.from(control), Buffer.from(expected))) {
+          return reply.code(403).send({ success: false, error: "仅桌面客户端可建立影子会话" });
+        }
+        const { id, name } = req.params;
+        if (validateName(name)) return reply.code(400).send({ success: false, error: "无效的应用名称" });
+        try {
+          const target = peerStore.loadForCheck(id);
+          if (!target || !target.baseUrl.startsWith("https://")) return reply.code(404).send({ success: false, error: "HTTPS 对端不可用" });
+          const response = await fetch(target.baseUrl + `/api/peer/apps/${name}/shadow-session`, {
+            method: "POST", headers: { authorization: `Bearer ${target.apiKey}` },
+            redirect: "error", signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) return reply.code(502).send({ success: false, error: response.status === 404
+            ? "远端尚未支持影子身份，请升级远端 LocalApp" : "远端拒绝了对端 API Key" });
+          const result = await response.json();
+          return { success: true, data: result.data };
+        } catch {
+          return reply.code(502).send({ success: false, error: "无法建立远端影子会话" });
         }
       });
       adminScope.post<{ Params: { id: string; name: string }; Body: { digest?: string } }>("/api/peers/:id/apps/:name/copy", async (req, reply) => {

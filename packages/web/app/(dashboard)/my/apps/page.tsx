@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CircleCheck, CircleOff, ExternalLink, Settings, Plus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {CreateApplicationDialog} from "@/components/development/create-application-dialog";
@@ -10,12 +11,22 @@ import { toast } from "sonner";
 
 interface PageInfo { userId: string; name: string; currentVersion: number; updatedAt: string; lifecycleStatus: "online" | "offline" }
 
+type ShadowApp = { id: string; name: string; owner: string; host: string };
+type ShadowLibrary = { list(): Promise<ShadowApp[]>; open(id: string): Promise<void> };
+
+function desktopShadows() {
+  return (window as Window & { localAppShadows?: ShadowLibrary }).localAppShadows;
+}
+
 export default function ProfileApps() {
   const [creating, setCreating] = useState(false);
   const [pages, setPages] = useState<PageInfo[]>([]);
+  const [shadows, setShadows] = useState<ShadowApp[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const library = desktopShadows();
+    if (library) void library.list().then(setShadows).catch(() => toast.error("加载影子应用失败"));
     fetch("/api/me/pages", { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -31,7 +42,7 @@ export default function ProfileApps() {
   return <div>
     <div className="mb-6 flex items-center justify-between"><h1 className="text-2xl font-bold">我的应用</h1><Button onClick={() => setCreating(true)}><Plus/>创建应用</Button></div>
     <CreateApplicationDialog open={creating} onOpenChange={setCreating}/>
-    {pages.length === 0 ? <Card><CardContent className="flex flex-col items-center py-12 text-center"><p className="text-lg font-medium">暂无应用</p><p className="mt-1 text-sm text-muted-foreground">点击「创建应用」，和 Agent 一起把想法变成应用。</p></CardContent></Card> :
+    {pages.length === 0 && shadows.length === 0 ? <Card><CardContent className="flex flex-col items-center py-12 text-center"><p className="text-lg font-medium">暂无应用</p><p className="mt-1 text-sm text-muted-foreground">点击「创建应用」，和 Agent 一起把想法变成应用。</p></CardContent></Card> :
       <div className="divide-y border-y">{pages.map((page) => <div key={page.name} className="flex min-h-16 items-center justify-between gap-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -50,6 +61,23 @@ export default function ProfileApps() {
             : <Button asChild variant="ghost" size="icon"><Link href={`/${page.userId}/${page.name}/`} title="查看下线页" aria-label={`查看 ${page.name} 下线页`}><CircleOff /></Link></Button>}
           <Button asChild variant="ghost" size="icon"><Link href={`/my/apps/${encodeURIComponent(page.name)}/settings`} title="应用设置" aria-label={`${page.name} 设置`}><Settings /></Link></Button>
         </div>
-      </div>)}</div>}
+      </div>)}
+      {shadows.map(shadow => <div key={shadow.id} className="flex min-h-16 items-center justify-between gap-4 py-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate font-medium">{shadow.name}</span>
+            <Badge variant="secondary">影子</Badge>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground" title={`${shadow.owner}/${shadow.name} · ${shadow.host}`}>
+            {shadow.owner}/{shadow.name} · {shadow.host}
+          </p>
+        </div>
+        <Button variant="ghost" size="icon" className="shrink-0"
+          title="打开影子应用" aria-label={`打开影子应用 ${shadow.name}`}
+          onClick={() => void desktopShadows()?.open(shadow.id).catch(() => toast.error("打开影子应用失败"))}>
+          <ExternalLink />
+        </Button>
+      </div>)}
+      </div>}
   </div>;
 }

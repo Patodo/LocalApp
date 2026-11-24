@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { storagePlugin } from "./plugins/storage.js";
 import { verificationPlugin } from "./plugins/verification.js";
 import { authPlugin, registerVersionCheck } from "./plugins/auth.js";
+import { registerShadowSessions } from "./lib/shadow-session.js";
 import { createBrowserSessionHost } from "./plugins/session.js";
 import { createKeyRoutesHost } from "./routes/keys.js";
 import { createApplicationUploadHost } from "./routes/upload.js";
@@ -159,6 +160,7 @@ async function registerServerPluginsAndRoutes(
   });
   pluginContext.get("localappAgentUI")?.registerHttp(app);
   await pluginContext.localappMultiuser.registerBrowserSessions(app, createBrowserSessionHost());
+  const shadowSession = hasPlatform ? registerShadowSessions(app, validateApiKey) : undefined;
   if (hasPlatform) await pluginContext.localappApps.initializeStorage({
     config: app.config, migrationsDir: path.resolve(__dirname, "../platform-migrations"),
     hasAccounts: () => listUsers(1, 1).total > 0, logger: console,
@@ -197,7 +199,7 @@ async function registerServerPluginsAndRoutes(
   await pluginContext.localappMultiuser.registerSetup(app, createSetupHost(app, options.setupTokens));
   await systemRoutes(app, { documentsEnabled: options.documents !== false, documentsControlled: options.documentsControlled, pluginCombination: options.pluginCombination, pluginCombinationControlled: options.pluginCombinationControlled, configStore: options.configStore, restartController: options.restartController });
   if (platform?.peerStore && platform.syncTarget && platform.syncSource) pluginContext.localappAppSync.registerSynchronizationRoutes(app, {
-    protocol: { dataDir: app.config.dataDir, keyOwner: validateApiKey, user: findUserById },
+    protocol: { dataDir: app.config.dataDir, desktopControlToken: app.config.deviceControlToken, shadowSession, keyOwner: validateApiKey, user: findUserById },
     target: platform.syncTarget, authenticateTarget: createSyncTargetAuthentication,
     source: platform.syncSource, userId: request => request.userId,
     authenticateUser: authPlugin, peers: platform.peerStore, authenticateAdministrator: adminAuth,

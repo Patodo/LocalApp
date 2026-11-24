@@ -1,7 +1,7 @@
-import { app, BrowserWindow, Menu, dialog } from "electron";
+import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import { DesktopShortcuts, readShortcutDeclarations } from "./shortcuts.mjs";
-import { openShadowWindow, parseShadowSource } from "./shadow.mjs";
+import { listSyncedShadows, openShadowView, parseShadowSource } from "./shadow.mjs";
 import { resolveDeviceActivation } from "./device-activation.mjs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -20,31 +20,63 @@ let pendingConfirmation;
 const deviceControlToken = randomBytes(32).toString("base64url");
 const pendingActivations = [];
 
-const shadowWindows = new Map();
 const shortcuts = new DesktopShortcuts();
+const shadowRoot = () => path.join(app.getPath("userData"), "shadow");
+let shadow;
+let refreshMainMenu;
 
-async function openShadow(input) {
+async function openShadow(input, openAfterSync = false, peerRoute) {
+  if (shadow || quitting || !window || window.isDestroyed()) return;
+  const current = {};
+  shadow = current;
   try {
     const source = parseShadowSource(input);
-    const existing = shadowWindows.get(source.href);
-    if (existing) {
-      const target = await existing;
-      target.show();
-      target.focus();
+    if (!openAfterSync && (await listSyncedShadows(shadowRoot())).some(item => item.href === source.href)) {
+      shadow = undefined;
+      await window.loadURL(origin + "/my/apps");
       return;
     }
-    const pending = openShadowWindow(source, path.join(app.getPath("userData"), "shadow"), shortcuts);
-    shadowWindows.set(source.href, pending);
-    try {
-      const target = await pending;
-      target.once("closed", () => shadowWindows.delete(source.href));
-    } catch (error) {
-      shadowWindows.delete(source.href);
-      throw error;
-    }
+    const route = peerRoute ?? await resolveSavedPeer(source);
+    current.controller = await openShadowView(window, source, shadowRoot(), shortcuts, {
+      getSession: async () => {
+        const response = await localPeerFetch(route + "-session", {
+          method: "POST", headers: { "x-localapp-desktop-control": deviceControlToken },
+        });
+        return response;
+      },
+      openAfterSync,
+      onBack: showLibrary => {
+        if (shadow === current) shadow = undefined;
+        if (window.isDestroyed()) return;
+        if (showLibrary) void window.loadURL(origin + "/my/apps").catch(() => {});
+        else void refreshMainMenu?.();
+      },
+    });
   } catch (error) {
-    await dialog.showMessageBox(window, { type: "warning", message: error.message });
+    if (shadow === current) shadow = undefined;
+    if (!window.isDestroyed()) await dialog.showMessageBox(window, { type: "warning", message: error.message });
   }
+}
+
+async function localPeerFetch(route, options) {
+  const response = await window.webContents.session.fetch(origin + route, {
+    ...options, credentials: "include", redirect: "error", signal: AbortSignal.timeout(15000),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.success) throw new Error(result.error || "无法读取对端配置");
+  return result.data;
+}
+
+async function resolveSavedPeer(source) {
+  const apps = await localPeerFetch("/api/peers");
+  const name = source.pathname.split("/").at(-1);
+  for (const peer of apps) {
+    if (peer.baseUrl !== source.origin || !/^[A-Za-z0-9_-]+$/.test(peer.id)) continue;
+    const route = `/api/peers/${peer.id}/apps/${name}/shadow`;
+    const result = await localPeerFetch(route).catch(() => null);
+    if (result?.url === source.href) return route;
+  }
+  throw new Error("找不到此影子应用对应的对端与账号");
 }
 
 function enqueueActivation(value) {
@@ -68,6 +100,7 @@ async function showNextActivation() {
       // The packaged static site serves this page without its API-issued trailing slash.
       view.pathname = view.pathname.replace(/\/$/, "");
       pendingConfirmation = view.href;
+      shadow?.controller?.close();
       await openPendingConfirmation();
       window.show();
     }
@@ -173,7 +206,8 @@ async function openWindow() {
     title: "LocalApp",
     width: 1280,
     height: 850,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "persist:localapp-desktop" },
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "persist:localapp-desktop",
+      preload: fileURLToPath(new URL("./shadow-preload.cjs", import.meta.url)) },
   });
   const isLocal = url => {
     try { return new URL(url).origin === origin; } catch { return false; }
@@ -192,16 +226,32 @@ async function openWindow() {
     event.preventDefault();
     void (async () => {
       try {
-        const response = await window.webContents.session.fetch(target.href, {
-          credentials: "include", redirect: "error", signal: AbortSignal.timeout(10000),
-        });
-        const result = await response.json();
-        if (!response.ok || !result.success) throw new Error(result.error || "无法打开对端应用");
-        await openShadow(result.data.url);
+        const result = await localPeerFetch(target.pathname);
+        await openShadow(result.url, false, target.pathname);
       } catch (error) {
         if (!window.isDestroyed()) await dialog.showMessageBox(window, { type: "warning", message: error.message });
       }
     })();
+  });
+  function requireLibrary(event, allowPeers = false) {
+    const frame = event.senderFrame;
+    if (event.sender !== window.webContents || !frame || frame.parent) throw new Error("Unexpected shadow library caller");
+    const url = new URL(frame.url);
+    if (url.origin !== origin || !((allowPeers ? /^\/my\/(apps|peers)\/?$/ : /^\/my\/apps\/?$/).test(url.pathname))) throw new Error("Unexpected shadow library page");
+  }
+
+  ipcMain.handle("localapp:shadows:list", async event => {
+    requireLibrary(event, true);
+    return (await listSyncedShadows(shadowRoot())).map(source => {
+      const [owner, name] = source.pathname.slice(1).split("/");
+      return { id: source.href, name, owner, host: source.host };
+    });
+  });
+  ipcMain.handle("localapp:shadows:open", async (event, id) => {
+    requireLibrary(event);
+    const source = (await listSyncedShadows(shadowRoot())).find(item => item.href === id);
+    if (!source) throw new Error("影子应用不存在");
+    await openShadow(source.href, true);
   });
   const buildMenu = (applicationUrl, declarations = []) => Menu.buildFromTemplate([
     { label: "LocalApp", submenu: [
@@ -216,6 +266,7 @@ async function openWindow() {
             else item.checked = await shortcuts.enable(window, { ...shortcut, id, onDisabled: () => {
               if (window.isFocused()) void refreshMenu();
             }, run: () => {
+              shadow?.controller?.close();
               window.show();
               window.focus();
               void window.loadURL(applicationUrl.origin + applicationUrl.pathname + shortcut.route).catch(() => {});
@@ -237,7 +288,7 @@ async function openWindow() {
     { role: "editMenu" },
   ]);
   async function refreshMenu() {
-    if (quitting || window.isDestroyed() || !window.isFocused()) return;
+    if (quitting || shadow || window.isDestroyed() || !window.isFocused()) return;
     const current = window.webContents.getURL();
     if (!current || !isLocal(current)) return;
     const target = new URL(current);
@@ -251,10 +302,13 @@ async function openWindow() {
         if (response.ok) declarations = readShortcutDeclarations(await response.json());
       } catch {}
     }
-    if (!quitting && !window.isDestroyed() && window.isFocused() && current === window.webContents.getURL()) {
-      Menu.setApplicationMenu(buildMenu(target, declarations));
+    if (!quitting && !shadow && !window.isDestroyed() && window.isFocused() && current === window.webContents.getURL()) {
+      const menu = buildMenu(target, declarations);
+      if (process.platform === "darwin") Menu.setApplicationMenu(menu);
+      else window.setMenu(menu);
     }
   }
+  refreshMainMenu = refreshMenu;
   Menu.setApplicationMenu(buildMenu());
   window.on("focus", () => { void refreshMenu(); });
   window.webContents.on("did-navigate", () => { void refreshMenu(); });
