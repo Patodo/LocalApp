@@ -91,6 +91,35 @@ describe("PeersPage", () => {
     }));
   });
 
+  it("keeps shadow synchronization and its result in the catalog dialog", async () => {
+    initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
+    const agent = vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue("Electron/43");
+    let finish!: (id: string) => void;
+    const add = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+    const open = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("localAppShadows", { list: vi.fn().mockResolvedValue([]), add, open });
+    vi.mocked(fetch).mockImplementation(async input => {
+      const responses: Record<string, unknown> = {
+        "/api/peers": initialPeers,
+        "/api/peers/peer-1/apps": [{ name: "todo-list", owner: "remote-owner", version: "1.2.9", digest: "a".repeat(64) }],
+      };
+      return new Response(JSON.stringify({ success: true, data: responses[String(input)] ?? [] }));
+    });
+    render(<PeersPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "浏览对端应用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "影子" }));
+    expect(add).toHaveBeenCalledWith("peer-1", "todo-list");
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("button", { name: "同步中…" })).toBeDisabled();
+    await act(async () => finish("https://office.example/remote-owner/todo-list"));
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByText("已影子")).toBeVisible();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "打开应用" }));
+    expect(open).toHaveBeenCalledWith("https://office.example/remote-owner/todo-list");
+    agent.mockRestore();
+  });
+
   it("shows a synced shadow in the catalog without offering to add it again", async () => {
     initialPeers = [{ id: "peer-1", name: "office", baseUrl: "https://office.example", verifiedAt: null }];
     vi.stubGlobal("localAppShadows", {

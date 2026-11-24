@@ -40,17 +40,22 @@ function PeerApplications({ peer }: { peer: Peer }) {
   const [apps, setApps] = useState<PeerApplication[] | null>(null);
   const [query, setQuery] = useState("");
   const [synced, setSynced] = useState<Set<string>>(new Set());
+  const [shadowing, setShadowing] = useState<string | null>(null);
+  const [shadowAdded, setShadowAdded] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copying, setCopying] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
   const onDesktop = typeof navigator !== "undefined" && /Electron\//.test(navigator.userAgent);
+  const library = typeof window === "undefined" ? undefined : (window as Window & {
+    localAppShadows?: { list(): Promise<Array<{ id: string }>>; add?(peerId: string, name: string): Promise<string>; open(id: string): Promise<void> };
+  }).localAppShadows;
   const endpoint = `/api/peers/${encodeURIComponent(peer.id)}/apps`;
 
   async function browse() {
+    setShadowAdded(null);
     setLoading(true);
     setMessage("");
-    const library = (window as Window & { localAppShadows?: { list(): Promise<Array<{ id: string }>> } }).localAppShadows;
     if (library) void library.list().then(items => setSynced(new Set(items.map(item => item.id)))).catch(() => {});
     try {
       setApps(await requestJson<PeerApplication[]>(endpoint));
@@ -63,8 +68,28 @@ function PeerApplications({ peer }: { peer: Peer }) {
     }
   }
 
+  async function addShadow(app: PeerApplication) {
+    if (!library?.add || shadowing) return;
+    setShadowing(app.name);
+    setShadowAdded(null);
+    setFailed(false);
+    setMessage(`正在同步 ${app.name} 的前端…`);
+    try {
+      const id = await library.add(peer.id, app.name);
+      setSynced(current => new Set([...current, id]));
+      setShadowAdded(id);
+      setMessage(`已添加 ${app.name}，可从「我的应用」打开。`);
+    } catch (error) {
+      setFailed(true);
+      setMessage(error instanceof Error ? error.message : "添加影子应用失败");
+    } finally {
+      setShadowing(null);
+    }
+  }
+
   async function copy(app: PeerApplication) {
     setCopying(app.name);
+    setShadowAdded(null);
     setMessage("");
     try {
       await requestJson(`${endpoint}/${encodeURIComponent(app.name)}/copy`, {
@@ -88,7 +113,7 @@ function PeerApplications({ peer }: { peer: Peer }) {
   return <Dialog onOpenChange={open => {
     if (!open) return;
     setQuery("");
-    if (!loading && !copying) void browse();
+    if (!loading && !copying && !shadowing) void browse();
   }}>
     <DialogTrigger asChild>
       <Button size="sm"><PackageOpen className="mr-1 size-4" />浏览对端应用</Button>
@@ -104,7 +129,15 @@ function PeerApplications({ peer }: { peer: Peer }) {
           <Input aria-label="搜索对端应用" placeholder="搜索应用" value={query} onChange={event => setQuery(event.target.value)} className="pl-9" />
         </div>}
       </div>
-      {message && <p role={failed ? "alert" : "status"} className={`shrink-0 border-b px-5 py-3 text-sm sm:px-6 ${failed ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>}
+      {message && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-5 py-3 sm:px-6">
+        <p role={failed ? "alert" : "status"} className={`text-sm ${failed ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>
+        {shadowAdded && library && <Button size="sm" variant="outline" onClick={() => {
+          void library.open(shadowAdded).catch(error => {
+            setFailed(true);
+            setMessage(error instanceof Error ? error.message : "无法打开影子应用");
+          });
+        }}>打开应用</Button>}
+      </div>}
       <div className="min-h-0 overflow-y-auto overscroll-contain">
         {loading && <p role="status" className="px-5 py-8 text-center text-sm text-muted-foreground">正在加载应用…</p>}
         {!loading && failed && !apps && <div className="p-5 sm:px-6">
@@ -123,10 +156,10 @@ function PeerApplications({ peer }: { peer: Peer }) {
               <p title={app.version} className="truncate text-xs tabular-nums text-muted-foreground">{app.version}</p>
             </div>
             <div className="flex shrink-0 gap-1.5">
-              {added ? <Badge variant="secondary">已影子</Badge> : <Button variant="outline" size="sm" disabled={!onDesktop || !peer.baseUrl.startsWith("https://")}
+              {added ? <Badge variant="secondary">已影子</Badge> : <Button variant="outline" size="sm" disabled={!onDesktop || !library?.add || !peer.baseUrl.startsWith("https://") || shadowing !== null || copying !== null}
                 title={onDesktop ? "使用远端业务数据" : "请在 LocalApp 桌面版打开影子应用"}
-                onClick={() => window.location.assign(`${endpoint}/${encodeURIComponent(app.name)}/shadow`)}>影子</Button>}
-              <Button variant="secondary" size="sm" disabled={copying !== null} title="复制应用包到本机"
+                onClick={() => void addShadow(app)}>{shadowing === app.name ? "同步中…" : "影子"}</Button>}
+              <Button variant="secondary" size="sm" disabled={copying !== null || shadowing !== null} title="复制应用包到本机"
                 onClick={() => void copy(app)}>{copying === app.name ? "复制中…" : "复制"}</Button>
             </div>
           </li>; })}

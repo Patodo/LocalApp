@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import { DesktopShortcuts, readShortcutDeclarations } from "./shortcuts.mjs";
-import { listSyncedShadows, openShadowView, parseShadowSource } from "./shadow.mjs";
+import { addSyncedShadow, listSyncedShadows, openShadowView, parseShadowSource } from "./shadow.mjs";
 import { resolveDeviceActivation } from "./device-activation.mjs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -23,10 +23,11 @@ const pendingActivations = [];
 const shortcuts = new DesktopShortcuts();
 const shadowRoot = () => path.join(app.getPath("userData"), "shadow");
 let shadow;
+let addingShadow = false;
 let refreshMainMenu;
 
 async function openShadow(input, openAfterSync = false, peerRoute) {
-  if (shadow || quitting || !window || window.isDestroyed()) return;
+  if (shadow || addingShadow || quitting || !window || window.isDestroyed()) return;
   const current = {};
   shadow = current;
   try {
@@ -38,12 +39,7 @@ async function openShadow(input, openAfterSync = false, peerRoute) {
     }
     const route = peerRoute ?? await resolveSavedPeer(source);
     current.controller = await openShadowView(window, source, shadowRoot(), shortcuts, {
-      getSession: async () => {
-        const response = await localPeerFetch(route + "-session", {
-          method: "POST", headers: { "x-localapp-desktop-control": deviceControlToken },
-        });
-        return response;
-      },
+      getSession: () => getShadowSession(route),
       openAfterSync,
       onBack: showLibrary => {
         if (shadow === current) shadow = undefined;
@@ -65,6 +61,12 @@ async function localPeerFetch(route, options) {
   const result = await response.json();
   if (!response.ok || !result.success) throw new Error(result.error || "无法读取对端配置");
   return result.data;
+}
+
+function getShadowSession(route) {
+  return localPeerFetch(route + "-session", {
+    method: "POST", headers: { "x-localapp-desktop-control": deviceControlToken },
+  });
 }
 
 async function resolveSavedPeer(source) {
@@ -247,8 +249,24 @@ async function openWindow() {
       return { id: source.href, name, owner, host: source.host };
     });
   });
+  ipcMain.handle("localapp:shadows:add", async (event, peerId, name) => {
+    requireLibrary(event, true);
+    if (typeof peerId !== "string" || !/^[A-Za-z0-9_-]+$/.test(peerId)
+      || typeof name !== "string" || !/^[a-z0-9-]+$/.test(name)) throw new Error("无效的对端或应用");
+    if (shadow || addingShadow) throw new Error("请等待当前影子应用操作完成");
+    addingShadow = true;
+    try {
+      const route = `/api/peers/${peerId}/apps/${name}/shadow`;
+      const source = parseShadowSource((await localPeerFetch(route)).url);
+      const existing = (await listSyncedShadows(shadowRoot())).some(item => item.href === source.href);
+      if (!existing) await addSyncedShadow(source, shadowRoot(), () => getShadowSession(route));
+      return source.href;
+    } finally {
+      addingShadow = false;
+    }
+  });
   ipcMain.handle("localapp:shadows:open", async (event, id) => {
-    requireLibrary(event);
+    requireLibrary(event, true);
     const source = (await listSyncedShadows(shadowRoot())).find(item => item.href === id);
     if (!source) throw new Error("影子应用不存在");
     await openShadow(source.href, true);
