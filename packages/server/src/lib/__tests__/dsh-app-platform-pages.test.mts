@@ -154,3 +154,64 @@ it("lists only the live frontend files for an authorized shadow client", async (
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+it("lets only current co-developers upload updates to the owner's existing application", async () => {
+  const dataDir = fs.mkdtempSync(path.resolve("../../tmp/platform-co-developers-"));
+  const app = Fastify();
+  const { default: multipart } = await import("@fastify/multipart");
+  let actor = "owner";
+  await app.register(multipart);
+  await registerApplicationInstall(app, {
+    dataDir,
+    userId: () => actor,
+    user: id => ["owner", "developer"].includes(id) ? { displayName: id } : undefined,
+  });
+  async function build(name: string, version: string) {
+    const filename = path.join(dataDir, `${name}-${version}.localapp`);
+    await writeAppPackage({
+      outputPath: filename,
+      metadata: { schemaVersion: 1, appId: name, version, platformVersion: "^1.2" },
+      files: [
+        { path: "manifest.json", content: Buffer.from(JSON.stringify({ name, platformVersion: "^1.2", distDir: "dist", pageAccess: { level: "public" } })) },
+        { path: "dist/index.html", content: Buffer.from(version) },
+      ],
+    });
+    return filename;
+  }
+  function upload(filename: string) {
+    const boundary = "localapp-co-developer-test";
+    return app.inject({
+      method: "POST", url: "/api/me/shared-apps/owner/demo/update",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="package"; filename="app.localapp"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+        fs.readFileSync(filename), Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]),
+    });
+  }
+  const members = "/api/me/apps/demo/co-developers/developer";
+  try {
+    await installAppPackage({ dataDir, ownerId: "owner", packagePath: await build("demo", "1.0.0") });
+    const update = await build("demo", "1.1.0");
+    expect((await app.inject({ method: "PUT", url: members })).statusCode).toBe(200);
+    actor = "outsider";
+    expect((await app.inject("/api/me/shared-apps")).json().data).toEqual([]);
+    expect((await upload(update)).statusCode).toBe(403);
+    actor = "developer";
+    expect((await app.inject("/api/me/shared-apps")).json().data).toEqual([{ owner: "owner", name: "demo", version: "1.0.0" }]);
+    expect((await upload(await build("other", "1.1.0"))).statusCode).toBe(400);
+    expect((await upload(update)).statusCode).toBe(201);
+    expect((await app.inject("/api/me/apps/demo/versions")).statusCode).toBe(404);
+    expect((await app.inject({ method: "PUT", url: "/api/me/apps/demo/co-developers/owner" })).statusCode).toBe(404);
+    actor = "owner";
+    const versions = (await app.inject("/api/me/apps/demo/versions")).json().data;
+    expect(versions.currentAppVersion).toBe("1.1.0");
+    expect(versions.versions.at(-1).uploaderId).toBe("developer");
+    expect((await app.inject({ method: "DELETE", url: members })).statusCode).toBe(200);
+    actor = "developer";
+    expect((await upload(update)).statusCode).toBe(403);
+  } finally {
+    await app.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

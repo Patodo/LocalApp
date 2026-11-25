@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {CreateApplicationDialog} from "@/components/development/create-application-dialog";
+import { SharedApps } from "@/components/app-settings/shared-apps";
 import { toast } from "sonner";
 
 interface PageInfo { userId: string; name: string; currentVersion: number; updatedAt: string; lifecycleStatus: "online" | "offline" }
@@ -79,5 +80,6 @@ export default function ProfileApps() {
         </Button>
       </div>)}
       </div>}
+    <SharedApps />
   </div>;
 }

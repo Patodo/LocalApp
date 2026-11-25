@@ -10,6 +10,7 @@ export interface PageMeta {
   name: string;
   userId: string;
   description: string;
+  coDevelopers?: string[];
   currentVersion: number;
   currentAppVersion?: string;
   previousVersion?: number;

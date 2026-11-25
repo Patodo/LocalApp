@@ -36,9 +36,10 @@ type DataState = {
   files: { count: number; size: number };
   backups: Backup[];
 };
+import { CoDevelopers } from "./co-developers";
 import { AppAgentSettings } from "./agent-settings";
 
-type Tab = "agent" | "info" | "general" | "access" | "database" | "notify" | "data" | "manage";
+type Tab = "developers" | "agent" | "info" | "general" | "access" | "database" | "notify" | "data" | "manage";
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "info", label: "应用信息" },
@@ -48,6 +49,7 @@ const tabs: Array<{ id: Tab; label: string }> = [
   { id: "notify", label: "通知" },
   { id: "data", label: "数据管理" },
   { id: "manage", label: "应用管理" },
+  { id: "developers", label: "共同开发者" },
   { id: "agent", label: "Agent" },
 ];
 const accessLevels = ["public", "authenticated", "owner", "acl"];
@@ -166,7 +168,7 @@ export function AppSettingsPage({ name }: { name: string }) {
   const pageAccess = manifest.pageAccess ?? { level: "public", acl: [] };
   const db = manifest.db ?? { mode: "crud", sqlAccess: "owner", defaultAccess: {} };
   const notify = manifest.notify ?? { enabled: false };
-  const manifestTab = !(["info", "data", "manage", "agent"] as Tab[]).includes(tab);
+  const manifestTab = !(["info", "data", "manage", "agent", "developers"] as Tab[]).includes(tab);
 
   return <div className="w-full">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -193,6 +195,7 @@ export function AppSettingsPage({ name }: { name: string }) {
       {readonly ? <span className="text-xs font-medium text-muted-foreground">只读</span> : <Button size="sm" onClick={save} disabled={busy}><Save />保存配置</Button>}
     </div>}
 
+    {tab === "developers" && <CoDevelopers key={name} appName={name} owner={settings.app.userId} />}
     {tab === "agent" && <AppAgentSettings appId={`${settings.app.userId}/${settings.app.name}`} />}
     {tab === "info" && <section className="space-y-5">
       <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2"><Info label="应用名称" value={settings.app.name}/><Info label="所有者" value={settings.app.userId}/><Info label="创建时间" value={new Date(settings.app.createdAt).toLocaleString()}/><Info label="更新时间" value={new Date(settings.app.updatedAt).toLocaleString()}/><Info label="当前版本" value={`v${settings.app.currentVersion}`}/><Info label="版本数量" value={String(settings.app.versionCount)}/></dl>

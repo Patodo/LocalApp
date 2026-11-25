@@ -67,6 +67,9 @@ export interface InstallAppPackageInput {
   dataDir: string;
   ownerId: string;
   packagePath: string;
+  uploaderId?: string;
+  expectedName?: string;
+  authorizeUpdate?: (meta: PageMeta | null) => void;
   uploaderDisplayName?: string;
   requireExisting?: boolean;
   preserveTargetAccess?: boolean;
@@ -115,9 +118,13 @@ export async function installAppPackage(input: InstallAppPackageInput): Promise<
     }
     throw error;
   }
+  if (input.expectedName !== undefined && inspected.name !== input.expectedName) {
+    throw new AppInstallError("APP_NAME_MISMATCH", "应用包名称与目标应用不一致", 400);
+  }
   assertPlatformCompatible(inspected.metadata.platformVersion);
   const pageDir = getPageDir(input.dataDir, input.ownerId, inspected.name);
   return withAppDataMaintenance(pageDir, async () => {
+    if (input.authorizeUpdate) input.authorizeUpdate(readPageMeta(input.dataDir, input.ownerId, inspected.name));
     if (input.expectedLocalVersion !== undefined && (readPageMeta(input.dataDir, input.ownerId, inspected.name)?.currentVersion ?? 0) !== input.expectedLocalVersion) {
       throw new AppInstallError("VERSION_CONFLICT", "正式应用版本已改变，请重新检查", 409);
     }
@@ -296,7 +303,7 @@ async function installInspectedPackage(
       createdAt: now,
       fileCount: countFiles(stagedVersionDir),
       totalSize: getDirectorySize(stagedVersionDir),
-      uploaderId: input.ownerId,
+      uploaderId: input.uploaderId ?? input.ownerId,
       ...(input.uploaderDisplayName ? { uploaderDisplayName: input.uploaderDisplayName } : {}),
       ...(parsed.issueTemplates ? { issues: { templates: parsed.issueTemplates } } : {}),
       manifest: sourceManifest,
