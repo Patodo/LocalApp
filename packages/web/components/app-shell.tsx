@@ -180,7 +180,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </main>
   );
 
-  if (pathname === "/my/development" && plugins?.development) return <main className="h-dvh overflow-hidden">{children}</main>;
+  const isDevelopment = pathname === "/my/development";
 
   const sidebar = (
     <aside
@@ -277,14 +277,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Mobile top bar */}
         <div className="flex h-12 items-center gap-3 border-b bg-card px-4 lg:hidden">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMobileOpen(true)}>
+          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="打开导航" onClick={() => setMobileOpen(true)}>
             <Menu className="h-4 w-4" />
           </Button>
           <span className="text-sm font-semibold">LocalApp</span>
         </div>
 
-        <div className={`flex-1 overflow-auto ${isPublicHome ? "home-shell-scroll" : ""}`}>
-          <div className={`mx-auto max-w-[1600px] p-4 md:p-6 ${isPublicHome ? "home-shell-page" : ""}`}>{children}</div>
+        <div className={`flex-1 min-h-0 overflow-auto ${isPublicHome ? "home-shell-scroll" : ""}`}>
+          <div className={`mx-auto max-w-[1600px] p-4 md:p-6 ${isPublicHome ? "home-shell-page" : ""} ${isDevelopment ? "flex min-h-full flex-col" : ""}`}>{children}</div>
         </div>
       </main>
     </div>
